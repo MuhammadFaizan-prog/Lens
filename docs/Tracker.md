@@ -23,7 +23,12 @@
 | P1 demo (all of the above together) | done | `python3 research/harness/demo_p1.py` -> `out/demo-p1.mp4` + `out/demo-p1-sheet.png` (not committed) |
 | Bars from Screen Studio / FocuSee | not started | needs exports from licensed copies |
 | Native capture macOS / Windows | not started | can't run in Linux CI |
-| Tauri app shell + editor UI | not started | |
+| Live editor UI (`apps/editor`, React + Vite; the UI the Tauri shell will wrap): Canvas2D preview from the render plan, transport + J/K/L + frame stepping, live hover thumbnails, timeline (zoom/cut/speed blocks: create, move, trim with snapping, delete), inspector, transcript editing (delete words → cuts, remove fillers), undo/redo, open/save project.json, export through `compositor/render.py` with progress. See `docs/Editor.md` | done | vitest 18 (timeline ops, history, audio schedule); Playwright e2e 16 tests (parity 1, editor 14, demo 1), store state and drawn pixels both checked. With the final code: one full pass 16/16; every test passed in at least two passes; no assertion has failed, but two of three passes lost a process to the kernel OOM killer (see below) |
+| Preview ↔ export parity (editor Canvas2D vs reference compositor, 14 frames: zoom in/hold/pan, motion blur, blur + spotlight masks, ripples, webcam shrink, captions with highlight) | done | luma SSIM vs the compositor's raw frames before the encode (`RenderOptions.frame_sink`); bounds set before the first measurement: every frame ≥ 0.95, mean ≥ 0.97. Measured (final code): mean 0.98869, min 0.98287 (frame 190), identical on the two final-code runs that completed, in Playwright's headless shell (Chromium 141). Before the compositor source decode got accurate_rnd + full_chroma_int: 0.98842 / 0.98257 in the same browser, 0.98921 / 0.98277 in system Chromium 156. Known differences listed in `docs/Editor.md` |
+| Export colour: x264 encode converts RGB with the BT.709 matrix (limited range, accurate_rnd + full_chroma_int) and tags the stream bt709 / tv; the compositor's source decode uses the same swscale flags (matrix from the stream's tags) | done | pytest `test_export_colour.py`: 10 flat patches decoded as a BT.709 player decodes (what browsers do for HD) are within 2 levels (measured: worst channel 2.0, mean 0.7); the old untagged BT.601 encode measured 23 worst / 10.8 mean and the test asserts it was > 10; rendered export carries all four tags. e2e export test also asserts the tags |
+| Engine: zoom budget (max zooms/min, min hold, merge) + Calm / Default / Punchy presets | done | vitest; e2e (preset + budget re-plan the camera) |
+| Captions follow transcript cuts: words inside any cut are left out of captions | done | vitest (`zoombudget.test.ts` "captions follow transcript cuts"); `p1.test.ts` caption-highlight case rewritten, see below |
+| Tauri app shell | not started | |
 | GPU renderer (wgpu) | not started | |
 
 Cursor smoothing default: engine uses 220 ms spring settle after a One Euro prefilter. The harness's
@@ -64,3 +69,38 @@ separate development sentence set; the WER, gapped-timing and filler test senten
 Not held out: the connected-speech boundary mapping (shift by the run end instead of a linear
 stretch, `align._share`) was chosen by comparing both on the connected test sentences (median
 123 → 92 ms, p95 266 → 226 ms), so that number is optimistic for unseen speech.
+
+Editor tests, changes made while getting them to pass (2026-11-09):
+1. `p1.test.ts` "caption styling": with a 0-1000 ms cut, the old check expected the active index to be
+   3 at output 500 ms. Words inside the cut ("Lens", "turns") are now dropped from captions (an
+   intended engine change), so the index moved; the test now checks the highlighted word is
+   "recordings" and that "Lens" is not in the caption. Same frame, same word; the index literal was
+   what changed.
+2. e2e "captions highlight the current word during playback": the last line asserted exactly one
+   highlighted transcript word wherever playback was paused. On this 2-core sandbox the 14-sample
+   loop takes ~17 s instead of ~2 s, so playback from "Watch" ran past the last word, where nothing is
+   highlighted (frame 297), and it failed. It now pauses, clicks the word "camera" and asserts exactly
+   one highlighted transcript word, that it is "camera", and that the caption's active word is
+   "camera". The playback checks above it (highlight walks forward in one block, ≥3 distinct words,
+   >80 highlight-coloured pixels) are unchanged.
+3. e2e export test: added an assertion that the MP4 is tagged bt709 / bt709 / bt709 / tv.
+   pytest `test_masks_blur_pixelate_spotlight_follow_camera` failed after the bt709 encode alone:
+   pixelate flatness margin over the unmasked base 0.0497 against the test's 0.05 (0.0522 before).
+   The test reads frames back through the compositor's own decoder; giving that decoder the same
+   accurate_rnd + full_chroma_int flags as the encode brought the margin back to 0.0522. The test
+   and its bound are unchanged.
+4. Nothing else in the assertions changed. Memory changes only: Chromium with `--in-process-gpu
+   --no-zygote --renderer-process-limit=1`, the decoded-frame LRU at 8 per track in tests (24 in the
+   app), workers 1, one reused preview server. The suite was run one invocation per spec, with the
+   export test on its own, because a full headless Chromium plus the export's compositor (~430 MB)
+   got the worker OOM-killed on this machine (another workspace's browsers were running at the same
+   time). Passes before the last compositor change (source-decode flags, which only touches the
+   parity reference and the export): 16/16 three times (one with the export inside the editor
+   invocation), and one pass with the export worker OOM-killed. Passes with the final code: 16/16
+   once; then 15/16 (export's render.py OOM-killed, so the export never finished) and 15/16
+   (parity_ssim.py OOM-killed; the demo's video encoder was also killed, which truncated the demo
+   recording, since regenerated). Per test with the final code: parity 2/3, editor 14 x 3/3 except
+   export 2/3, demo 3/3 (one with a truncated video). Every failure was a SIGKILL from the kernel
+   OOM killer (dmesg), none an assertion. Not proven: two consecutive clean full passes with the
+   final code on this machine. pytest: 44 passed, 0 skipped, run alone (two earlier full runs were
+   OOM-killed while another workspace's browsers spiked memory).
