@@ -1,0 +1,10 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+research/harness/out/
+out/
+*.mp4
+*.mov
+!research/bars/.gitkeep
