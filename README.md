@@ -14,6 +14,9 @@ See `docs/Rules.md`.
 ## Layout
 - `packages/engine/` TypeScript engine: events → cursor track, auto-zoom, camera, timeline,
   transcript editing, layouts → per-frame render plan (`lens-plan` CLI).
+- `apps/editor/` live editor (React + TypeScript + Vite; the UI Tauri will wrap): Canvas2D preview
+  driven by the render plan, transport, timeline, inspector, transcript editing, export. See
+  `docs/Editor.md`.
 - `compositor/` Python reference compositor: render plan + screen recording → MP4; `pipeline.py`
   runs transcription → plan → render in one go.
 - `transcribe/` on-device speech-to-text (`lens-transcribe`): faster-whisper base.en (MIT) on the
@@ -25,11 +28,22 @@ See `docs/Rules.md`.
 
 ## Run
 ```bash
-npm install && npm run build && npm test        # engine: typecheck + vitest
+npm install && npm run build && npm test        # engine + editor: typecheck, build, vitest
 pip install opencv-python-headless numpy scipy pillow pytest faster-whisper
 sudo apt install espeak-ng tesseract-ocr        # test-only: synthetic speech + caption OCR
 python3 -m pytest                               # harness + compositor + STT + end-to-end
 ```
+
+## Editor
+```bash
+npm install && npm run build
+npm run dev -w apps/editor        # http://localhost:5178 with the synthetic sample bundle
+LENS_BUNDLE=/path/to/bundle npm run dev -w apps/editor
+npm run e2e -w apps/editor        # Playwright (needs Chromium: npx playwright install chromium)
+```
+Space play/pause · J/K/L shuttle · ←/→ one frame (Shift: 10) · ⌘/Ctrl-Z undo, ⇧⌘Z redo ·
+Del deletes the selected block or transcript words. Export calls `compositor/render.py` through the
+dev server and shows its progress.
 
 ## Render
 ```bash
@@ -74,6 +88,8 @@ Engine, reference compositor, and harness work and are tested on synthetic sessi
 P1 set: audio mux with edits, denoise + loudness, click sounds, GIF, crop, masks, webcam
 mirror/crop/zoomed size, styled captions with word highlight, and per-segment overrides. Local
 speech-to-text turns the mic track into word timings, so captions and filler/pause removal run on
-real audio (tested on synthetic espeak speech only). Native capture
-(ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the GPU renderer
-are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.
+real audio (tested on synthetic espeak speech only). The live editor (`apps/editor`) previews the
+plan in the browser at parity with the reference compositor (SSIM-tested), with a timeline,
+inspector, transcript editing, Calm/Default/Punchy zoom presets with a zoom budget, and export.
+Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
+GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

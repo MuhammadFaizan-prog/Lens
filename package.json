@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "description": "Lens: cross-platform auto-polishing screen recorder (clean-room Screen Studio / FocuSee feature parity)",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "build": "npm run build -w @lens/engine",
-    "test": "npm test -w @lens/engine",
-    "typecheck": "npm run typecheck -w @lens/engine",
+    "build": "npm run build -w @lens/engine && npm run build -w @lens/editor",
+    "test": "npm test -w @lens/engine && npm test -w @lens/editor",
+    "typecheck": "npm run typecheck -w @lens/engine && npm run typecheck -w @lens/editor",
+    "e2e": "npm run e2e -w @lens/editor",
     "plan": "node packages/engine/dist/cli.js"
   },
   "license": "UNLICENSED"

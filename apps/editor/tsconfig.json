@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": false,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": { "@lens/engine": ["../../packages/engine/src/index.ts"] },
+    "noEmit": true
+  },
+  "include": ["src", "server", "test", "e2e", "vite.config.ts", "playwright.config.ts"]
+}

@@ -1,0 +1,287 @@
+import { useState } from "react";
+import { maxZoomsPerMinute, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
+import type { MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
+import { store, useEditor } from "../state/store";
+import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
+import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
+import { deleteSelection } from "./Timeline";
+import { Icon } from "./Icon";
+
+type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "look", label: "Look" },
+  { id: "zoom", label: "Zoom" },
+  { id: "cursor", label: "Cursor" },
+  { id: "camera", label: "Webcam" },
+  { id: "captions", label: "Captions" },
+  { id: "audio", label: "Audio" },
+];
+
+/** Original Lens backdrops. */
+const BACKDROPS: Array<{ name: string; kind: "gradient" | "solid"; colors: string[] }> = [
+  { name: "Tidepool", kind: "gradient", colors: ["#0f2027", "#2c5364", "#7ab8a6"] },
+  { name: "Ember", kind: "gradient", colors: ["#3b0d2e", "#c2410c", "#fbbf24"] },
+  { name: "Orchid", kind: "gradient", colors: ["#2e1065", "#7e22ce", "#f0abfc"] },
+  { name: "Meadow", kind: "gradient", colors: ["#052e16", "#15803d", "#bef264"] },
+  { name: "Graphite", kind: "solid", colors: ["#1d2027"] },
+  { name: "Paper", kind: "solid", colors: ["#e8e4dc"] },
+];
+
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+const px = (v: number) => `${Math.round(v)} px`;
+const sec = (v: number) => `${(v / 1000).toFixed(1)} s`;
+
+/** Settle time (ms) of a critically damped spring, inverse of springFromSettle. */
+function settleOf(p: ProjectConfig["zoom"]["spring"]): number {
+  return Math.round((6.638 / Math.sqrt(p.stiffness / p.mass)) * 1000);
+}
+
+function SelectionCard() {
+  const sel = useEditor((s) => s.selection);
+  const project = useEditor((s) => s.project);
+  const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  if (!sel) return null;
+  const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, sel.index, patch));
+  let body: React.ReactNode = null;
+  let range: { startMs: number; endMs: number } | undefined;
+  if (sel.track === "zoom") {
+    const z = project.zoom.segments[sel.index];
+    if (!z) return null;
+    range = z;
+    body = <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />;
+  } else if (sel.track === "speed") {
+    const s = project.edits.speed[sel.index];
+    if (!s) return null;
+    range = s;
+    body = <Slider label="Rate" value={s.rate} min={0.25} max={8} step={0.25} format={(v) => `${v}×`} testId="sel-speed-rate" onChange={(v) => tweak("Speed rate", { rate: v })} />;
+  } else if (sel.track === "mask") {
+    const m = project.masks[sel.index];
+    if (!m) return null;
+    range = m;
+    const strength = m.strength ?? DEFAULT_MASK_STRENGTH[m.kind];
+    const sr = m.kind === "spotlight" ? { min: 0.1, max: 0.95, step: 0.05, f: pct } : m.kind === "blur" ? { min: 2, max: 40, step: 1, f: px } : { min: 4, max: 48, step: 1, f: px };
+    body = (
+      <>
+        <Segmented<MaskKind>
+          label="Kind"
+          value={m.kind}
+          options={[{ value: "blur", label: "Blur" }, { value: "pixelate", label: "Pixelate" }, { value: "spotlight", label: "Spotlight" }]}
+          onChange={(k) => store.edit("Mask kind", (p) => updateBlock(p, "mask", sel.index, { kind: k, strength: DEFAULT_MASK_STRENGTH[k] }))}
+        />
+        <Slider label={m.kind === "spotlight" ? "Dim" : m.kind === "blur" ? "Blur" : "Block"} value={strength} min={sr.min} max={sr.max} step={sr.step} format={sr.f} onChange={(v) => tweak("Mask strength", { strength: v })} />
+        <Slider label="Feather" value={m.feather} min={0} max={40} step={1} format={px} onChange={(v) => tweak("Mask feather", { feather: v })} />
+        <Slider label="X" value={m.rect.x} min={0} max={(store.get().bundle?.meta.width ?? 1920) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, x: v } })} />
+        <Slider label="Y" value={m.rect.y} min={0} max={(store.get().bundle?.meta.height ?? 1080) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, y: v } })} />
+        <Slider label="Width" value={m.rect.w} min={10} max={store.get().bundle?.meta.width ?? 1920} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, w: v } })} />
+        <Slider label="Height" value={m.rect.h} min={10} max={store.get().bundle?.meta.height ?? 1080} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, h: v } })} />
+      </>
+    );
+  } else {
+    const c = project.edits.cuts[sel.index];
+    if (!c) return null;
+    range = c;
+  }
+  return (
+    <div className="selection-card" data-testid="selection-card">
+      <div className="sel-head">
+        <span className={`dot dot-${sel.track}`} />
+        <b>{sel.track === "cut" ? "Cut" : sel.track === "zoom" ? "Zoom block" : sel.track === "speed" ? "Speed range" : "Mask"}</b>
+        {range && (
+          <span className="sel-time">
+            {timecode(range.startMs, fps)} – {timecode(range.endMs, fps)}
+          </span>
+        )}
+        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete selection" data-testid="delete-selection" onClick={() => deleteSelection()}>
+          <Icon name="trash" />
+        </button>
+      </div>
+      {body}
+    </div>
+  );
+}
+
+function LookTab({ p }: { p: ProjectConfig }) {
+  const t = (label: string, fn: (q: ProjectConfig) => ProjectConfig) => store.tweak(label, fn);
+  return (
+    <>
+      <Section title="Backdrop">
+        <div className="backdrops" data-testid="backdrops">
+          {BACKDROPS.map((b) => {
+            const on = b.kind === p.background.kind && b.colors.join() === p.background.colors.join();
+            const css = b.kind === "solid" ? b.colors[0] : `linear-gradient(135deg, ${b.colors.join(", ")})`;
+            return (
+              <button key={b.name} className={`backdrop ${on ? "on" : ""} ${b.name === "Paper" ? "light" : ""}`} title={b.name} aria-label={`Backdrop ${b.name}`} style={{ background: css }} onClick={() => store.edit(`Backdrop ${b.name}`, (q) => ({ ...q, background: { ...q.background, kind: b.kind, colors: [...b.colors] } }))}>
+                <span>{b.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        {p.background.kind === "gradient" && <Slider label="Angle" value={p.background.angle} min={0} max={360} step={5} format={(v) => `${v}°`} onChange={(v) => t("Backdrop angle", (q) => ({ ...q, background: { ...q.background, angle: v } }))} />}
+        <ColorInput label={p.background.kind === "gradient" ? "From" : "Colour"} value={p.background.colors[0] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => ({ ...q, background: { ...q.background, colors: [v, ...q.background.colors.slice(1)] } }))} />
+        {p.background.kind === "gradient" && (
+          <ColorInput label="To" value={p.background.colors[p.background.colors.length - 1] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => ({ ...q, background: { ...q.background, colors: [...q.background.colors.slice(0, -1), v] } }))} />
+        )}
+      </Section>
+      <Section title="Frame">
+        <Slider label="Padding" value={p.frame.padding} min={0} max={0.25} step={0.005} format={pct} testId="padding" onChange={(v) => t("Padding", (q) => ({ ...q, frame: { ...q.frame, padding: v } }))} />
+        <Slider label="Radius" value={p.frame.radius} min={0} max={60} step={1} format={px} testId="radius" onChange={(v) => t("Corner radius", (q) => ({ ...q, frame: { ...q.frame, radius: v } }))} />
+        <Slider label="Shadow" value={p.frame.shadow.opacity} min={0} max={1} step={0.01} format={pct} testId="shadow" onChange={(v) => t("Shadow", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, opacity: v } } }))} />
+        <Slider label="Softness" value={p.frame.shadow.blur} min={0} max={120} step={1} format={px} onChange={(v) => t("Shadow softness", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, blur: v } } }))} />
+        <Slider label="Lift" value={p.frame.shadow.offsetY} min={0} max={60} step={1} format={px} onChange={(v) => t("Shadow offset", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, offsetY: v } } }))} />
+      </Section>
+      <Section title="Output">
+        <Segmented label="Aspect" value={p.output.aspect} testId="aspect" options={["16:9", "1:1", "4:5", "9:16"].map((a) => ({ value: a, label: a }))} onChange={(v) => store.edit(`Aspect ${v}`, (q) => ({ ...q, output: { ...q.output, aspect: v } }))} />
+      </Section>
+    </>
+  );
+}
+
+function ZoomTab({ p }: { p: ProjectConfig }) {
+  const segs = useEditor((s) => s.plan?.zoomSegments);
+  const durationMs = useEditor((s) => s.bundle?.meta.durationMs ?? 1);
+  const t = (label: string, fn: (z: ProjectConfig["zoom"]) => Partial<ProjectConfig["zoom"]>) => store.tweak(label, (q) => ({ ...q, zoom: { ...q.zoom, ...fn(q.zoom), preset: "custom" } }));
+  const n = segs?.length ?? 0;
+  const perMin = segs ? maxZoomsPerMinute(segs) : 0;
+  return (
+    <>
+      <Section title="Auto zoom" aside={<span className="stat" data-testid="zoom-stats">{n} zoom{n === 1 ? "" : "s"} · {durationMs >= 60000 ? `${perMin}/min peak` : `${perMin} in ${Math.round(durationMs / 1000)} s`}</span>}>
+        <Toggle label="Zoom on clicks & typing" value={p.zoom.auto} testId="auto-zoom" onChange={(v) => store.edit(v ? "Auto zoom on" : "Auto zoom off", (q) => (v ? unfreezeAutoZooms(q) : { ...q, zoom: { ...q.zoom, auto: false, segments: q.zoom.segments.filter((s) => !s.auto) } }))} />
+        <Segmented<ZoomPresetName | "custom">
+          label="Intensity"
+          stacked
+          value={p.zoom.preset}
+          testId="zoom-preset"
+          options={[
+            { value: "calm", label: "Calm", hint: "Slower springs, smaller zooms, budget on" },
+            { value: "default", label: "Default", hint: "Engine defaults" },
+            { value: "punchy", label: "Punchy", hint: "Fast springs, bigger zooms" },
+            ...(p.zoom.preset === "custom" ? [{ value: "custom" as const, label: "Custom" }] : []),
+          ]}
+          onChange={(v) => v !== "custom" && store.applyPreset(v)}
+        />
+        <Slider label="Depth" value={p.zoom.defaultScale} min={p.zoom.minScale} max={p.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="zoom-depth" onChange={(v) => t("Zoom depth", () => ({ defaultScale: v }))} />
+        <Slider label="Settle" value={settleOf(p.zoom.spring)} min={300} max={2400} step={50} format={sec} testId="zoom-settle" onChange={(v) => t("Zoom speed", () => ({ spring: springFromSettle(v, 1) }))} />
+        <Slider label="Hold" value={p.zoom.holdMs} min={300} max={4000} step={100} format={sec} onChange={(v) => t("Zoom hold", () => ({ holdMs: v }))} />
+        <Slider label="Pan later" value={p.zoom.followDeadzone} min={0.1} max={0.9} step={0.05} format={pct} onChange={(v) => t("Follow deadzone", () => ({ followDeadzone: v }))} />
+      </Section>
+      <Section title="Zoom budget" aside={<span className="stat">calm camera</span>}>
+        <Toggle label="Limit how often it zooms" value={p.zoom.budget.enabled} testId="budget" onChange={(v) => store.edit(v ? "Zoom budget on" : "Zoom budget off", (q) => ({ ...q, zoom: { ...q.zoom, budget: { ...q.zoom.budget, enabled: v }, preset: "custom" } }))} />
+        <Slider label="Max / minute" value={p.zoom.budget.maxPerMinute} min={1} max={12} step={1} testId="budget-max" onChange={(v) => t("Zoom budget", (z) => ({ budget: { ...z.budget, maxPerMinute: v } }))} />
+        <Slider label="Min hold" value={p.zoom.budget.minHoldMs} min={500} max={6000} step={100} format={sec} testId="budget-hold" onChange={(v) => t("Zoom min hold", (z) => ({ budget: { ...z.budget, minHoldMs: v } }))} />
+      </Section>
+    </>
+  );
+}
+
+function CursorTab({ p }: { p: ProjectConfig }) {
+  const t = (label: string, fn: (c: ProjectConfig["cursor"]) => Partial<ProjectConfig["cursor"]>) => store.tweak(label, (q) => ({ ...q, cursor: { ...q.cursor, ...fn(q.cursor) } }));
+  return (
+    <>
+      <Section title="Cursor">
+        <Toggle label="Show cursor" value={p.cursor.visible} onChange={(v) => store.edit("Cursor visibility", (q) => ({ ...q, cursor: { ...q.cursor, visible: v } }))} />
+        <Slider label="Size" value={p.cursor.size} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)}×`} testId="cursor-size" onChange={(v) => t("Cursor size", () => ({ size: v }))} />
+        <Toggle label="Smooth movement" value={p.cursor.smoothing.enabled} testId="cursor-smoothing" onChange={(v) => store.edit("Cursor smoothing", (q) => ({ ...q, cursor: { ...q.cursor, smoothing: { ...q.cursor.smoothing, enabled: v } } }))} />
+        <Slider label="Smoothing" value={settleOf(p.cursor.smoothing.spring)} min={60} max={800} step={10} format={(v) => `${v} ms`} testId="cursor-smooth-ms" onChange={(v) => t("Cursor smoothing", (c) => ({ smoothing: { ...c.smoothing, spring: springFromSettle(v, 1) } }))} />
+        <Toggle label="Hide when idle" value={p.cursor.hideWhenIdle} onChange={(v) => store.edit("Idle hide", (q) => ({ ...q, cursor: { ...q.cursor, hideWhenIdle: v } }))} />
+        <Select label="Click effect" value={p.cursor.clickEffect} options={[{ value: "ripple", label: "Ripple" }, { value: "circle", label: "Pulse" }, { value: "highlight", label: "Glow" }, { value: "none", label: "None" }]} onChange={(v) => store.edit("Click effect", (q) => ({ ...q, cursor: { ...q.cursor, clickEffect: v } }))} />
+      </Section>
+      <Section title="Motion blur">
+        <Toggle label="Motion blur" value={p.motionBlur.enabled} testId="motion-blur" onChange={(v) => store.edit("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, enabled: v } }))} />
+        <Slider label="Shutter" value={p.motionBlur.strength} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => store.tweak("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, strength: v } }))} />
+      </Section>
+    </>
+  );
+}
+
+function CameraTab({ p }: { p: ProjectConfig }) {
+  const hasCam = useEditor((s) => !!s.bundle?.camera);
+  const t = (label: string, fn: (c: ProjectConfig["camera"]) => Partial<ProjectConfig["camera"]>) => store.tweak(label, (q) => ({ ...q, camera: { ...q.camera, ...fn(q.camera) } }));
+  return (
+    <Section title="Webcam" aside={!hasCam ? <span className="stat">no webcam track</span> : undefined}>
+      <Toggle label="Show webcam" value={p.camera.enabled} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
+      <Select label="Corner" value={p.camera.corner} options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
+      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
+      <Segmented label="Shape" value={p.camera.shape} options={[{ value: "rounded", label: "Rounded" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }]} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
+      <Toggle label="Mirror" value={p.camera.mirror} onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
+      <Slider label="Shrink on zoom" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+    </Section>
+  );
+}
+
+function CaptionsTab({ p }: { p: ProjectConfig }) {
+  const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
+  const cs = p.captions.style;
+  const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style) } } }));
+  return (
+    <Section title="Captions" aside={!hasWords ? <span className="stat">no transcript</span> : undefined}>
+      <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
+      <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
+      <Slider label="Size" value={cs.fontSize} min={24} max={84} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
+      <Segmented label="Position" value={cs.position === "custom" ? "bottom" : cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
+      <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
+      <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))} />
+      <ColorInput label="Text" value={cs.textColor} onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
+      <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
+      <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
+    </Section>
+  );
+}
+
+function AudioTab({ p }: { p: ProjectConfig }) {
+  const tr = p.audio.tracks[0];
+  const cl = p.edits.cleanup;
+  const setTrack = (label: string, patch: Partial<NonNullable<typeof tr>>, live = false) => {
+    const fn = (q: ProjectConfig) => ({ ...q, audio: { ...q.audio, tracks: q.audio.tracks.map((x, i) => (i === 0 ? { ...x, ...patch } : x)) } });
+    if (live) store.tweak(label, fn);
+    else store.edit(label, fn);
+  };
+  return (
+    <>
+      <Section title="Mic track" aside={!tr ? <span className="stat">no audio</span> : undefined}>
+        {tr && (
+          <>
+            <Slider label="Volume" value={tr.volume} min={0} max={2} step={0.05} format={pct} testId="volume" onChange={(v) => setTrack("Volume", { volume: v }, true)} />
+            <Toggle label="Mute" value={tr.muted} onChange={(v) => setTrack(v ? "Mute" : "Unmute", { muted: v })} />
+          </>
+        )}
+        <Toggle label="Noise reduction" value={p.audio.noiseReduction.enabled} testId="denoise" onChange={(v) => store.edit("Noise reduction", (q) => ({ ...q, audio: { ...q.audio, noiseReduction: { ...q.audio.noiseReduction, enabled: v } } }))} />
+        <Toggle label="Level loudness" value={p.audio.loudness.enabled} testId="loudness" onChange={(v) => store.edit("Loudness", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, enabled: v } } }))} />
+        <Slider label="Target" value={p.audio.loudness.targetLufs} min={-24} max={-10} step={1} format={(v) => `${v} LUFS`} onChange={(v) => store.tweak("Loudness target", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, targetLufs: v } } }))} />
+        <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
+      </Section>
+      <Section title="Cleanup">
+        <Toggle label="Auto cleanup from transcript" value={cl.enabled} testId="cleanup" onChange={(v) => store.edit("Cleanup", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, enabled: v } } }))} />
+        <Toggle label="Remove fillers" value={cl.removeFillers} onChange={(v) => store.edit("Remove fillers", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, removeFillers: v } } }))} />
+        <Toggle label="Shorten pauses" value={cl.shortenPauses} onChange={(v) => store.edit("Shorten pauses", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, shortenPauses: v } } }))} />
+        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+      </Section>
+    </>
+  );
+}
+
+export function Inspector() {
+  const [tab, setTab] = useState<Tab>("look");
+  const p = useEditor((s) => s.project);
+  const planMs = useEditor((s) => s.planMs);
+  return (
+    <aside className="inspector" data-testid="inspector">
+      <SelectionCard />
+      <nav className="tabs" role="tablist">
+        {TABS.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} data-testid={`tab-${t.id}`} onClick={() => setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </nav>
+      <div className="insp-scroll">
+        {tab === "look" && <LookTab p={p} />}
+        {tab === "zoom" && <ZoomTab p={p} />}
+        {tab === "cursor" && <CursorTab p={p} />}
+        {tab === "camera" && <CameraTab p={p} />}
+        {tab === "captions" && <CaptionsTab p={p} />}
+        {tab === "audio" && <AudioTab p={p} />}
+      </div>
+      <footer className="insp-foot">plan rebuilt in {planMs.toFixed(1)} ms</footer>
+    </aside>
+  );
+}

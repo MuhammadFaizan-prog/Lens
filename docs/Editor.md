@@ -1,0 +1,109 @@
+# Lens live editor (`apps/editor`)
+
+React + TypeScript + Vite web app; the UI the Tauri shell will wrap. Everything is driven by the
+engine's render plan (`packages/engine`), rebuilt in the browser on every edit (8–40 ms for the
+10 s sample) and drawn per frame by a Canvas2D port of the reference compositor.
+
+```bash
+npm install && npm run build
+npm run dev -w apps/editor            # http://localhost:5178, opens apps/editor/sample (generated on first run)
+LENS_BUNDLE=/path/to/bundle npm run dev -w apps/editor   # or ?dir=/path/to/bundle in the URL
+npm test -w apps/editor               # vitest: timeline logic, history, audio schedule
+npm run e2e -w apps/editor            # Playwright: parity, editor e2e, demo recording
+```
+
+A bundle is a folder with `screen.mp4` (cursorless capture), `meta.json`, `events.jsonl`, and
+optionally `cam.mp4`, `transcript.json` (lens-transcribe output), `project.json` and audio files.
+`apps/editor/scripts/make_sample.py` writes a synthetic one (fake app UI, procedural webcam,
+speech-shaped mic track, hand-timed transcript with two fillers).
+
+Playwright needs a Chromium: `npx playwright install chromium`, or a system Chromium at
+`/usr/bin/chromium` / `$LENS_CHROMIUM` (`scripts/ensure-chromium.sh`; Playwright's CDN is blocked in
+our CI sandbox). The demo recording also needs Playwright's ffmpeg; a system ffmpeg with libvpx
+symlinked to `~/.cache/ms-playwright/ffmpeg-<rev>/ffmpeg-linux` works.
+
+### Running the e2e on a small machine
+
+The suite is 16 tests (parity 1, editor 14, demo 1) and runs with `workers: 1`, `fullyParallel:
+false`, one reused server (`reuseExistingServer`). On the 2-core sandbox with ~1 GB free, a default
+headless Chromium (~900 MB over 8 processes) plus the export's compositor (~430 MB: Python 180, x264
+110, two decoders) got the Playwright worker OOM-killed, so by default (`LENS_E2E_LOWMEM=0` turns it
+off) Chromium runs with `--in-process-gpu --no-zygote --renderer-process-limit=1` and background
+services off, and tests set the decoded-frame LRU to 8 bitmaps per track instead of 24
+(`window.__lensMaxBitmaps`, `TEST_MAX_BITMAPS` in `e2e/helpers.ts`). `--single-process` was tried and
+dropped: it crashes the browser whenever Playwright closes a context. Where memory is tightest, run
+one invocation per spec and the export test on its own, and point `LENS_CHROMIUM` at a Playwright
+`chromium-headless-shell` if one is present (old headless mode, ~350 MB):
+
+```bash
+npx vite build && npx vite preview --host 127.0.0.1 --port 5188 &   # the one server every run reuses
+npx playwright test e2e/parity.spec.ts
+npx playwright test e2e/editor.spec.ts --grep-invert "export renders"
+npx playwright test e2e/editor.spec.ts -g "export renders"
+npx playwright test e2e/demo.spec.ts
+```
+
+Don't run pytest at the same time.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/render/renderer.ts` | `PlanRenderer`: background → shadow → screen (crop, camera, motion blur) → masks → click effects → cursor → rounded composite → webcam → shortcut pill → caption, pass for pass like `compositor/lens_compositor/render.py` |
+| `src/render/cursorSprite.ts` | the Lens cursor art (same polygons as the compositor) with its soft shadow |
+| `src/media/frames.ts` | frame-accurate source access: the dev server decodes every frame to JPEG once; the browser keeps the bytes and an LRU of 24 decoded bitmaps; index = round(t·fps/1000) like `FrameSource.at` |
+| `src/media/audio.ts` | preview audio through the plan's audio pieces (cuts skipped, speed ranges, gain) + waveform peaks |
+| `src/state/store.ts` | project + undo history, plan, playhead (output frame), playback / J-K-L shuttle, selection, transcript edits, save, export |
+| `src/state/timelineOps.ts` | pure timeline logic: snapping, move / resize / create / delete, cut merging, auto-zoom freezing, source ↔ frame mapping |
+| `src/state/history.ts` | undo / redo; a drag or slider gesture is one step |
+| `src/components/*` | Preview, Transport (scrubber + live hover thumbnails), Timeline, Inspector, TranscriptPanel |
+| `server/api.ts` | dev-server endpoints (Vite plugin): bundle, frames, media, font, save project, export via `compositor/render.py --progress` |
+| `parity.html`, `src/parity.ts` | headless parity harness page |
+
+The timeline is in **source** time (the engine's edit data is), with cuts shaded; the transport and
+scrubber are in **output** frames. Editing a live auto zoom first "freezes" the current auto zooms
+into the project (`auto: true` segments with `zoom.auto` off, which the engine already uses as-is),
+so the planner does not put a moved zoom back; turning Auto zoom on again regenerates them.
+
+Deleting transcript words adds cuts (`cutsForDeletedWords`) and, since this change, words inside
+any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every filler not already
+cut, as one undo step. Zoom intensity presets and the zoom budget are engine features
+(`zoomPreset`, `applyZoomBudget`), see Tracker.
+
+## Preview vs export
+
+Parity test: `e2e/parity.spec.ts` builds the plan for the sample project in the browser, renders 14
+frames (zoom in/hold/pan, motion blur, blur + spotlight masks, ripples, webcam shrink-on-zoom,
+captions with highlight) and compares them with `compositor/render.py` frames for the same plan,
+taken before the video encode (`RenderOptions.frame_sink`). Metric: luma SSIM (Wang 2004, 11×11
+Gaussian σ 1.5) over the whole 1280×720 frame. Thresholds, fixed before the first measurement:
+**every frame ≥ 0.95, mean ≥ 0.97**. Measured: mean 0.988, min 0.983 (see Tracker).
+
+Intentional or accepted differences:
+
+1. **Source pixels.** The preview reads JPEG (q 2) proxies of the source frames; the compositor reads
+   raw decoded frames. ~1.6 levels mean absolute difference on the source alone.
+2. **Resampling.** Canvas "high" quality smoothing vs OpenCV INTER_AREA (down) / INTER_CUBIC (up).
+   Pixel-centre conventions are matched (offset 0.5 − 0.5/k), the filters are not.
+3. **Background dither.** The compositor adds ±0.5 level noise against banding; the preview does not.
+4. **Text.** Same font (DejaVu Sans Bold, served by the dev server), same layout maths (no kerning,
+   FreeType-style rounded metrics), but Chrome and PIL rasterise differently and PIL's pill corners
+   are not anti-aliased.
+5. **Overlapping spotlights.** Preview dims by the product of (1 − spot); the compositor by
+   1 − max(spot). Identical unless two spotlights overlap.
+6. **Viewport beyond the frame edge** (only motion-blur samples can do this): compositor replicates
+   edge pixels, preview leaves them transparent.
+7. **Cursor sprite.** Drawn as a 256 px vector with premultiplied resampling; the compositor
+   supersamples 4× and resizes non-premultiplied RGBA.
+8. **Motion blur** is a running average in 8-bit, so up to ~1 level of rounding per pixel.
+9. **Encode.** Exports are x264 yuv420p, converted with the BT.709 matrix (limited range,
+   `accurate_rnd+full_chroma_int`) and tagged bt709 / tv (`encoder_args` in `render.py`). Before,
+   ffmpeg's default untagged BT.601 conversion was decoded as BT.709 by players (what browsers do
+   for HD), shifting saturated colours by up to 23 levels (10.8 mean over 10 flat patches); now
+   ≤2 levels worst channel, 0.7 mean, decoded the same way (`tests/test_export_colour.py`).
+   Parity is still measured before the encode, so this does not enter the SSIM numbers.
+10. **Audio preview** plays the raw mic track: no denoise or loudness normalisation (export only),
+    no click sounds, and speed ranges change pitch (WebAudio playbackRate) where the export uses
+    pitch-preserving atempo.
+11. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
+    to the first colour).
