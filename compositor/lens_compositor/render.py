@@ -205,7 +205,10 @@ def probe(path: str) -> dict:
 
 
 def read_frames(path: str, w: int, h: int) -> Iterator[np.ndarray]:
-    p = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE)
+    # YUV -> RGB with the same accurate rounding as the export encode (matrix and range from the
+    # stream's tags; untagged input keeps ffmpeg's default)
+    p = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-vf", f"scale=flags={SWS_FLAGS}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+                         stdout=subprocess.PIPE)
     assert p.stdout
     size = w * h * 3
     try:
@@ -241,6 +244,24 @@ class FrameSource:
         return self._frame
 
 
+# BT.709 limited range, converted and tagged explicitly. ffmpeg's default RGB->YUV conversion uses the
+# BT.601 matrix and writes no colour tags; players (Chrome, QuickTime, VLC) decode untagged HD video as
+# BT.709, which shifted saturated colours by up to ~23 levels. accurate_rnd + full_chroma_int keep the
+# conversion itself within ~1-2 levels on flat colours.
+SWS_FLAGS = "accurate_rnd+full_chroma_int"
+COLOR_TAGS = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"]
+
+
+def encoder_args(preset: str, crf: int) -> list[str]:
+    """ffmpeg output args for the x264 export: explicit bt709 conversion plus matching stream tags."""
+    return [
+        "-vf", f"scale=out_color_matrix=bt709:out_range=tv:flags={SWS_FLAGS},"
+        "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        *COLOR_TAGS,
+    ]
+
+
 # ---------------------------------------------------------------- render
 
 @dataclass
@@ -252,6 +273,9 @@ class RenderOptions:
     audio: bool = True
     #: called as progress(frames_done, frames_total) after each encoded frame (editor export bar)
     progress: Optional[Callable[[int, int], None]] = None
+    #: when set, each finished frame (uint8 BGR, H x W x 3) goes here and nothing is encoded or
+    #: written (golden / parity tests compare pixels before the lossy YUV encode)
+    frame_sink: Optional[Callable[[int, np.ndarray], None]] = None
 
 
 # ---------------------------------------------------------------- masks (TXT-04/05)
@@ -402,12 +426,13 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     video_path = os.path.join(tmpdir, "video.mp4") if tmpdir else out_path
     crf = min(opts.crf, 12) if is_gif else opts.crf
 
-    enc = subprocess.Popen(
+    sink = opts.frame_sink
+    enc = None if sink else subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-         "-c:v", "libx264", "-preset", opts.preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", video_path],
+         *encoder_args(opts.preset, crf), "-movflags", "+faststart", video_path],
         stdin=subprocess.PIPE,
     )
-    assert enc.stdin
+    assert sink or (enc and enc.stdin)
     frames = plan["frames"][: opts.max_frames] if opts.max_frames else plan["frames"]
     prev_cur = None
     for fi, f in enumerate(frames):
@@ -545,14 +570,22 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
             pil = Image.alpha_composite(pil, layer).convert("RGB")
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
 
-        enc.stdin.write(np.clip(out, 0, 255).astype(np.uint8).tobytes())
+        final = np.clip(out, 0, 255).astype(np.uint8)
+        if sink:
+            sink(fi, final)
+        else:
+            enc.stdin.write(final.tobytes())
         if opts.progress:
             opts.progress(fi + 1, len(frames))
 
+    info = {"frames": len(frames), "width": W, "height": H, "fps": fps, "out": out_path, "audio": False}
+    if sink:
+        if tmpdir:
+            os.rmdir(tmpdir)
+        return info
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError("ffmpeg encode failed")
-    info = {"frames": len(frames), "width": W, "height": H, "fps": fps, "out": out_path, "audio": False}
     try:
         if is_gif:
             g = plan.get("export", {}).get("gif", {"fps": 15, "width": 640, "loop": True})

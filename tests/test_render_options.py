@@ -1,4 +1,4 @@
-"""compositor/render.py --progress: the editor's export bar reads these lines."""
+"""compositor render options used by the editor: --progress (export bar) and frame_sink (parity)."""
 from __future__ import annotations
 
 import shutil
@@ -38,3 +38,17 @@ def test_no_progress_lines_without_flag(tmp_path: Path) -> None:
     r = subprocess.run([sys.executable, str(ROOT / "compositor" / "render.py"), "--plan", str(tmp_path / "plan.json"), "--screen", s["screen"],
                         "--out", str(tmp_path / "o.mp4"), "--preset", "ultrafast"], capture_output=True, text=True, check=True)
     assert "progress" not in r.stderr
+
+
+def test_frame_sink_gets_raw_frames_and_nothing_is_written(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "compositor"))
+    from lens_compositor import RenderOptions, render  # noqa: E402
+
+    s = synthesize(tmp_path, 640, 360, 30, 500)
+    make_plan(tmp_path, s["meta"], s["events"], {"output": {"fps": 30, "resolution": 360}})
+    got: list[tuple[int, tuple]] = []
+    out = tmp_path / "never.mp4"
+    info = render(str(tmp_path / "plan.json"), s["screen"], str(out), opts=RenderOptions(frame_sink=lambda i, f: got.append((i, f.shape)), max_frames=6))
+    assert [i for i, _ in got] == list(range(6))
+    assert all(shape == (360, 640, 3) for _, shape in got)
+    assert info["frames"] == 6 and not out.exists()
