@@ -88,3 +88,44 @@ export interface TimeRange {
 export interface SpeedRange extends TimeRange {
   rate: number;
 }
+
+/** One audio input aligned to the recording clock (REC-08/09, AUD-04/06). */
+export interface AudioTrack {
+  id: string;
+  kind: "mic" | "system";
+  path: string;
+  /** Recording time (ms) at which the file's first sample plays. Negative skips into the file. */
+  offsetMs: number;
+  /** Linear gain. */
+  volume: number;
+  muted: boolean;
+}
+
+export type MaskKind = "spotlight" | "blur" | "pixelate";
+
+/** Timed highlight or privacy region in source px (TXT-04/05). */
+export interface MaskRegion {
+  id: string;
+  kind: MaskKind;
+  rect: Rect;
+  startMs: number;
+  endMs: number;
+  /** Edge softness in source px. */
+  feather: number;
+  /** Fade in/out time in ms. */
+  fadeMs: number;
+  /**
+   * spotlight: how much the outside is dimmed, 0..1 (default 0.6);
+   * blur: Gaussian sigma in source px (default 12); pixelate: block size in source px (default 16).
+   */
+  strength?: number;
+}
+
+/** Time range (source ms) overriding cursor behaviour and audio volume (CUR-01 / EDT-05/06). */
+export interface SegmentOverride {
+  startMs: number;
+  endMs: number;
+  cursor?: { hidden?: boolean; smoothing?: boolean; size?: number };
+  /** Gain multiplier applied to all audio tracks in this range (not click sounds). */
+  volume?: number;
+}

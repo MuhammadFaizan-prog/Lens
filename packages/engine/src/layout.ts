@@ -143,3 +143,17 @@ export function overlayAvoidRect(layout: FrameLayout): Rect | null {
   if (x1 <= x0 || y1 <= y0) return null;
   return { x: (x0 - s.x) / s.w, y: (y0 - s.y) / s.h, w: (x1 - x0) / s.w, h: (y1 - y0) / s.h };
 }
+
+/**
+ * Scale the webcam rect about its anchored corner (CAM-05). Only corner overlays shrink; split and
+ * fullscreen layouts own their slot and are left alone.
+ */
+export function scaleCameraRect(layout: FrameLayout, factor: number, corner: ProjectConfig["camera"]["corner"]): FrameLayout {
+  if (!layout.camera || factor === 1 || (layout.kind !== "camera-overlay" && layout.kind !== "camera-cutout")) return layout;
+  const c = layout.camera;
+  const w = c.w * factor;
+  const h = c.h * factor;
+  const x = corner.endsWith("right") ? c.x + c.w - w : c.x;
+  const y = corner.startsWith("bottom") ? c.y + c.h - h : c.y;
+  return { ...layout, camera: { x, y, w, h } };
+}

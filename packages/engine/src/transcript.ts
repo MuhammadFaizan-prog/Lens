@@ -119,3 +119,41 @@ export function parseSrt(text: string): Array<{ startMs: number; endMs: number; 
       return { startMs: toMs(a!.trim()), endMs: toMs(b!.trim()), text: textLines.join("\n") };
     });
 }
+
+/** What the compositor draws for a caption on one frame (AI-03 styling). */
+export interface CaptionFrame {
+  text: string;
+  words: string[];
+  /** Word count of each line, after wrapping at maxWordsPerLine. */
+  lines: number[];
+  /**
+   * Index (within words) of the word to highlight: the word being spoken, or during a gap the
+   * last word already spoken. -1 before the block's first word starts or when highlighting is off.
+   */
+  active: number;
+}
+
+export function wrapWords(count: number, maxWordsPerLine: number): number[] {
+  const per = Math.max(1, Math.floor(maxWordsPerLine));
+  const lines = Math.ceil(count / per);
+  if (lines <= 1) return [count];
+  // Balance lines so the last line is not a single orphan word.
+  const base = Math.floor(count / lines);
+  const extra = count % lines;
+  return Array.from({ length: lines }, (_, i) => base + (i < extra ? 1 : 0));
+}
+
+export function activeWordIndex(words: Word[], tMs: number): number {
+  let idx = -1;
+  for (let i = 0; i < words.length; i++) if (tMs >= words[i]!.startMs) idx = i;
+  return idx;
+}
+
+export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: number, highlight: boolean): CaptionFrame {
+  return {
+    text: block.text,
+    words: block.words.map((w) => w.text),
+    lines: wrapWords(block.words.length, maxWordsPerLine),
+    active: highlight ? activeWordIndex(block.words, tMs) : -1,
+  };
+}

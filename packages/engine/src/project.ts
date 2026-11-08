@@ -1,5 +1,9 @@
 import type {
+  AudioTrack,
   CameraLayoutSegment,
+  MaskRegion,
+  Rect,
+  SegmentOverride,
   CursorShape,
   SpeedRange,
   SpringParams,
@@ -20,7 +24,7 @@ export interface ProjectConfig {
     /** Aspect ratio as w:h, e.g. "16:9", "1:1", "9:16", "4:5", "4:3". */
     aspect: string;
     /** Height of the output for 16:9, or the short side for other aspects. */
-    resolution: 720 | 1080 | 1440 | 2160;
+    resolution: 360 | 480 | 720 | 1080 | 1440 | 2160;
     fps: 24 | 30 | 60;
   };
   background: {
@@ -71,6 +75,8 @@ export interface ProjectConfig {
     clickEffect: "none" | "ripple" | "circle" | "highlight";
     clickEffectMs: number;
     clickSound: boolean;
+    /** Linear gain of the synthesized click sound (CUR-08), 0..2. */
+    clickSoundVolume: number;
     pressScale: number;
   };
   motionBlur: { enabled: boolean; strength: number; samples: number };
@@ -83,6 +89,15 @@ export interface ProjectConfig {
     layouts: CameraLayoutSegment[];
     transitionMs: number;
     hideDuringSilence: boolean;
+    /** Flip the webcam horizontally (CAM-04). */
+    mirror: boolean;
+    /** Crop of the webcam frame in camera px, applied before it is fitted into its slot (CAM-06). */
+    crop: Rect | null;
+    /**
+     * Overlay size multiplier while a zoom is active (CAM-05). 1 = unchanged, 0.6 = shrink to 60%.
+     * Animated with the zoom spring so the webcam shrinks as the camera zooms in.
+     */
+    zoomedSize: number;
   };
   edits: {
     cuts: TimeRange[];
@@ -90,8 +105,42 @@ export interface ProjectConfig {
     /** Auto speed-up for detected typing stretches (E04). */
     speedUpTyping: { enabled: boolean; rate: number };
   };
-  captions: { enabled: boolean; maxWordsPerBlock: number; maxBlockMs: number };
+  captions: {
+    enabled: boolean;
+    maxWordsPerBlock: number;
+    maxBlockMs: number;
+    /** Highlight the word being spoken (AI-03 word-by-word). */
+    wordHighlight: boolean;
+    style: CaptionStyle;
+  };
   shortcuts: { enabled: boolean; displayMs: number };
+  /** Source crop rect in source px (LOOK-14). Everything downstream works in cropped space. */
+  crop: Rect | null;
+  /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05). */
+  masks: MaskRegion[];
+  /** Per-segment overrides of cursor and audio volume, source time (CUR-01, EDT-05/06). */
+  overrides: SegmentOverride[];
+  audio: {
+    tracks: AudioTrack[];
+    /** FFT denoise (ffmpeg afftdn); amountDb is the noise reduction in dB. */
+    noiseReduction: { enabled: boolean; amountDb: number };
+    /** Two-pass EBU R128 loudness normalisation (ffmpeg loudnorm). */
+    loudness: { enabled: boolean; targetLufs: number; truePeakDb: number; lra: number };
+    sampleRate: 44100 | 48000;
+  };
+  export: { gif: { fps: number; width: number; loop: boolean } };
+}
+
+export interface CaptionStyle {
+  /** Font size in px at 1080p (scaled with resolution). */
+  fontSize: number;
+  textColor: string;
+  highlightColor: string;
+  background: { enabled: boolean; color: string; opacity: number };
+  position: "top" | "bottom" | "custom";
+  /** Vertical center of the caption as a fraction of output height, used when position = custom. */
+  y: number;
+  maxWordsPerLine: number;
 }
 
 export function defaultProject(): ProjectConfig {
@@ -132,6 +181,7 @@ export function defaultProject(): ProjectConfig {
       clickEffect: "ripple",
       clickEffectMs: 450,
       clickSound: false,
+      clickSoundVolume: 0.5,
       pressScale: 0.85,
     },
     motionBlur: { enabled: true, strength: 0.35, samples: 8 },
@@ -143,10 +193,37 @@ export function defaultProject(): ProjectConfig {
       layouts: [],
       transitionMs: 500,
       hideDuringSilence: false,
+      mirror: false,
+      crop: null,
+      zoomedSize: 1,
     },
     edits: { cuts: [], speed: [], speedUpTyping: { enabled: false, rate: 3 } },
-    captions: { enabled: false, maxWordsPerBlock: 7, maxBlockMs: 2800 },
+    captions: {
+      enabled: false,
+      maxWordsPerBlock: 7,
+      maxBlockMs: 2800,
+      wordHighlight: true,
+      style: {
+        fontSize: 44,
+        textColor: "#ffffff",
+        highlightColor: "#ffd23f",
+        background: { enabled: true, color: "#000000", opacity: 0.66 },
+        position: "bottom",
+        y: 0.88,
+        maxWordsPerLine: 5,
+      },
+    },
     shortcuts: { enabled: true, displayMs: 1200 },
+    crop: null,
+    masks: [],
+    overrides: [],
+    audio: {
+      tracks: [],
+      noiseReduction: { enabled: false, amountDb: 12 },
+      loudness: { enabled: true, targetLufs: -16, truePeakDb: -1.5, lra: 11 },
+      sampleRate: 48000,
+    },
+    export: { gif: { fps: 15, width: 640, loop: true } },
   };
 }
 
@@ -184,6 +261,28 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   }
   for (const r of p.edits.speed) if (r.rate <= 0) errs.push("speed rate must be > 0");
   for (const r of [...p.edits.cuts, ...p.edits.speed]) if (r.endMs <= r.startMs) errs.push("edit range ends before it starts");
+  const validRect = (r: Rect | null | undefined) => !r || (r.w > 0 && r.h > 0 && [r.x, r.y, r.w, r.h].every(Number.isFinite));
+  if (!validRect(p.crop)) errs.push("crop must have positive w and h");
+  if (!validRect(p.camera.crop)) errs.push("camera.crop must have positive w and h");
+  if (!(p.camera.zoomedSize > 0 && p.camera.zoomedSize <= 2)) errs.push("camera.zoomedSize must be within (0, 2]");
+  if (p.cursor.clickSoundVolume < 0 || p.cursor.clickSoundVolume > 2) errs.push("cursor.clickSoundVolume must be within 0..2");
+  for (const m of p.masks) {
+    if (!["spotlight", "blur", "pixelate"].includes(m.kind)) errs.push(`mask ${m.id} has unknown kind ${String(m.kind)}`);
+    if (m.endMs <= m.startMs) errs.push(`mask ${m.id} ends before it starts`);
+    if (!validRect(m.rect)) errs.push(`mask ${m.id} rect invalid`);
+  }
+  for (const o of p.overrides) {
+    if (o.endMs <= o.startMs) errs.push("override ends before it starts");
+    if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");
+    if (o.cursor?.size !== undefined && o.cursor.size <= 0) errs.push("override cursor size must be > 0");
+  }
+  for (const tr of p.audio.tracks) {
+    if (!tr.path) errs.push(`audio track ${tr.id} has no path`);
+    if (tr.volume < 0) errs.push(`audio track ${tr.id} volume must be >= 0`);
+  }
+  if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
+  if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
+  if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");
   if (errs.length) throw new ProjectValidationError(errs.join("; "));
   return p;
 }

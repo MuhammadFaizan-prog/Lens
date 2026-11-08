@@ -1,7 +1,7 @@
 import { OneEuroFilter, DEFAULT_ONE_EURO } from "./oneEuro.js";
 import { stepSpring, type SpringState } from "./spring.js";
 import { clicks, rawCursorAt } from "./events.js";
-import type { CursorShape, InputEvent, RecordingMeta } from "./types.js";
+import type { CursorShape, InputEvent, RecordingMeta, SegmentOverride } from "./types.js";
 import type { ProjectConfig } from "./project.js";
 
 /** Per-frame cursor state produced by the engine and drawn by the compositor (C01-C07). */
@@ -36,7 +36,28 @@ function smoothstep(u: number): number {
  * The spring target looks ahead by about a third of its settle time so the smoothed cursor still
  * reaches click points on time (clicks render at their true position).
  */
-export function buildCursorTrack(events: InputEvent[], meta: RecordingMeta, cfg: ProjectConfig["cursor"], fps: number): CursorSample[] {
+/** The cursor part of the override active at source time t (later overrides win per field). */
+export function cursorOverrideAt(overrides: SegmentOverride[], tMs: number): { hidden: boolean; smoothing: boolean | null; size: number | null } {
+  const out = { hidden: false, smoothing: null as boolean | null, size: null as number | null };
+  for (const o of overrides) {
+    if (!o.cursor || tMs < o.startMs || tMs >= o.endMs) continue;
+    if (o.cursor.hidden !== undefined) out.hidden = o.cursor.hidden;
+    if (o.cursor.smoothing !== undefined) out.smoothing = o.cursor.smoothing;
+    if (o.cursor.size !== undefined) out.size = o.cursor.size;
+  }
+  return out;
+}
+
+/** Blend time when a per-segment override switches smoothing or size, so nothing snaps. */
+export const OVERRIDE_BLEND_MS = 120;
+
+export function buildCursorTrack(
+  events: InputEvent[],
+  meta: RecordingMeta,
+  cfg: ProjectConfig["cursor"],
+  fps: number,
+  overrides: SegmentOverride[] = [],
+): CursorSample[] {
   const frames = Math.max(1, Math.ceil((meta.durationMs / 1000) * fps));
   const dt = 1000 / fps;
   const out: CursorSample[] = [];
@@ -56,6 +77,9 @@ export function buildCursorTrack(events: InputEvent[], meta: RecordingMeta, cfg:
   let lastMoveT = 0;
   let prevRaw: { x: number; y: number } | null = null;
   let opacity = 1;
+  let rawW = 0; // weight of the raw (unsmoothed) position, ramps for smoothing-off overrides
+  const sizeMuls: number[] = [];
+  const blendStep = dt / OVERRIDE_BLEND_MS;
 
   for (let i = 0; i < frames; i++) {
     const t = i * dt;
@@ -83,8 +107,13 @@ export function buildCursorTrack(events: InputEvent[], meta: RecordingMeta, cfg:
     if (recentClick) lastMoveT = Math.max(lastMoveT, t);
     prevRaw = raw;
 
+    const ov = cursorOverrideAt(overrides, t);
     const idle = cfg.hideWhenIdle && t - lastMoveT > cfg.idleMs;
-    const targetOpacity = cfg.visible ? (idle ? 0 : 1) : 0;
+    const targetOpacity = cfg.visible && !ov.hidden ? (idle ? 0 : 1) : 0;
+    const rawTarget = cfg.smoothing.enabled && ov.smoothing === false ? 1 : 0;
+    rawW = i === 0 ? rawTarget : rawTarget > rawW ? Math.min(rawTarget, rawW + blendStep) : Math.max(rawTarget, rawW - blendStep);
+    const sizeTarget = ov.size !== null ? ov.size / cfg.size : 1;
+    sizeMuls.push(sizeTarget);
     const stepO = cfg.fadeMs > 0 ? dt / cfg.fadeMs : 1;
     opacity = targetOpacity > opacity ? Math.min(targetOpacity, opacity + stepO) : Math.max(targetOpacity, opacity - stepO);
 
@@ -101,8 +130,8 @@ export function buildCursorTrack(events: InputEvent[], meta: RecordingMeta, cfg:
 
     out.push({
       t,
-      x: sx.x,
-      y: sy.x,
+      x: sx.x + (raw.x - sx.x) * rawW,
+      y: sy.x + (raw.y - sy.x) * rawW,
       opacity,
       scale: held ? cfg.pressScale : 1,
       shape,
@@ -118,6 +147,18 @@ export function buildCursorTrack(events: InputEvent[], meta: RecordingMeta, cfg:
     const step = (1 - cfg.pressScale) / pressFrames;
     if (cur.scale < prev.scale) cur.scale = Math.max(cur.scale, prev.scale - step);
     else if (cur.scale > prev.scale) cur.scale = Math.min(cur.scale, prev.scale + step);
+  }
+
+  // Size overrides ramp linearly over OVERRIDE_BLEND_MS (centered box filter of the step targets).
+  const half = Math.max(0, Math.round(OVERRIDE_BLEND_MS / dt / 2));
+  for (let i = 0; i < out.length; i++) {
+    let acc = 0;
+    let n = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(out.length - 1, i + half); j++) {
+      acc += sizeMuls[j]!;
+      n++;
+    }
+    out[i]!.scale *= acc / n;
   }
 
   if (cfg.loopToStart && out.length > 1) {

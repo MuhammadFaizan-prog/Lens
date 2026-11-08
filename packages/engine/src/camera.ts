@@ -157,3 +157,22 @@ export function lerpCamera(a: CameraSample, b: CameraSample, u: number): CameraS
     segment: u < 0.5 ? a.segment : b.segment,
   };
 }
+
+/**
+ * How "zoomed in" the camera is, 0..1, animated with the zoom spring (CAM-05). Drives the webcam
+ * shrinking while zoomed. Target is 1 while a zoom segment with scale > 1 is active.
+ */
+export function zoomBlendTrack(camera: CameraSample[], segments: ZoomSegment[], spring: SpringParams): Array<{ t: number; v: number }> {
+  const out: Array<{ t: number; v: number }> = [];
+  if (camera.length === 0) return out;
+  const dt = camera.length > 1 ? camera[1]!.t - camera[0]!.t : 1000 / 60;
+  let s: SpringState = { x: 0, v: 0 };
+  for (let i = 0; i < camera.length; i++) {
+    const c = camera[i]!;
+    const seg = activeSegment(segments, c.t);
+    const target = seg && seg.scale > 1 ? 1 : 0;
+    s = i === 0 ? { x: target, v: 0 } : stepSpring(s, target, dt, spring);
+    out.push({ t: c.t, v: Math.min(1, Math.max(0, s.x)) });
+  }
+  return out;
+}
