@@ -4,8 +4,11 @@ This is the CPU reference implementation of the render graph described in Techsp
 production compositor (wgpu, Rust) must produce the same pixels for the same plan; golden tests
 compare the two. Order of passes per frame:
 
-  background -> shadow -> screen (camera transform, motion blur, rounded mask)
-  -> click effects -> cursor (with motion blur) -> webcam -> shortcut pill -> caption
+  background -> shadow -> screen (source crop, camera transform, motion blur)
+  -> masks (spotlight / blur / pixelate) -> click effects -> cursor (with motion blur)
+  -> rounded mask -> webcam (crop, mirror) -> shortcut pill -> caption (styled, word highlight)
+
+Then audio (see audio.py) is muxed as AAC, or the video is converted to a palette GIF.
 
 All motion decisions come from the plan. This file only draws.
 """
@@ -13,7 +16,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -23,6 +28,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .audio import build_audio, export_gif, mux_audio
+
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -31,6 +38,7 @@ FONT_CANDIDATES = [
 ]
 
 
+@lru_cache(maxsize=16)
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for p in FONT_CANDIDATES:
         if Path(p).exists():
@@ -42,6 +50,11 @@ def hex_to_bgr(h: str) -> tuple[int, int, int]:
     h = h.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return (b, g, r)
+
+
+def hex_to_rgb(h: str) -> tuple[int, int, int]:
+    b, g, r = hex_to_bgr(h)
+    return (r, g, b)
 
 
 # ---------------------------------------------------------------- background
@@ -235,6 +248,119 @@ class RenderOptions:
     crf: int = 18
     preset: str = "medium"
     max_frames: Optional[int] = None
+    #: mux the plan's audio block (tracks, cleanup, click sounds) when present
+    audio: bool = True
+
+
+# ---------------------------------------------------------------- masks (TXT-04/05)
+
+def _soft_rect_alpha(h: int, w: int, x0: float, y0: float, x1: float, y1: float, feather: float) -> np.ndarray:
+    """Alpha (float32 0..1) of a rect with linear feathered edges centred on the rect border.
+    feather <= 1 px gives a 1 px anti-aliased edge."""
+    f = max(1.0, feather)
+    xx = np.arange(w, dtype=np.float32) + 0.5
+    yy = np.arange(h, dtype=np.float32) + 0.5
+    ax = np.clip((xx - x0) / f + 0.5, 0, 1) * np.clip((x1 - xx) / f + 0.5, 0, 1)
+    ay = np.clip((yy - y0) / f + 0.5, 0, 1) * np.clip((y1 - yy) / f + 0.5, 0, 1)
+    return ay[:, None] * ax[None, :]
+
+
+def apply_masks(view: np.ndarray, masks: list[dict], to_rect, kx: float, ky: float) -> np.ndarray:
+    """Draw the frame's masks into the camera view. Mask rects are in (cropped) source px, mapped
+    through the same camera transform as the screen, so they stay glued to content while zooming."""
+    if not masks:
+        return view
+    vh, vw = view.shape[:2]
+    spot = np.zeros((vh, vw), np.float32)
+    spot_dim = 0.0
+    for m in masks:
+        x, y, w, h = m["rect"]
+        rx0, ry0 = to_rect(x, y)
+        rx1, ry1 = to_rect(x + w, y + h)
+        fe = m["feather"] * kx
+        op = float(m["opacity"])
+        if m["kind"] == "spotlight":
+            a = _soft_rect_alpha(vh, vw, rx0, ry0, rx1, ry1, fe)
+            spot = np.maximum(spot, a * op)
+            spot_dim = max(spot_dim, float(m["strength"]) * op)
+            continue
+        pad = int(math.ceil(fe + 2))
+        bx0, by0 = max(0, int(math.floor(rx0)) - pad), max(0, int(math.floor(ry0)) - pad)
+        bx1, by1 = min(vw, int(math.ceil(rx1)) + pad), min(vh, int(math.ceil(ry1)) + pad)
+        if bx1 - bx0 < 2 or by1 - by0 < 2:
+            continue
+        a = _soft_rect_alpha(by1 - by0, bx1 - bx0, rx0 - bx0, ry0 - by0, rx1 - bx0, ry1 - by0, fe)[..., None] * op
+        region = view[by0:by1, bx0:bx1]
+        if m["kind"] == "blur":
+            sigma = max(0.5, float(m["strength"]) * kx)
+            # blur a margin around the region too so the edge samples real neighbours, not padding
+            mg = int(math.ceil(sigma * 3))
+            ex0, ey0, ex1, ey1 = max(0, bx0 - mg), max(0, by0 - mg), min(vw, bx1 + mg), min(vh, by1 + mg)
+            big = cv2.GaussianBlur(view[ey0:ey1, ex0:ex1], (0, 0), sigma)
+            eff = big[by0 - ey0:by1 - ey0, bx0 - ex0:bx1 - ex0]
+        else:  # pixelate: blocks anchored to the mask's own origin, so they move with the content
+            bi = max(2, int(round(float(m["strength"]) * kx)))
+            ox, oy = int(math.floor(rx0)), int(math.floor(ry0))
+            gx0 = max(0, ox - int(math.ceil((ox - bx0) / bi)) * bi)
+            gy0 = max(0, oy - int(math.ceil((oy - by0) / bi)) * bi)
+            gx1 = min(vw, gx0 + int(math.ceil((bx1 - gx0) / bi)) * bi)
+            gy1 = min(vh, gy0 + int(math.ceil((by1 - gy0) / bi)) * bi)
+            sub = view[gy0:gy1, gx0:gx1]
+            nh, nw = max(1, int(math.ceil(sub.shape[0] / bi))), max(1, int(math.ceil(sub.shape[1] / bi)))
+            small = cv2.resize(sub, (nw, nh), interpolation=cv2.INTER_AREA)
+            px = np.repeat(np.repeat(small, bi, 0), bi, 1)[: sub.shape[0], : sub.shape[1]]
+            eff = px[by0 - gy0:, bx0 - gx0:][: by1 - by0, : bx1 - bx0]
+        view[by0:by1, bx0:bx1] = region * (1 - a) + eff * a
+    if spot_dim > 0:
+        view = view * (1 - spot_dim * (1 - spot))[..., None]
+    return view
+
+
+# ---------------------------------------------------------------- captions (AI-03)
+
+def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
+    """Styled caption: wrapped lines, optional pill background, per-word highlight."""
+    if isinstance(cap, str):  # plans from before caption styling
+        cap = {"text": cap, "words": cap.split(), "lines": [len(cap.split())], "active": -1}
+    words = cap["words"]
+    if not words:
+        return
+    size = max(10, int(round(cs.get("fontSize", H * 0.04))))
+    font = _font(size)
+    space = d.textlength(" ", font=font)
+    lines, i = [], 0
+    for n in cap["lines"]:
+        lines.append(list(range(i, i + n)))
+        i += n
+    widths = [[d.textlength(words[j], font=font) for j in ln] for ln in lines]
+    line_w = [sum(ws) + space * (len(ws) - 1) for ws in widths]
+    asc, desc = font.getmetrics() if hasattr(font, "getmetrics") else (size, size // 4)
+    lh = int((asc + desc) * 1.12)
+    block_h = lh * len(lines)
+    pos = cs.get("position", "bottom")
+    if pos == "top":
+        top = int(H * 0.07)
+    elif pos == "custom":
+        top = int(cs.get("y", 0.88) * H - block_h / 2)
+    else:
+        top = int(H * 0.93) - block_h
+    padx, pady = size * 0.55, size * 0.28
+    bg = cs.get("background", {})
+    if bg.get("enabled", True):
+        bw = max(line_w)
+        x0 = (W - bw) / 2 - padx
+        r, g, b = hex_to_rgb(bg.get("color", "#000000"))
+        d.rounded_rectangle((x0, top - pady, x0 + bw + 2 * padx, top + block_h + pady), radius=int(size * 0.45),
+                            fill=(r, g, b, int(255 * float(bg.get("opacity", 0.66)))))
+    text_rgb = hex_to_rgb(cs.get("textColor", "#ffffff"))
+    hi_rgb = hex_to_rgb(cs.get("highlightColor", "#ffd23f"))
+    active = cap.get("active", -1) if cs.get("wordHighlight", True) else -1
+    for li, ln in enumerate(lines):
+        x = (W - line_w[li]) / 2
+        y = top + li * lh
+        for j, wj in zip(ln, widths[li]):
+            d.text((x, y), words[j], font=font, fill=(*(hi_rgb if j == active else text_rgb), 255))
+            x += wj + space
 
 
 def _viewport_warp(frame: np.ndarray, cam: list[float], rect_w: int, rect_h: int, src_w: int, src_h: int, loupe: bool = False) -> np.ndarray:
@@ -251,20 +377,32 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     plan = json.loads(Path(plan_path).read_text())
     W, H, fps = plan["output"]["width"], plan["output"]["height"], plan["output"]["fps"]
     style = plan["style"]
-    src_w, src_h = plan["source"]["width"], plan["source"]["height"]
+    full_w, full_h = plan["source"]["width"], plan["source"]["height"]
     screen = FrameSource(screen_path)
-    if (screen.w, screen.h) != (src_w, src_h):
-        raise ValueError(f"screen video is {screen.w}x{screen.h} but plan expects {src_w}x{src_h}")
+    if (screen.w, screen.h) != (full_w, full_h):
+        raise ValueError(f"screen video is {screen.w}x{screen.h} but plan expects {full_w}x{full_h}")
+    # Source crop (LOOK-14): plan positions are already in cropped space.
+    crop_x, crop_y, src_w, src_h = (int(v) for v in plan["source"].get("crop", [0, 0, full_w, full_h]))
+    cropped = (crop_x, crop_y, src_w, src_h) != (0, 0, full_w, full_h)
+    cam_crop = style.get("cameraCrop")
+    cam_mirror = bool(style.get("cameraMirror"))
+    cap_style = style.get("captions", {"fontSize": H * 0.04})
     cam_src = FrameSource(camera_path) if camera_path else None
     bg = make_background(style, W, H)
     mb = style["motionBlur"]
     frame_ms = 1000 / fps
     font_pill = _font(max(14, int(H * 0.032)))
-    font_cap = _font(max(14, int(H * 0.04)))
+
+    out_path = str(out_path)
+    is_gif = out_path.lower().endswith(".gif")
+    want_audio = opts.audio and not is_gif and bool(plan.get("audio"))
+    tmpdir = tempfile.mkdtemp(prefix="lens-render-") if (is_gif or want_audio) else None
+    video_path = os.path.join(tmpdir, "video.mp4") if tmpdir else out_path
+    crf = min(opts.crf, 12) if is_gif else opts.crf
 
     enc = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-         "-c:v", "libx264", "-preset", opts.preset, "-crf", str(opts.crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path],
+         "-c:v", "libx264", "-preset", opts.preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", video_path],
         stdin=subprocess.PIPE,
     )
     assert enc.stdin
@@ -272,6 +410,8 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     prev_cur = None
     for f in frames:
         src_frame = screen.at(f["src"])
+        if cropped:
+            src_frame = np.ascontiguousarray(src_frame[crop_y:crop_y + src_h, crop_x:crop_x + src_w])
         sx, sy, sw, sh = (int(round(v)) for v in f["layout"]["screen"])
         sw, sh = max(2, sw), max(2, sh)
         out = bg.copy()
@@ -305,6 +445,10 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
 
         def to_rect(px: float, py: float) -> tuple[float, float]:
             return (px - x0) * k, (py - y0) * (sh / vh)
+
+        # Spotlight / privacy masks, glued to content through the camera transform.
+        if f.get("masks"):
+            view = apply_masks(view, f["masks"], to_rect, k, sh / vh)
 
         # Click effects (drawn inside the screen so they get the rounded mask).
         if style["clickEffect"] != "none":
@@ -362,6 +506,13 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
             cxr, cyr, cwr, chr_ = (int(round(v)) for v in f["layout"]["camera"])
             if cwr > 2 and chr_ > 2:
                 cframe = cam_src.at(f["src"])
+                if cam_crop:
+                    qx, qy, qw, qh = (int(round(v)) for v in cam_crop)
+                    fh_, fw_ = cframe.shape[:2]
+                    qx, qy = max(0, min(fw_ - 2, qx)), max(0, min(fh_ - 2, qy))
+                    cframe = cframe[qy:min(fh_, qy + qh), qx:min(fw_, qx + qw)]
+                if cam_mirror:
+                    cframe = cv2.flip(cframe, 1)
                 ch0, cw0 = cframe.shape[:2]
                 sc_ = max(cwr / cw0, chr_ / ch0)
                 rs = cv2.resize(cframe, (math.ceil(cw0 * sc_), math.ceil(ch0 * sc_)), interpolation=cv2.INTER_AREA)
@@ -388,12 +539,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                 d.rounded_rectangle((bx, by, bx + tw + 2 * padx, by + th + 2 * pady), radius=int(th * 0.7), fill=(15, 15, 18, 215))
                 d.text((bx + padx - tb[0], by + pady - tb[1]), f["shortcut"], font=font_pill, fill=(255, 255, 255, 255))
             if f["caption"]:
-                tb = d.textbbox((0, 0), f["caption"], font=font_cap)
-                tw, th = tb[2] - tb[0], tb[3] - tb[1]
-                x = (W - tw) // 2
-                y = int(H * 0.93) - th
-                d.rounded_rectangle((x - th * 0.6, y - th * 0.4, x + tw + th * 0.6, y + th * 1.4), radius=int(th * 0.4), fill=(0, 0, 0, 170))
-                d.text((x - tb[0], y - tb[1]), f["caption"], font=font_cap, fill=(255, 255, 255, 255))
+                draw_caption(d, f["caption"], cap_style, W, H)
             pil = Image.alpha_composite(pil, layer).convert("RGB")
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
 
@@ -402,4 +548,24 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError("ffmpeg encode failed")
-    return {"frames": len(frames), "width": W, "height": H, "fps": fps, "out": out_path}
+    info = {"frames": len(frames), "width": W, "height": H, "fps": fps, "out": out_path, "audio": False}
+    try:
+        if is_gif:
+            g = plan.get("export", {}).get("gif", {"fps": 15, "width": 640, "loop": True})
+            export_gif(video_path, out_path, g["fps"], g["width"], g["loop"])
+            info["gif"] = g
+        elif want_audio:
+            sr = int(plan["audio"]["sampleRate"])
+            n_out = int(round(len(frames) / fps * sr))
+            pcm = build_audio(plan, Path(plan_path).resolve().parent, n_out)
+            if pcm is not None:
+                mux_audio(video_path, pcm, sr, out_path)
+                info["audio"] = True
+            else:
+                os.replace(video_path, out_path)
+    finally:
+        if tmpdir:
+            for fn in os.listdir(tmpdir):
+                os.remove(os.path.join(tmpdir, fn))
+            os.rmdir(tmpdir)
+    return info
