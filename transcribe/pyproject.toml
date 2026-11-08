@@ -1,0 +1,17 @@
+[project]
+name = "lens-transcribe"
+version = "0.1.0"
+description = "Lens on-device speech-to-text: word timings, fillers and pauses for captions and transcript editing"
+requires-python = ">=3.10"
+dependencies = ["faster-whisper>=1.0", "numpy"]
+license = { text = "UNLICENSED" }
+
+[project.scripts]
+lens-transcribe = "lens_transcribe.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lens_transcribe"]
