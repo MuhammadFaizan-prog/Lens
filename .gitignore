@@ -8,3 +8,4 @@ out/
 *.mp4
 *.mov
 !research/bars/.gitkeep
+*.egg-info/

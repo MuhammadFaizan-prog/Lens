@@ -14,7 +14,10 @@ See `docs/Rules.md`.
 ## Layout
 - `packages/engine/` TypeScript engine: events → cursor track, auto-zoom, camera, timeline,
   transcript editing, layouts → per-frame render plan (`lens-plan` CLI).
-- `compositor/` Python reference compositor: render plan + screen recording → MP4.
+- `compositor/` Python reference compositor: render plan + screen recording → MP4; `pipeline.py`
+  runs transcription → plan → render in one go.
+- `transcribe/` on-device speech-to-text (`lens-transcribe`): faster-whisper base.en (MIT) on the
+  CPU, word timings aligned to measured pauses, filler and pause detection. See `docs/STT.md`.
 - `research/harness/` measurement harness: recovers padding, corner radius, shadow, zoom spring
   curves, lead/hold, cursor smoothing, loudness from any export; blind A/B pair builder.
 - `research/bars/` reference exports from the products we match (not committed if licensed).
@@ -23,8 +26,9 @@ See `docs/Rules.md`.
 ## Run
 ```bash
 npm install && npm run build && npm test        # engine: typecheck + vitest
-pip install opencv-python-headless numpy scipy pillow pytest
-python3 -m pytest                               # harness + compositor + end-to-end
+pip install opencv-python-headless numpy scipy pillow pytest faster-whisper
+sudo apt install espeak-ng tesseract-ocr        # test-only: synthetic speech + caption OCR
+python3 -m pytest                               # harness + compositor + STT + end-to-end
 ```
 
 ## Render
@@ -34,6 +38,11 @@ node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --projec
 python3 compositor/render.py --plan plan.json --screen screen.mp4 [--camera cam.mp4] --out final.mp4
 python3 compositor/render.py --plan plan.json --screen screen.mp4 --out final.gif   # GIF export
 python3 research/harness/demo_p1.py      # out/demo-p1.mp4 + contact sheet, every P1 feature on
+
+# speech-to-text: transcript JSON for --words, or let the pipeline transcribe the mic track
+transcribe/lens-transcribe mic.wav -o transcript.json [--offset-ms 400]
+python3 compositor/pipeline.py --meta meta.json --events events.jsonl --project project.json \
+  --screen screen.mp4 --out final.mp4   # transcribes when captions / edits.cleanup need words
 ```
 Audio, crop, masks, overrides and caption style live in `project.json`, for example:
 ```json
@@ -49,6 +58,8 @@ Audio, crop, masks, overrides and caption style live in `project.json`, for exam
              "startMs": 0, "endMs": 4000, "feather": 8, "fadeMs": 200, "strength": 12}],
   "overrides": [{"startMs": 5000, "endMs": 7000, "cursor": {"hidden": true}, "volume": 0.5}],
   "camera": {"enabled": true, "mirror": true, "crop": {"x": 160, "y": 0, "w": 960, "h": 720}, "zoomedSize": 0.6},
+  "edits": {"cleanup": {"enabled": true, "removeFillers": true, "shortenPauses": true, "maxPauseMs": 900, "keepPauseMs": 350}},
+  "transcription": {"mode": "auto", "track": "mic", "model": "base.en"},
   "captions": {"enabled": true, "wordHighlight": true,
                "style": {"fontSize": 44, "position": "bottom", "maxWordsPerLine": 5, "highlightColor": "#ffd23f"}},
   "export": {"gif": {"fps": 15, "width": 640, "loop": true}}
@@ -61,6 +72,8 @@ times are in source pixels / recording time.
 ## Status
 Engine, reference compositor, and harness work and are tested on synthetic sessions, including the
 P1 set: audio mux with edits, denoise + loudness, click sounds, GIF, crop, masks, webcam
-mirror/crop/zoomed size, styled captions with word highlight, and per-segment overrides. Native capture
+mirror/crop/zoomed size, styled captions with word highlight, and per-segment overrides. Local
+speech-to-text turns the mic track into word timings, so captions and filler/pause removal run on
+real audio (tested on synthetic espeak speech only). Native capture
 (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the GPU renderer
 are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

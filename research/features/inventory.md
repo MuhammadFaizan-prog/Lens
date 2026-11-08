@@ -237,7 +237,7 @@ Compiled 2026-11-09 from public pages only: official sites, user guides, FAQs, c
 
 ## Gap vs Lens
 
-Compared against `work/Lens/packages/engine/src/*.ts` (types, project, events, cursor, autozoom, camera, spring, oneEuro, layout, timeline, transcript, plan, cli) and, for whether a plan field is actually drawn, `work/Lens/compositor/lens_compositor/render.py`. Status meanings: **Implemented** means engine logic plus a rendered result exist; **Partial** means a config field or model exists but behaviour or rendering is incomplete; **Missing** means nothing in code. Priority: **P1** is core parity (both products have it, or it's central to the polished-demo output), **P2** is secondary parity or a high-value single-product feature, **P3** is niche.
+Compared against `work/Lens/packages/engine/src/*.ts` (types, project, events, cursor, autozoom, camera, spring, oneEuro, layout, timeline, transcript, plan, cli, audio, crop, masks), for whether a plan field is actually drawn or heard, `work/Lens/compositor/lens_compositor/` (render.py, audio.py, pipeline.py), and `work/Lens/transcribe/lens_transcribe/` for speech-to-text. Updated after the P1 batch (commit 67df923) and local STT. Status meanings: **Implemented** means engine logic plus a rendered result exist; **Partial** means a config field or model exists but behaviour or rendering is incomplete; **Missing** means nothing in code. Priority: **P1** is core parity (both products have it, or it's central to the polished-demo output), **P2** is secondary parity or a high-value single-product feature, **P3** is niche.
 
 Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU renderer are not started. Every recording-time feature is therefore Missing, and every editor interaction (drag handles, context menus) exists only as data in `project.json`.
 
@@ -269,7 +269,17 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | EDT-03 | Speed ranges (later range wins) | `timeline.ts` |
 | EDT-04 | Typing detection (≥6 keys, ≥1.5 s, gaps ≤800 ms; shortcuts excluded) plus auto speed-up (default 3×) | `events.ts` detectTyping, `plan.ts` |
 | EDT-16 | Edit by transcript: deleted words become cuts that join into neighbouring gaps | `transcript.ts` cutsForDeletedWords |
-| AI-07, AI-08 | Filler removal (um/uh/…, 30 ms pad) and pause tightening (>900 ms down to 350 ms), given word timings | `transcript.ts` cleanupCuts |
+| AI-01 | Local speech-to-text: faster-whisper base.en (MIT) on the CPU, word timings + confidence + language, aligned to measured voiced runs; `lens-transcribe` CLI; the pipeline transcribes the mic track automatically when captions or cleanup need words | `transcribe/lens_transcribe`, `compositor/lens_compositor/pipeline.py`, `docs/STT.md` |
+| AI-07, AI-08 | Filler removal (um/uh/…, 30 ms pad) and pause tightening (>900 ms down to 350 ms) from real audio: fillers found by a prompted second decode plus untranscribed voiced runs; pause cuts limited to measured silence; `edits.cleanup` in the project, cuts follow into audio and captions | `transcript.ts` cleanupCuts, `plan.ts`, `lens_transcribe` |
+| AUD-04, AUD-06, EDT-05 | Mic + system tracks (path, offset, volume, mute) muxed as AAC, following cuts and speed ranges with 3 ms fades; per-segment volume overrides | `audio.ts`, `audio.py` |
+| AUD-01, AUD-03 | FFT denoise (afftdn, floor measured from quiet windows); two-pass EBU R128 loudness normalisation (default -16 LUFS / -1.5 dBTP) | `audio.py` |
+| CUR-08 | Procedural click sound (our own waveform) at each surviving click, with volume | `audio.ts`, `audio.py` |
+| CUR-01 / EDT-06 (per segment) | Per-segment overrides: hide cursor, smoothing off, cursor size | `cursor.ts`, `project.ts` overrides |
+| AI-03 (most) | Caption font size, text/highlight colours, background pill, top/bottom/custom position, max words per line, word-by-word highlight | `transcript.ts` captionFrame, `render.py` draw_caption |
+| EXP-04 | GIF export (palettegen diff + paletteuse sierra2_4a), fps / width / loop | `audio.py` export_gif |
+| LOOK-14 | Source crop; engine works in cropped space | `crop.ts`, `render.py` |
+| TXT-04, TXT-05 | Timed spotlight / blur / pixelate masks with feather + fade, following zooms | `masks.ts`, `render.py` |
+| CAM-04, CAM-05, CAM-06 | Webcam mirror, crop, size multiplier while zoomed | `layout.ts`, `camera.ts`, `render.py` |
 | AI-05, AI-06 | SRT import and export | `transcript.ts` parseSrt / toSrt |
 | TXT-01 (basic) | Shortcut overlays for modifier combos with Mac glyphs, repeat merging, 1200 ms display | `events.ts` shortcutOverlays, `render.py` |
 | EXP-01, EXP-02, EXP-03 (basic) | H.264 MP4 via ffmpeg, CRF 18, fps 24/30/60 | `render.py`, `project.ts` |
@@ -278,10 +288,10 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 
 | ID | Feature | Gap in Lens | Priority |
 |---|---|---|---|
-| CUR-01 / EDT-06 | Per-segment cursor overrides | Smoothing and visibility are global only; no per-clip "hide cursor" or "disable smoothing" | P1 |
 | CUR-03 | Cursor styles | `shape` enum plus programmatic sprites only; no style sets, colour, high-res system cursor set, or touch cursor | P1 |
-| CUR-08 | Click sounds | `cursor.clickSound` flag exists, but no audio is generated or muxed | P1 |
-| AI-03 | Caption styling | Word grouping only (7 words / 2.8 s); one hard-coded caption style; no font, colour, position, word-by-word highlight or animation | P1 |
+| AI-03 | Caption styling | No font family choice, stroke, shadow, or appear/fade/slide animation; no per-aspect repositioning | P2 |
+| AI-01 | Local captions | English model tested only (multilingual models accepted, untested); no custom-vocabulary prompt for names; word starts in connected speech ~90 ms median / ~230 ms p95; tested on synthetic speech only | P1 |
+| AUD-02 | Voice enhancement | Denoise and loudness exist; no EQ / "podcast" voice shaping | P2 |
 | TXT-01 | Shortcut display options | No single-key option, size, position, colour or per-item disable | P2 |
 | CAM-07 | Camera cutout | Layout slot and `cutout` flag exist; no person segmentation is applied | P1 |
 | CAM-09 | Hide during silence | `camera.hideDuringSilence` config exists but nothing reads it | P2 |
@@ -299,17 +309,9 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | ID | Feature | Priority | Note |
 |---|---|---|---|
 | REC-01/02/03 | Display, window and area capture writing cursorless video plus event log | **P1** | Tracker: native capture not started |
-| REC-08/09 | Mic and system-audio capture (per-app filter) | **P1** | No audio anywhere in the pipeline |
+| REC-08/09 | Mic and system-audio capture (per-app filter) | **P1** | The pipeline takes audio files; nothing records them yet |
 | REC-10 | Webcam capture | **P1** | Compositor already accepts a webcam file |
 | REC-11/12/13 | Pause/resume, countdown, global hotkeys | **P1** | |
-| AUD-04/06 + export audio | Mux mic and system audio into the export, mute per track | **P1** | `render.py` pipes video only to ffmpeg |
-| AUD-01/02/03 | Noise reduction, voice enhancement, loudness levelling | **P1** | Both products ship it |
-| AI-01 | Speech-to-text (local) to produce `words` | **P1** | Engine needs word timings as input |
-| EXP-04 | GIF export | **P1** | Both products ship it |
-| TXT-04/05 | Spotlight/highlight and privacy blur masks | **P1** | Both products ship it |
-| LOOK-14 | Crop recording | **P1** | Both products ship it |
-| CAM-04/05/06 | Mirror, camera size during zoom, camera crop | **P1** | Both products ship it |
-| EDT-05 | Per-clip volume | **P1** | |
 | AUD-05 | Background music (library, fade, loop, range) | P2 | |
 | COL-01/02 | Shareable links with access control | P2 | Needs a hosting backend |
 | OTH-01 | Style presets (save/apply/default/share) | P2 | `resolveProject` merge makes this cheap |
