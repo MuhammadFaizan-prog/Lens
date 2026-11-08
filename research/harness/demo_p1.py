@@ -39,7 +39,8 @@ def presenter_webcam(path: Path, w: int = 480, h: int = 360, fps: int = 30, dur_
     an "L" badge on the left of the frame so mirroring is visible."""
     n = int(dur_ms * fps / 1000)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    back = np.stack([90 + 60 * yy / h, 70 + 40 * xx / w, 50 + 30 * yy / h], -1)
+    # uint8: OpenCV 5 putText only draws on 8-bit images
+    back = np.clip(np.stack([90 + 60 * yy / h, 70 + 40 * xx / w, 50 + 30 * yy / h], -1), 0, 255).astype(np.uint8)
     enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(path)], stdin=subprocess.PIPE)
     assert enc.stdin
@@ -51,7 +52,7 @@ def presenter_webcam(path: Path, w: int = 480, h: int = 360, fps: int = 30, dur_
         cv2.circle(img, (int(cx), int(h * 0.48)), int(h * 0.2), (150, 180, 225), -1, cv2.LINE_AA)
         cv2.rectangle(img, (int(w * 0.06), int(h * 0.08)), (int(w * 0.2), int(h * 0.22)), (240, 240, 240), -1)
         cv2.putText(img, "L", (int(w * 0.09), int(h * 0.2)), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (40, 40, 200), 3, cv2.LINE_AA)
-        enc.stdin.write(np.clip(img, 0, 255).astype(np.uint8).tobytes())
+        enc.stdin.write(img.tobytes())
     enc.stdin.close()
     enc.wait()
     return str(path)

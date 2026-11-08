@@ -22,7 +22,7 @@ import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 import cv2
 import numpy as np
@@ -250,6 +250,8 @@ class RenderOptions:
     max_frames: Optional[int] = None
     #: mux the plan's audio block (tracks, cleanup, click sounds) when present
     audio: bool = True
+    #: called as progress(frames_done, frames_total) after each encoded frame (editor export bar)
+    progress: Optional[Callable[[int, int], None]] = None
 
 
 # ---------------------------------------------------------------- masks (TXT-04/05)
@@ -408,7 +410,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     assert enc.stdin
     frames = plan["frames"][: opts.max_frames] if opts.max_frames else plan["frames"]
     prev_cur = None
-    for f in frames:
+    for fi, f in enumerate(frames):
         src_frame = screen.at(f["src"])
         if cropped:
             src_frame = np.ascontiguousarray(src_frame[crop_y:crop_y + src_h, crop_x:crop_x + src_w])
@@ -544,6 +546,8 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
 
         enc.stdin.write(np.clip(out, 0, 255).astype(np.uint8).tobytes())
+        if opts.progress:
+            opts.progress(fi + 1, len(frames))
 
     enc.stdin.close()
     if enc.wait() != 0:
