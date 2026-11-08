@@ -219,7 +219,11 @@ describe("caption styling (AI-03)", () => {
     const off = buildRenderPlan({ meta: META, events: demoSession(), project: resolveProject({ output: { fps: 30 }, captions: { enabled: true, wordHighlight: false } }), words });
     expect(off.frames[30]!.caption!.active).toBe(-1);
     const cut = buildRenderPlan({ meta: META, events: demoSession(), project: resolveProject({ output: { fps: 30 }, captions: { enabled: true }, edits: { cuts: [{ startMs: 0, endMs: 1000 }] } }), words });
-    expect(cut.frames[Math.round((500 * 30) / 1000)]!.caption!.active).toBe(3); // out 500 = src 1500
+    // out 500 = src 1500: "recordings" is highlighted. Words inside the cut ("Lens", "turns") are no
+    // longer part of the caption (editor change: deleted words leave captions), so check by text.
+    const c = cut.frames[Math.round((500 * 30) / 1000)]!.caption!;
+    expect(c.words[c.active]).toBe("recordings");
+    expect(c.words).not.toContain("Lens");
   });
 });
 

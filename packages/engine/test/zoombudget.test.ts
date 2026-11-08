@@ -90,3 +90,21 @@ describe("zoom presets", () => {
     expect(() => resolveProject({ zoom: { budget: { enabled: true, maxPerMinute: 0, minHoldMs: 100 } } })).toThrow(/maxPerMinute/);
   });
 });
+
+describe("captions follow transcript cuts", () => {
+  it("a word deleted by a cut is not shown in any caption", async () => {
+    const { buildRenderPlan, cutsForDeletedWords } = await import("../src/index.js");
+    const words = [
+      { text: "This", startMs: 400, endMs: 650 }, { text: "is", startMs: 700, endMs: 820 }, { text: "um", startMs: 900, endMs: 1200 },
+      { text: "Lens.", startMs: 1300, endMs: 1700 },
+    ];
+    const meta = { width: 1280, height: 720, fps: 30, durationMs: 3000, pixelRatio: 1 };
+    const base = resolveProject({ output: { fps: 30, resolution: 360 }, captions: { enabled: true } });
+    const shown = (p: typeof base) => new Set(buildRenderPlan({ meta, events: [], project: p, words }).frames.flatMap((f) => f.caption?.words ?? []));
+    expect(shown(base).has("um")).toBe(true);
+    const cut = { ...base, edits: { ...base.edits, cuts: cutsForDeletedWords(words, [2]) } };
+    const after = shown(cut);
+    expect(after.has("um")).toBe(false);
+    expect([...after]).toEqual(["This", "is", "Lens."]);
+  });
+});

@@ -80,6 +80,10 @@ export interface PlanInputs {
   pauses?: TimeRange[];
 }
 
+function insideRanges(ranges: TimeRange[], t: number): boolean {
+  return ranges.some((r) => t >= r.startMs && t < r.endMs);
+}
+
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
@@ -123,7 +127,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
 
   const clickList = clickEffects(events).filter((c) => insideCrop(c, crop));
   const shortcuts = project.shortcuts.enabled ? shortcutOverlays(events, project.shortcuts.displayMs) : [];
-  const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers);
+  // Words removed by any cut (transcript deletions, manual cuts, cleanup) never appear in captions.
+  const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
   const captions = project.captions.enabled ? captionBlocks(shownWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
 
   const planFrames: PlanFrame[] = [];
