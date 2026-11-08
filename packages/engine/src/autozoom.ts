@@ -55,7 +55,9 @@ export function planAutoZoom(events: InputEvent[], meta: RecordingMeta, cfg: Pro
   }
   if (cur.length) clusters.push(cur);
 
+  const values: number[] = [];
   let segs: ZoomSegment[] = clusters.map((cl, i) => {
+    values.push(clusterValue(cl));
     const xs = cl.map((a) => a.x);
     const ys = cl.map((a) => a.y);
     const scale = Math.max(cfg.minScale, fitScale(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)));
@@ -64,6 +66,8 @@ export function planAutoZoom(events: InputEvent[], meta: RecordingMeta, cfg: Pro
     if (end - start < cfg.minDurationMs) end = Math.min(meta.durationMs, start + cfg.minDurationMs);
     return { id: `auto-${i + 1}`, startMs: start, endMs: end, scale: round2(scale), focus: "follow", style: cfg.style, auto: true };
   });
+
+  if (cfg.budget?.enabled) segs = applyZoomBudget(segs, values, cfg.budget, meta.durationMs);
 
   // Hand-off: when one zoom's hold runs into the next zoom's lead, pan directly (no zoom out).
   for (let i = 0; i + 1 < segs.length; i++) {
@@ -76,6 +80,63 @@ export function planAutoZoom(events: InputEvent[], meta: RecordingMeta, cfg: Pro
   const manual = cfg.segments.filter((s) => !s.auto);
   const overlaps = (a: ZoomSegment, b: ZoomSegment) => a.startMs < b.endMs && b.startMs < a.endMs;
   return segs.filter((s) => !manual.some((m) => overlaps(s, m)));
+}
+
+/** How much a cluster is worth zooming for: each click counts 1, typing counts 1 per second typed (min 1). */
+function clusterValue(cl: Activity[]): number {
+  return cl.reduce((v, a) => v + (a.kind === "click" ? 1 : Math.max(1, (a.tEnd - a.t) / 1000)), 0);
+}
+
+export interface ZoomBudget {
+  enabled: boolean;
+  /** At most this many zooms may start inside any 60 s window. */
+  maxPerMinute: number;
+  /** Every zoom stays in for at least this long (ms); zooms that would overlap merge into one framing. */
+  minHoldMs: number;
+}
+
+/**
+ * Zoom budget ("calm camera", demand report #2). Applied to auto zooms only, in source time:
+ * 1. every zoom is held for at least minHoldMs;
+ * 2. zooms that now overlap merge into one framing (the wider of the two scales, values add up);
+ * 3. the most valuable zooms are kept while no 60 s window holds more than maxPerMinute starts.
+ * Pure and deterministic; ties keep the earlier zoom.
+ */
+export function applyZoomBudget(segs: ZoomSegment[], values: number[], budget: ZoomBudget, durationMs: number): ZoomSegment[] {
+  const items = segs
+    .map((s, i) => ({ seg: { ...s }, value: values[i] ?? 1 }))
+    .sort((a, b) => a.seg.startMs - b.seg.startMs);
+  for (const it of items) it.seg.endMs = Math.min(durationMs, Math.max(it.seg.endMs, it.seg.startMs + budget.minHoldMs));
+  const merged: typeof items = [];
+  for (const it of items) {
+    const last = merged[merged.length - 1];
+    if (last && it.seg.startMs < last.seg.endMs) {
+      last.seg.endMs = Math.max(last.seg.endMs, it.seg.endMs);
+      last.seg.scale = Math.min(last.seg.scale, it.seg.scale);
+      last.value += it.value;
+    } else merged.push(it);
+  }
+  const max = Math.max(0, Math.floor(budget.maxPerMinute));
+  const order = merged.map((m, i) => i).sort((a, b) => merged[b]!.value - merged[a]!.value || a - b);
+  const kept: number[] = [];
+  const fits = (start: number) => {
+    const starts = [...kept.map((i) => merged[i]!.seg.startMs), start];
+    // Any 60 s window containing `start` begins at one of the starts in (start - 60 s, start].
+    for (const w of starts) {
+      if (w > start || w <= start - 60000) continue;
+      if (starts.filter((s) => s >= w && s < w + 60000).length > max) return false;
+    }
+    return true;
+  };
+  for (const i of order) if (fits(merged[i]!.seg.startMs)) kept.push(i);
+  return kept.sort((a, b) => a - b).map((i, n) => ({ ...merged[i]!.seg, id: `auto-${n + 1}` }));
+}
+
+/** Count zoom starts in the busiest 60 s window. */
+export function maxZoomsPerMinute(segs: Array<{ startMs: number }>): number {
+  let best = 0;
+  for (const a of segs) best = Math.max(best, segs.filter((b) => b.startMs >= a.startMs && b.startMs < a.startMs + 60000).length);
+  return best;
 }
 
 function round2(n: number): number {

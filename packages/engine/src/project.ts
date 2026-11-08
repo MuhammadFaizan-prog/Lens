@@ -62,6 +62,10 @@ export interface ProjectConfig {
     /** Fraction of the zoomed viewport the cursor may roam before the camera pans. */
     followDeadzone: number;
     segments: ZoomSegment[];
+    /** Calm-camera zoom budget for auto zooms (demand #2). Off by default: defaults do not change. */
+    budget: { enabled: boolean; maxPerMinute: number; minHoldMs: number };
+    /** Which intensity preset produced these numbers ("custom" once a value is edited by hand). */
+    preset: ZoomPresetName | "custom";
   };
   cursor: {
     visible: boolean;
@@ -160,6 +164,36 @@ export interface ProjectConfig {
   export: { gif: { fps: number; width: number; loop: boolean } };
 }
 
+export type ZoomPresetName = "calm" | "default" | "punchy";
+
+/**
+ * Zoom intensity presets (demand #2, "Calm / Default / Punchy"). Default is exactly the engine
+ * defaults (Rules.md 4: defaults unchanged). Calm and Punchy are design choices, not measurements:
+ * Calm settles slower (1.4 s), zooms less (1.6x, max 2.5x), holds longer, merges clicks up to 4 s
+ * apart, pans later (70% deadzone) and turns the budget on (4 zooms/min, 3 s min hold). Punchy
+ * settles in 0.6 s, zooms to 2.4x, holds 1 s and pans sooner.
+ */
+export function zoomPreset(name: ZoomPresetName): Pick<ProjectConfig["zoom"], "defaultScale" | "maxScale" | "holdMs" | "mergeGapMs" | "followDeadzone" | "spring" | "budget" | "preset"> {
+  switch (name) {
+    case "calm":
+      return { defaultScale: 1.6, maxScale: 2.5, holdMs: 2200, mergeGapMs: 4000, followDeadzone: 0.7, spring: springFromSettle(1400, 1),
+        budget: { enabled: true, maxPerMinute: 4, minHoldMs: 3000 }, preset: "calm" };
+    case "punchy":
+      return { defaultScale: 2.4, maxScale: 4, holdMs: 1000, mergeGapMs: 1800, followDeadzone: 0.35, spring: springFromSettle(600, 1),
+        budget: { enabled: false, maxPerMinute: 6, minHoldMs: 2000 }, preset: "punchy" };
+    default: {
+      const d = defaultProject().zoom;
+      return { defaultScale: d.defaultScale, maxScale: d.maxScale, holdMs: d.holdMs, mergeGapMs: d.mergeGapMs, followDeadzone: d.followDeadzone,
+        spring: d.spring, budget: d.budget, preset: "default" };
+    }
+  }
+}
+
+/** Return a copy of the project with a zoom preset applied (manual segments and auto on/off kept). */
+export function applyZoomPreset(p: ProjectConfig, name: ZoomPresetName): ProjectConfig {
+  return { ...p, zoom: { ...p.zoom, ...zoomPreset(name) } };
+}
+
 export interface CaptionStyle {
   /** Font size in px at 1080p (scaled with resolution). */
   fontSize: number;
@@ -196,6 +230,8 @@ export function defaultProject(): ProjectConfig {
       spring: springFromSettle(900, 1),
       followDeadzone: 0.5,
       segments: [],
+      budget: { enabled: false, maxPerMinute: 6, minHoldMs: 2000 },
+      preset: "default",
     },
     cursor: {
       visible: true,
@@ -298,6 +334,9 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.zoom.minScale < 1 || p.zoom.maxScale < p.zoom.minScale) errs.push("zoom scale range invalid");
   if (p.zoom.defaultScale < p.zoom.minScale || p.zoom.defaultScale > p.zoom.maxScale)
     errs.push("zoom.defaultScale outside min..max");
+  if (p.zoom.budget.maxPerMinute < 1) errs.push("zoom.budget.maxPerMinute must be >= 1");
+  if (p.zoom.budget.minHoldMs < 0) errs.push("zoom.budget.minHoldMs must be >= 0");
+  if (!["calm", "default", "punchy", "custom"].includes(p.zoom.preset)) errs.push(`zoom.preset ${String(p.zoom.preset)} unknown`);
   for (const s of p.zoom.segments) {
     if (s.endMs <= s.startMs) errs.push(`zoom segment ${s.id} ends before it starts`);
     if (s.scale < 1) errs.push(`zoom segment ${s.id} scale < 1`);
