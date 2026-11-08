@@ -12,6 +12,7 @@ import type {
   ZoomStyle,
 } from "./types.js";
 import { springFromSettle } from "./spring.js";
+import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -104,6 +105,20 @@ export interface ProjectConfig {
     speed: SpeedRange[];
     /** Auto speed-up for detected typing stretches (E04). */
     speedUpTyping: { enabled: boolean; rate: number };
+    /**
+     * Transcript cleanup (E03 / AUD filler + pause removal) from word timings: cut filler words and
+     * shorten pauses longer than maxPauseMs to keepPauseMs. Needs words (lens-transcribe output or
+     * hand-written timings).
+     */
+    cleanup: {
+      enabled: boolean;
+      removeFillers: boolean;
+      shortenPauses: boolean;
+      fillers: string[];
+      maxPauseMs: number;
+      keepPauseMs: number;
+      padMs: number;
+    };
   };
   captions: {
     enabled: boolean;
@@ -114,6 +129,20 @@ export interface ProjectConfig {
     style: CaptionStyle;
   };
   shortcuts: { enabled: boolean; displayMs: number };
+  /**
+   * Local speech-to-text (AI-01). Read by the render pipeline (compositor/pipeline.py), not by the
+   * engine: when captions or cleanup need words and none are given, the pipeline transcribes an
+   * audio track on-device and passes the transcript to lens-plan.
+   * auto = transcribe only when captions or cleanup are on and no words were supplied.
+   */
+  transcription: {
+    mode: "auto" | "off";
+    /** Audio track id to transcribe; null = first unmuted mic track, else first track. */
+    track: string | null;
+    model: string;
+    /** Language code, or null to detect (multilingual models only). */
+    language: string | null;
+  };
   /** Source crop rect in source px (LOOK-14). Everything downstream works in cropped space. */
   crop: Rect | null;
   /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05). */
@@ -197,7 +226,20 @@ export function defaultProject(): ProjectConfig {
       crop: null,
       zoomedSize: 1,
     },
-    edits: { cuts: [], speed: [], speedUpTyping: { enabled: false, rate: 3 } },
+    edits: {
+      cuts: [],
+      speed: [],
+      speedUpTyping: { enabled: false, rate: 3 },
+      cleanup: {
+        enabled: false,
+        removeFillers: true,
+        shortenPauses: true,
+        fillers: [...DEFAULT_FILLERS],
+        maxPauseMs: DEFAULT_CLEANUP.maxPauseMs,
+        keepPauseMs: DEFAULT_CLEANUP.keepPauseMs,
+        padMs: DEFAULT_CLEANUP.padMs,
+      },
+    },
     captions: {
       enabled: false,
       maxWordsPerBlock: 7,
@@ -214,6 +256,7 @@ export function defaultProject(): ProjectConfig {
       },
     },
     shortcuts: { enabled: true, displayMs: 1200 },
+    transcription: { mode: "auto", track: null, model: "base.en", language: null },
     crop: null,
     masks: [],
     overrides: [],
@@ -280,6 +323,13 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (!tr.path) errs.push(`audio track ${tr.id} has no path`);
     if (tr.volume < 0) errs.push(`audio track ${tr.id} volume must be >= 0`);
   }
+  const cl = p.edits.cleanup;
+  if (cl.maxPauseMs <= 0 || cl.keepPauseMs < 0 || cl.keepPauseMs >= cl.maxPauseMs) errs.push("edits.cleanup needs 0 <= keepPauseMs < maxPauseMs");
+  if (cl.padMs < 0) errs.push("edits.cleanup.padMs must be >= 0");
+  if (!Array.isArray(cl.fillers)) errs.push("edits.cleanup.fillers must be a list of words");
+  if (!["auto", "off"].includes(p.transcription.mode)) errs.push("transcription.mode must be auto or off");
+  if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
+    errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");

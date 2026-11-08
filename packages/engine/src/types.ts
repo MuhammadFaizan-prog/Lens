@@ -78,6 +78,16 @@ export interface Word {
   text: string;
   startMs: number;
   endMs: number;
+  /** Recogniser confidence 0..1 (speech-to-text output; absent for hand-written timings). */
+  confidence?: number;
+  /** A hesitation (um, uh, ...). Set by the transcriber; text-matched fillers count too. */
+  filler?: boolean;
+  /**
+   * Found by voice-activity detection, not written by the recogniser: voiced audio between two
+   * pauses that the recogniser produced no word for. Text is a placeholder ("[filler]"), so it is
+   * never shown in captions.
+   */
+  inferred?: boolean;
 }
 
 export interface TimeRange {

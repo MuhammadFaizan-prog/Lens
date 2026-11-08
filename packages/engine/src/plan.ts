@@ -7,9 +7,9 @@ import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events
 import { layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
-import { buildTimeline, outputDuration, outputToSource } from "./timeline.js";
-import { captionBlocks, captionFrame, type CaptionFrame } from "./transcript.js";
-import type { InputEvent, RecordingMeta, Rect, Word, ZoomSegment } from "./types.js";
+import { buildTimeline, mergeRanges, outputDuration, outputToSource } from "./timeline.js";
+import { captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
+import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
 
 /**
  * The render plan: everything the compositor needs, per output frame, as plain numbers.
@@ -44,6 +44,10 @@ export interface RenderPlan {
   export: ProjectConfig["export"];
   /** Audio mix instructions, or null when the export is silent. */
   audio: AudioPlan | null;
+  /** Every source-time range removed from the output: manual cuts plus transcript cleanup cuts. */
+  cuts: TimeRange[];
+  /** The part of cuts that came from transcript cleanup (fillers, long pauses). */
+  cleanupCuts: TimeRange[];
   zoomSegments: ZoomSegment[];
   frames: PlanFrame[];
 }
@@ -72,12 +76,14 @@ export interface PlanInputs {
   events: InputEvent[];
   project: ProjectConfig;
   words?: Word[];
+  /** Measured silences from the transcript (Transcript.pauses); bounds pause cuts when given. */
+  pauses?: TimeRange[];
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
-export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, words = [] }: PlanInputs): RenderPlan {
+export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, words = [], pauses }: PlanInputs): RenderPlan {
   const fps = project.output.fps;
   const out = outputSize(project.output.aspect, project.output.resolution);
   const resScale = Math.min(out.width, out.height) / 1080;
@@ -104,14 +110,21 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   if (project.edits.speedUpTyping.enabled) {
     for (const r of detectTyping(events, DEFAULT_TYPING)) speed.push({ ...r, rate: project.edits.speedUpTyping.rate });
   }
-  const timeline = buildTimeline(meta.durationMs, project.edits.cuts, speed);
+  // Transcript cleanup (E03): filler + long-pause cuts from word timings, in source time.
+  const cl = project.edits.cleanup;
+  const autoCuts = cl.enabled && words.length
+    ? cleanupCuts(words, meta.durationMs, cl, { removeFillers: cl.removeFillers, shortenPauses: cl.shortenPauses, pauses })
+    : [];
+  const allCuts = mergeRanges([...project.edits.cuts, ...autoCuts]);
+  const timeline = buildTimeline(meta.durationMs, allCuts, speed);
   const blend = project.camera.zoomedSize !== 1 ? zoomBlendTrack(camera, zoomSegments, project.zoom.spring) : [];
   const durationMs = outputDuration(timeline);
   const frames = Math.max(1, Math.round((durationMs / 1000) * fps));
 
   const clickList = clickEffects(events).filter((c) => insideCrop(c, crop));
   const shortcuts = project.shortcuts.enabled ? shortcutOverlays(events, project.shortcuts.displayMs) : [];
-  const captions = project.captions.enabled ? captionBlocks(words, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
+  const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers);
+  const captions = project.captions.enabled ? captionBlocks(shownWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
 
   const planFrames: PlanFrame[] = [];
   for (let i = 0; i < frames; i++) {
@@ -184,6 +197,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
     },
     export: project.export,
     audio: buildAudioPlan(project, timeline, durationMs, clicks(rawEvents).map((c) => c.t)),
+    cuts: allCuts.map((c) => ({ startMs: r2(Math.max(0, c.startMs)), endMs: r2(Math.min(meta.durationMs, c.endMs)) })),
+    cleanupCuts: autoCuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     zoomSegments,
     frames: planFrames,
   };
