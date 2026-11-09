@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { headerLine } from "../shared/eventlog";
+import { h264Args, markBroken, pickH264 } from "../../../editor/server/h264";
 
 export interface HistoryItem {
   dir: string;
@@ -80,7 +81,7 @@ export function deleteBundle(root: string, dir: string): void {
 export const IMPORT_EXTENSIONS = ["mp4", "mov", "webm", "mkv"];
 
 export interface ImportProgress {
-  /** 0-100 over the whole import (video, then audio when the file has any) */
+  /** 0-100 over the whole import (video and audio, weighted; phase "audio" once the video is done) */
   pct: number;
   phase: "probe" | "video" | "audio";
 }
@@ -93,7 +94,7 @@ export interface ImportOptions {
 }
 export interface ImportResult {
   dir: string;
-  /** "copy": the source h264 stream was remuxed as is; "encode": re-encoded (libx264, constant frame rate) */
+  /** "copy": the source h264 stream was remuxed as is; "encode": re-encoded (H.264, constant frame rate) */
   video: "copy" | "encode";
   durationMs: number;
   progressEvents: number;
@@ -233,34 +234,63 @@ export async function importVideo(root: string, ffmpeg: string, file: string, op
     const copy = canCopy(pr);
     const videoShare = pr.hasAudio ? (copy ? 50 : 85) : 100;
     const total = pr.durationMs;
+    // video and audio run side by side (v0.1.3 perf: they were back to back); progress is the weighted
+    // sum of the two, so it still only goes up
     let videoMs = 0;
+    let videoFrac = 0;
+    let audioFrac = pr.hasAudio ? 0 : 1;
+    let videoDone = false;
+    const step = () => report(videoDone ? "audio" : "video", videoFrac * videoShare + audioFrac * (100 - videoShare));
     const onVideo = (ms: number) => {
       videoMs = Math.max(videoMs, ms);
-      if (total > 0) report("video", (Math.min(ms, total) / total) * videoShare);
+      if (total > 0) videoFrac = Math.max(videoFrac, Math.min(ms, total) / total);
+      step();
     };
     const screen = path.join(dir, "screen.mp4");
     let fps: number;
     let width = pr.width;
     let height = pr.height;
+    let video: Promise<unknown>;
     if (copy) {
       fps = Math.round(pr.fps * 1000) / 1000;
-      await runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn", "-movflags", "+faststart", screen], { signal: opts.signal, onTime: onVideo });
+      video = runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn", "-movflags", "+faststart", screen], { signal: opts.signal, onTime: onVideo });
     } else {
-      // even dimensions for yuv420p; constant frame rate (the editor indexes frames as round(t * fps))
+      // even dimensions for yuv420p; constant frame rate (the editor indexes frames as round(t * fps)).
+      // The encoder the recordings use (hardware H.264 when it works here, else libx264 superfast) at
+      // the "high" quality (crf 20); v0.1.2 re-encoded at veryfast crf 18.
       fps = Number.isFinite(pr.fps) && pr.fps >= 45 ? 60 : 30;
       width -= width % 2;
       height -= height % 2;
-      await runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-fps_mode", "cfr", "-r", String(fps),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", screen], { signal: opts.signal, onTime: onVideo });
+      const args = (enc: string) => ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-fps_mode", "cfr", "-r", String(fps),
+        ...h264Args(enc, "high"), "-an", "-movflags", "+faststart", screen];
+      const enc = await pickH264(ffmpeg);
+      video = runFfmpeg(ffmpeg, args(enc), { signal: opts.signal, onTime: onVideo }).catch((e) => {
+        if (enc === "libx264" || e instanceof ImportCancelled) throw e;
+        markBroken(ffmpeg, enc);
+        return runFfmpeg(ffmpeg, args("libx264"), { signal: opts.signal, onTime: onVideo });
+      });
     }
-    // duration from the probe (the container); no second decode of screen.mp4
-    const durationMs = total > 0 ? total : Math.round(videoMs);
+    video = video.then(() => {
+      videoDone = true;
+      videoFrac = 1;
+    });
     const tracks: unknown[] = [];
+    const jobs: Array<Promise<unknown>> = [video];
     if (pr.hasAudio) {
-      await runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:a:0", "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")],
-        { signal: opts.signal, onTime: (ms) => total > 0 && report("audio", videoShare + (Math.min(ms, total) / total) * (100 - videoShare)) });
+      jobs.push(runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:a:0", "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")],
+        { signal: opts.signal, onTime: (ms) => {
+          if (total > 0) audioFrac = Math.max(audioFrac, Math.min(ms, total) / total);
+          step();
+        } }));
       tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: 0, volume: 1, muted: false });
     }
+    // both settle before anything is reported or removed (a cancelled import must not delete the folder
+    // while the other ffmpeg still holds a file in it on Windows)
+    const settled = await Promise.allSettled(jobs);
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+    // duration from the probe (the container); no second decode of screen.mp4
+    const durationMs = total > 0 ? total : Math.round(videoMs);
     if (opts.signal?.aborted) throw new ImportCancelled();
     fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width, height, fps, durationMs, pixelRatio: 1 }));
     // no cursor / clicks: a header-only event log
