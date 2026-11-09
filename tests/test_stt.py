@@ -13,6 +13,9 @@ change to them with its reason.
   no content word is, and cleanup removes them from the rendered video: re-transcribing the export
   finds no fillers.
 - Captions in the rendered video carry the transcribed words (OCR of sampled frames).
+- Non-speech input (tones, clicks, noise, silence, a speech-shaped harmonic buzz): at most 1 word
+  per minute of audio (inferred fillers counted), and every word ends at or after its start
+  (bounds set 2026-11-09 before the fix was measured; see docs/Tracker.md).
 """
 from __future__ import annotations
 
@@ -31,9 +34,9 @@ sys.path.insert(0, str(ROOT / "compositor"))
 sys.path.insert(0, str(ROOT / "research" / "harness"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lens_transcribe import TranscribeOptions, align, fillers as F, merge_fillers, transcribe_array, vad  # noqa: E402
+from lens_transcribe import TranscribeOptions, align, fillers as F, hallucination as H, merge_fillers, transcribe_array, vad  # noqa: E402
 from lens_transcribe.audio import decode_audio  # noqa: E402
-from media import CLI, read_all_frames, write_wav  # noqa: E402
+from media import CLI, read_all_frames, speechy, write_wav  # noqa: E402
 from speech import ESPEAK, SR, add_noise, hesitant_ssml, norm, pad, tts, tts_with_word_starts, wer_counts, word_runs  # noqa: E402
 
 try:
@@ -52,6 +55,7 @@ START_TOL_MS = 150
 MATCHED_MIN = 0.90
 CONNECTED_MEDIAN_MAX_MS = 120
 CONNECTED_P95_MAX_MS = 300
+NONSPEECH_WORDS_PER_MIN_MAX = 1.0
 
 # Held-out sentences (not the ones the alignment costs were set on).
 CONNECTED = [
@@ -133,6 +137,56 @@ def test_pauses_between_excludes_speech():
              {"text": "b", "startMs": 1500, "endMs": 1800}]
     p = F.pauses_between(words, [(0, 100), (380, 600), (900, 1500), (1800, 2500)], 150)
     assert p == [{"startMs": 400, "endMs": 600}, {"startMs": 900, "endMs": 1500}, {"startMs": 1800, "endMs": 2500}]
+
+
+def test_shared_run_never_ends_a_word_before_it_starts():
+    """The bug seen on the editor sample's tone track: 60 hallucinated words squeezed into one short
+    voiced run got clamped edges that went backwards (end < start)."""
+    W = align.TimedWord
+    words = [W("oh,", 8.0 + 0.03 * i, 8.02 + 0.03 * i, 0.98) for i in range(60)]
+    out, _ = align.align(words, [(8.08, 8.53)], refine=False)
+    kept = [w for w in out if not w.dropped]
+    assert kept
+    assert all(w.end >= w.start for w in kept)
+    assert all(b.start >= a.end - 1e-9 for a, b in zip(kept, kept[1:]))
+    assert all(8.08 - 1e-9 <= w.start and w.end <= 8.53 + 1e-9 for w in kept)
+
+
+def test_align_end_after_start_on_random_input():
+    """Property check: 300 random word lists (including degenerate and backwards recogniser spans)
+    against random runs; every placed word has end >= start and words never go backwards."""
+    rng = np.random.default_rng(7)
+    W = align.TimedWord
+    for _ in range(300):
+        n, m = int(rng.integers(1, 40)), int(rng.integers(1, 8))
+        edges = np.sort(rng.uniform(0, 10, 2 * m))
+        runs = [(float(edges[2 * i]), float(edges[2 * i] + max(1e-3, edges[2 * i + 1] - edges[2 * i]))) for i in range(m)]
+        st = np.sort(rng.uniform(0, 10, n))
+        words = [W("w", float(a), float(a + rng.uniform(-0.2, 0.6)), float(rng.uniform(0, 1))) for a in st]
+        out, _ = align.align(words, runs)
+        kept = [w for w in out if not w.dropped]
+        assert all(w.end >= w.start for w in kept), [(w.start, w.end) for w in kept]
+        assert all(b.start >= a.start - 1e-9 for a, b in zip(kept, kept[1:]))
+
+
+def test_repetition_filter_drops_low_confidence_loops_only():
+    W = align.TimedWord
+    o = H.Options()
+    loop = [W("oh,", i, i + 0.1, 0.2) for i in range(5)]
+    sure = [W("no", 10 + i, 10.1 + i, 0.9) for i in range(3)]
+    out = H.drop_repeats(loop + [W("open", 6, 6.3, 0.9)] + sure, o)
+    assert [w.text for w in out] == ["oh,", "open", "no", "no", "no"]
+
+
+def test_segment_filters():
+    from lens_transcribe.engine import RawSegment as S
+    speech = [(0.0, 3.0)]
+    segs = [S(0, 3, "Open the menu", 0.9, 0.01, -0.4),         # speech: kept
+            S(3, 10, "oh, oh, oh", 26.2, 0.87, -0.06),         # loop
+            S(10, 12, "You", 0.3, 0.93, -0.45),                # no speech heard by the VAD
+            S(12, 14, "hmm", 0.5, 0.7, -1.3),                  # Whisper's own no-speech rule
+            S(0.5, 2.5, "quiet start", 1.0, 0.7, -0.5)]        # high no_speech_prob but speech under it: kept
+    assert H.bad_segments(segs, speech, H.Options()) == {1, 2, 3}
 
 
 # ------------------------------------------------------------------ recognition on real audio
@@ -364,3 +418,65 @@ def test_rendered_captions_carry_transcribed_words(piped):
         assert found >= 0.8 * len(words), (text, got)
         checked += 1
     assert checked == len(blocks)
+
+
+# ------------------------------------------------------------------ non-speech input
+
+def _nonspeech_signals(dur_s: float = 60.0) -> dict[str, np.ndarray]:
+    sr = SR
+    n = int(dur_s * sr)
+    t = np.arange(n) / sr
+    rng = np.random.default_rng(11)
+    out: dict[str, np.ndarray] = {}
+    # tones: a steady 440 Hz, beeps at 1 kHz every 0.8 s, and a slow 200-2000 Hz sweep, 20 s each
+    third = n // 3
+    steady = 0.2 * np.sin(2 * np.pi * 440 * t[:third])
+    beep = np.zeros(third)
+    for k in range(0, third, int(0.8 * sr)):
+        m = min(int(0.15 * sr), third - k)
+        beep[k:k + m] = 0.3 * np.sin(2 * np.pi * 1000 * np.arange(m) / sr)
+    tt = t[: n - 2 * third]
+    sweep = 0.2 * np.sin(2 * np.pi * (200 * tt + (1800 / (2 * tt[-1])) * tt ** 2))
+    out["tones"] = np.concatenate([steady, beep, sweep])
+    # clicks: mouse-click-like decaying transients at irregular intervals over -60 dBFS noise
+    x = 0.001 * rng.standard_normal(n)
+    k = 0
+    while k < n:
+        m = min(160, n - k)
+        x[k:k + m] += 0.7 * np.exp(-np.arange(m) / 12) * rng.choice([-1, 1], m)
+        k += int(rng.uniform(0.15, 1.2) * sr)
+    out["clicks"] = x
+    # noise: white at -26 dBFS, then pink room tone with hum at -40 dBFS (speech.add_noise)
+    half = n // 2
+    out["noise"] = np.concatenate([0.05 * rng.standard_normal(half), add_noise(np.zeros(n - half, np.float32), -40.0, seed=5)])
+    # silence: digital zero, then -70 dBFS dither
+    out["silence"] = np.concatenate([np.zeros(half), 10 ** (-70 / 20) * rng.standard_normal(n - half)])
+    # speech-shaped harmonic buzz with syllable rhythm and no phonemes (the editor sample's mic
+    # track generator; Silero VAD scores it as speech, so this exercises the decoder-side filters)
+    out["buzz"] = speechy(dur_s * 1000, level=0.05, sr=sr) + rng.normal(0, 0.003, n)
+    return {k: v.astype(np.float32) for k, v in out.items()}
+
+
+@needs_model
+def test_nonspeech_input_produces_almost_no_words():
+    dur = 60.0
+    lines, failures = [], []
+    for name, x in _nonspeech_signals(dur).items():
+        t = transcribe_array(x)
+        ws = t["words"]
+        per_min = len(ws) / (dur / 60)
+        backwards = [w for w in ws if w["endMs"] < w["startMs"]]
+        lines.append(f"{name}: {len(ws)} words ({per_min:.2f}/min) {[w['text'] for w in ws][:8]}")
+        if per_min > NONSPEECH_WORDS_PER_MIN_MAX or backwards:
+            failures.append(name)
+    print("\nnon-speech:\n  " + "\n  ".join(lines))
+    assert not failures, lines
+
+
+@needs_model
+def test_editor_sample_tone_track_transcribes_to_nothing():
+    """The track the bug was found on (apps/editor/sample/mic.wav, 10 s): before the fix 121 words,
+    two of them ending before they start."""
+    t = transcribe_array(decode_audio(str(ROOT / "apps" / "editor" / "sample" / "mic.wav")))
+    assert all(w["endMs"] >= w["startMs"] for w in t["words"])
+    assert len(t["words"]) / (t["durationMs"] / 60000) <= NONSPEECH_WORDS_PER_MIN_MAX, t["words"]

@@ -17,7 +17,7 @@
 | Webcam: mirror, crop rect, size multiplier while zoomed (spring-animated, corner anchored) (CAM-04/05/06) | done | vitest (shrink curve, anchoring, smoothness, split untouched); pytest: colour bands prove crop + mirror, zoomed area 36% ±6% of unzoomed, anchored bottom-right |
 | Caption styling: font size, text/highlight colours, background pill, top/bottom/custom position, max words per line, word-by-word highlight from word timings (AI-03) | done | vitest (active word index at times, wrapping, edit-aware); pytest: highlight colour walks word to word and onto line 2, caption in top band, pill present, no highlight when off |
 | Per-segment overrides: cursor hide / smoothing off / size, audio volume (CUR-01, EDT-05/06) | done | vitest (fade, raw path with blended edges, size ramp, validation); pytest: hidden range has no cursor pixels, size 3 vs 1.5 gives ~4x area, smoothing-off offset matches plan, volume 0.25 measured as -12 dB ±1 |
-| Local speech-to-text (AI-01): faster-whisper base.en (MIT, CTranslate2 int8, CPU), two decodes (plain + filler-prompted), energy VAD, DP alignment of words to voiced runs, Transcript JSON (words + confidence + filler/inferred flags + language + measured pauses), `lens-transcribe` CLI | done | pytest `test_stt.py` on espeak-ng speech: WER 7.0% clean (bound 10%), 11.3% with -50 dBFS room tone (bound 15%); word starts with pauses between words 40/42 matched, max error 10 ms (bound ±150 ms, truth from the clean signal's energy envelope, transcriber fed the noisy mix); connected speech vs espeak's own word events median 92 ms / p95 226 ms (bounds 120 / 300 ms); vitest schema parse/validate. Model + licences: `docs/STT.md` |
+| Local speech-to-text (AI-01): faster-whisper base.en (MIT, CTranslate2 int8, CPU), two decodes (plain + filler-prompted), energy VAD, DP alignment of words to voiced runs, Transcript JSON (words + confidence + filler/inferred flags + language + measured pauses), `lens-transcribe` CLI | done | pytest `test_stt.py` on espeak-ng speech: WER 7.0% clean (bound 10%), 11.3% with -50 dBFS room tone (bound 15%); word starts with pauses between words 40/42 matched, max error 10 ms (bound ±150 ms, truth from the clean signal's energy envelope, transcriber fed the noisy mix); connected speech vs espeak's own word events median 92 ms / p95 226 ms (bounds 120 / 300 ms); vitest schema parse/validate. Non-speech (2026-11-09 fix): tones / clicks / noise / silence / speech-shaped buzz, 60 s each, **0 words each** (bound <= 1 word/min), editor sample tone track 0 words (was 121, two with end < start); aligner end >= start unit + 300-case property test. Model + licences: `docs/STT.md` |
 | Filler + pause removal from real audio (AI-07/08): fillers from the prompted decode and untranscribed voiced runs; `edits.cleanup` drives cuts in the plan (video, audio, captions); pause cuts clipped to measured silence so unplaced speech is never cut | done | pytest: 6/6 inserted um/uh/er flagged, 0 content words flagged; rendered export re-transcribed has no fillers and content WER within 10%; every filler inside a plan cut; output audio length = source - cuts ±100 ms. vitest: filler/pause cut ranges, unknown speech protected, kept fillers count as speech, captions skip cut fillers and VAD placeholders |
 | Render pipeline transcribes automatically (`compositor/pipeline.py`): captions or cleanup on + no words → transcribe the mic track (offset applied) → lens-plan → render | done | pytest: captions in the rendered MP4 OCR'd (tesseract) on one frame per caption block, ≥80% of each block's transcribed words read back (4/4 blocks, all words found) |
 | P1 demo (all of the above together) | done | `python3 research/harness/demo_p1.py` -> `out/demo-p1.mp4` + `out/demo-p1-sheet.png` (not committed) |
@@ -289,8 +289,8 @@ escape attempt refused with `outside_root` and nothing written outside; script v
    script) refused. `npm run build && npm test`: engine 149, cli unit 27, editor 26.
 2. Found while building: on the editor sample's synthetic (non-speech) mic track, `lens-transcribe`
    produced a transcript the engine rejects ("word 102 ends before it starts": a hallucinated run of
-   "oh," words where the aligner gave one word an end before its start). Not fixed in the aligner
-   (out of this task's scope; STT is only tested on speech). `lens transcribe` now validates the new
+   "oh," words where the aligner gave one word an end before its start). Fixed later the same day in
+   the aligner, with hallucination filters (see "STT non-speech fix" below). `lens transcribe` now validates the new
    transcript and never replaces a good one with it (exit 1, output kept in `.lens/transcript.new.json`),
    and a project with a rejected transcript.json still accepts edits; planning / rendering report it.
 3. Test-infrastructure bug, not a product bug: the first second pass hung at collection. The CLI
@@ -307,3 +307,30 @@ escape attempt refused with `outside_root` and nothing written outside; script v
    (use `lens set`), script variables / includes. Playwright was not re-run after Part B (no editor
    code changed; the root build script now also builds `@lens/cli`).
 
+
+STT non-speech fix (Part A, 2026-11-09). The bug from the automation run (note 2 above): on the
+editor sample's synthetic tone track, `lens-transcribe` wrote 121 words (runs of "oh,", 13 inferred
+"[filler]"s) and two words ended before they started. Cause of the backwards words: `align._share`
+clamped each boundary to "at least 30 ms after the previous one" and "at most 30 ms × (words left)
+before the run end"; 60 hallucinated words in a 0.45 s run cannot satisfy both, and the second
+clamp pushed boundaries below the previous ones. Shared runs too short for 30 ms per word now get
+equal widths; every placed word has end >= start and words never go backwards.
+Bounds were written into `tests/test_stt.py` before the first measurement: non-speech input <= 1 word
+per minute (inferred fillers counted) and every word end >= start; the existing WER / timing /
+filler bounds unchanged.
+1. Hallucination filters added (`transcribe/lens_transcribe/hallucination.py`, docs/STT.md):
+   segment compression ratio > 2.4, no_speech_prob > 0.6 with low logprob / loop / not heard by the
+   speech VAD, Silero VAD gating of words and inferred fillers (the Silero v6 ONNX model bundled in
+   faster-whisper, MIT), low-confidence repetition (3+ identical words, mean confidence < 0.5).
+2. First run of the non-speech test: tones, clicks, noise and silence 0 words each, but the
+   speech-shaped harmonic buzz (60 s) **64 words/min, all inferred "[filler]"** (failed). Silero
+   scores that buzz as speech, the decoder's segments there were dropped or empty, and every
+   syllable-like burst became an inferred filler. Fix: an inferred filler needs a recognised word
+   within 1.5 s (a hesitation sits between words). After it: 0 words on all five, bound unchanged.
+3. Existing STT tests with the filters on, numbers identical to before: WER 7.0% clean (5/71),
+   11.3% room tone (8/71); word starts 40/42 matched, max 10 ms; fillers 6/6, 0 false; connected
+   median 92 ms / p95 226 ms; pipeline cleanup and caption OCR pass. `test_stt.py` + `test_takes.py`
+   20/20 with the final code (one run, 199 s).
+4. Not done: no real-world non-speech (music, keyboard noise, real rooms, speech over music); a real
+   segment whose text loops (compression ratio > 2.4) is dropped whole rather than re-decoded at a
+   higher temperature as Whisper's own fallback does.

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import align, engine, fillers as F, vad
+from . import align, engine, fillers as F, hallucination as H, vad
 from .audio import SR, decode_audio
 
 SCHEMA_VERSION = 1
@@ -34,6 +34,10 @@ class TranscribeOptions:
     min_pause_ms: int = 150
     fillers: list[str] = field(default_factory=lambda: list(F.DEFAULT_FILLERS))
     beam_size: int = 5
+    #: Hallucination suppression on non-speech audio (hallucination.py): segment compression-ratio
+    #: and no-speech filters, speech-VAD gating of words and inferred fillers, low-confidence
+    #: repetition filter.
+    hallucination: H.Options = field(default_factory=H.Options)
 
 
 def _ms(s: float) -> int:
@@ -148,25 +152,45 @@ def transcribe_array(audio: np.ndarray, opts: TranscribeOptions | None = None, o
     # prompt so the model writes hesitations out; only its fillers are taken, inserted between the
     # pass-1 words they sit between (the prompt also makes the model invent text in silences, so
     # nothing else from pass 2 is used).
+    ho = opts.hallucination
+    speech = H.speech_regions(audio, SR) if ho.enabled else None
+    unknown: list[tuple[float, float]] = []  # spans of dropped segments: no inferred fillers there
+
+    def kept_words(res: "engine.RawResult") -> list[align.TimedWord]:
+        bad = H.bad_segments(res.segments, speech, ho) if ho.enabled else set()
+        unknown.extend((res.segments[i].start, res.segments[i].end) for i in bad)
+        ws = [align.TimedWord(w.text.strip(), w.start, w.end, w.probability) for w in res.words
+              if w.text.strip() and w.segment not in bad]
+        return H.drop_repeats(ws, ho) if ho.enabled else ws
+
     raw = engine.recognise(audio, opts.model, opts.language, None, opts.beam_size)
-    words = [align.TimedWord(w.text.strip(), w.start, w.end, w.probability) for w in raw.words if w.text.strip()]
+    words = kept_words(raw)
     if opts.keep_fillers:
         prompted = engine.recognise(audio, opts.model, opts.language, F.FILLER_PROMPT, opts.beam_size)
-        words = merge_fillers(words, [align.TimedWord(w.text.strip(), w.start, w.end, w.probability) for w in prompted.words if w.text.strip()], opts.fillers)
+        words = merge_fillers(words, kept_words(prompted), opts.fillers)
     v = vad.detect(audio, SR)
     runs = _runs_between(v, opts.snap_pause_ms / 1000, duration)
     words, untranscribed = align.align(words, runs)
     words = [w for w in words if not w.dropped]
+    if speech is not None:  # speech-VAD gating of the aligned words
+        words = [w for w in words if H.coverage(w.start, w.end, speech) >= ho.word_in_speech_min]
     for w in words:
         w.filler = F.is_filler(w.text, opts.fillers)
     if opts.infer_untranscribed:
+        recognised = list(words)
         for a, b in untranscribed:
             d = (b - a) * 1000
-            if opts.untranscribed_min_ms <= d <= opts.untranscribed_max_ms and v.voiced_fraction(a, b) > 0.5:
-                words.append(align.TimedWord("[filler]", a, b, 0.0, filler=True, inferred=True))
+            if not (opts.untranscribed_min_ms <= d <= opts.untranscribed_max_ms and v.voiced_fraction(a, b) > 0.5):
+                continue
+            if speech is not None and (H.coverage(a, b, speech) < ho.word_in_speech_min
+                                       or any(p < b and q > a for p, q in unknown)
+                                       or not any(w.end >= a - ho.filler_context_s and w.start <= b + ho.filler_context_s for w in recognised)):
+                continue
+            words.append(align.TimedWord("[filler]", a, b, 0.0, filler=True, inferred=True))
     words.sort(key=lambda w: w.start)
     out_words = []
     for w in words:
+        assert w.end >= w.start, (w.text, w.start, w.end)  # align guarantees it; never emit otherwise
         d = {"text": w.text, "startMs": _ms(w.start) + offset_ms, "endMs": _ms(w.end) + offset_ms, "confidence": round(w.confidence, 3)}
         if w.filler:
             d["filler"] = True

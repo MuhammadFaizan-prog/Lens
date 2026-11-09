@@ -37,6 +37,7 @@ EARLY_START_WEIGHT = 0.30  # recogniser start earlier than the run start (silenc
 SEARCH_S = 2.5             # runs considered for a word: within this of its recogniser time
 MAX_WORDS_PER_RUN = 60
 MAX_RUNS_PER_WORD = 4
+MIN_WORD_S = 0.03          # narrowest word inside a shared run
 
 
 @dataclass
@@ -188,9 +189,12 @@ def _share(ws: list[TimedWord], run: tuple[float, float], exp: list[float]) -> N
         for x in exp[:-1]:
             acc += x
             cuts.append(s + acc / tot * (e - s))
-    # keep every word at least 30 ms wide, ordered, inside the run
+    # keep every word at least MIN_WORD_S wide, ordered, inside the run. A run too short for that
+    # (many words squeezed into one short burst, as in a hallucinated loop) gets equal widths.
+    n = len(ws)
+    gap = min(MIN_WORD_S, (e - s) / n)
     edges = [s] + cuts + [e]
-    for i in range(1, len(edges) - 1):
-        edges[i] = min(max(edges[i], edges[i - 1] + 0.03), e - 0.03 * (len(edges) - 1 - i))
+    for i in range(1, n):
+        edges[i] = min(max(edges[i], edges[i - 1] + gap), e - gap * (n - i))
     for i, w in enumerate(ws):
-        w.start, w.end = edges[i], edges[i + 1]
+        w.start, w.end = edges[i], max(edges[i], edges[i + 1])

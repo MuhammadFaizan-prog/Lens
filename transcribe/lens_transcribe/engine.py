@@ -7,7 +7,7 @@ is downloaded once into the Hugging Face cache (or LENS_STT_MODEL_DIR) and runs 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -32,6 +32,19 @@ class RawWord:
     start: float
     end: float
     probability: float
+    #: index into RawResult.segments
+    segment: int = -1
+
+
+@dataclass
+class RawSegment:
+    """Decoder statistics for one Whisper segment, used by hallucination.py."""
+    start: float
+    end: float
+    text: str
+    compression_ratio: float
+    no_speech_prob: float
+    avg_logprob: float
 
 
 @dataclass
@@ -40,6 +53,7 @@ class RawResult:
     language: str
     language_probability: float
     duration: float
+    segments: list[RawSegment] = field(default_factory=list)
 
 
 def licence_of(model: str) -> str:
@@ -73,5 +87,9 @@ def recognise(audio: np.ndarray, model: str = DEFAULT_MODEL, language: str | Non
         vad_filter=False,
         temperature=0.0,
     )
-    words = [RawWord(w.word, float(w.start), float(w.end), float(w.probability)) for s in segments for w in (s.words or [])]
-    return RawResult(words, info.language, float(info.language_probability), float(info.duration))
+    words: list[RawWord] = []
+    segs: list[RawSegment] = []
+    for s in segments:
+        segs.append(RawSegment(float(s.start), float(s.end), s.text, float(s.compression_ratio), float(s.no_speech_prob), float(s.avg_logprob)))
+        words += [RawWord(w.word, float(w.start), float(w.end), float(w.probability), len(segs) - 1) for w in (s.words or [])]
+    return RawResult(words, info.language, float(info.language_probability), float(info.duration), segs)
