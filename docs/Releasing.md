@@ -54,22 +54,60 @@ From the repo root, on `main`, with the change committed and the suites green (R
    git -c http.sslCAInfo="$SSL_CERT_FILE" push origin main
    ```
 
-4. **Publish** the GitHub Release with the three files the updater reads:
+4. **Publish** the GitHub Release. Two steps, because the Hark sandbox cannot upload release assets
+   (every upload to `uploads.github.com` answers 400 through its gateway):
 
    ```bash
-   node apps/desktop/scripts/release.mjs --notes notes.md
+   node apps/desktop/scripts/release.mjs --no-upload --notes notes.md
    ```
 
-   It creates release `v<version>` at `HEAD` and uploads `latest.yml`, the installer and its blockmap,
-   then prints the release URL. Auth: in Hark the shell runs with the GitHub credential (credentials
-   provider `github`; release creation is the `release_create` call of `apicall github --list releases`,
-   asset upload goes to `uploads.github.com`); elsewhere set `GITHUB_TOKEN`. It refuses to overwrite an
-   existing tag, so a mistake means a new version, not a re-upload.
+   creates release `v<version>` at `HEAD` (it still checks that `out/desktop/latest.yml` is for this
+   version) and prints its URL. Auth: in Hark the shell runs with the GitHub credential (credentials
+   provider `github`); elsewhere set `GITHUB_TOKEN`. It refuses to overwrite an existing tag, so a mistake
+   means a new version, not a re-upload. Then run the **desktop-release** workflow
+   (`.github/workflows/desktop-release.yml`) on `main` with input `tag=v<version>`: from the Actions tab,
+   or in Hark `apicall github workflow_dispatch owner=MuhammadFaizan-prog repo=Lens
+   workflow_id=desktop-release.yml ref=main inputs='{"tag":"v<version>"}'`. It checks out the tag,
+   builds the installer on ubuntu-24.04 the same way as step 2, checks the package (installer payload,
+   ffmpeg.exe, the uiohook win32-x64 prebuild, app.asar, app-update.yml, the editor; Lens.exe's icon
+   and version info, below), and uploads `latest.yml`, the installer and its blockmap to the release.
+   The installer CI builds is the one users get: its sha512 differs from your local build's, so take
+   hashes from the release's `latest.yml`, not from `out/desktop/`. Outside Hark, plain
+   `node apps/desktop/scripts/release.mjs --notes notes.md` uploads the local build itself.
 
 5. **Check**: `https://github.com/MuhammadFaizan-prog/Lens/releases/latest` shows the new version with
-   the three assets. An installed older copy shows the update banner within 8 s of its next launch.
+   the three assets; download the installer and check its sha512 equals `latest.yml`'s
+   (`openssl dgst -sha512 -binary Lens-Setup-<version>.exe | base64 -w0`). An installed older copy
+   shows the update banner within 8 s of its next launch.
 
 Do not delete a published release that users may already be updating from; publish a newer one.
+
+## App icon
+
+One drawing, `apps/desktop/scripts/make-icon.mjs` (a red record dot with a white ring on a dark rounded
+square, first used for the 0.1.0 installer; do not redesign it), generated at build time so no binary is
+committed:
+
+- `lens.ico` with 16 / 24 / 32 / 48 / 64 / 256 px (BMP entries, PNG for 256): the installer and
+  uninstaller (NSIS), the **Lens.exe** icon resource, and on Windows the window and tray icons
+  (`dist/icons/lens.ico`, written by `scripts/build.mjs`).
+- `lens-<n>.png`: window and tray icon on Linux / macOS.
+- The editor's favicon (`apps/editor/index.html`) and header mark (`LensMark` in
+  `apps/editor/src/components/Icon.tsx`) are the same geometry and colours as SVG; `test/icon.test.ts`
+  fails if they drift.
+
+Lens.exe: electron-builder normally edits the exe with rcedit, which on Linux needs wine, so
+`signAndEditExecutable` is off and the `afterPack` hook `scripts/edit-exe.cjs` writes the icon group and
+version info (ProductName / FileDescription Lens, FileVersion = the app version) with `resedit` (pure
+JS, the library `@electron/packager` uses for the same job). 0.1.0 shipped without it: its Lens.exe kept
+Electron's atom icon. The workflow checks every build: it extracts Lens.exe from the installer payload,
+pulls its icon group with `wrestool -x -t14`, decodes both that and a freshly generated `lens.ico` with
+`icotool -x`, and requires the six images to be byte-identical, then reads the version strings
+(`wrestool --raw -x -t16`). The same check fails on the 0.1.0 installer.
+
+Taskbar: the main process calls `app.setAppUserModelId("io.github.muhammadfaizanprog.lens")` on Windows,
+the same id electron-builder's NSIS installer writes on the Start-menu and desktop shortcuts
+(`WinShell::SetLnkAUMI`), so the windows group under Lens with its icon instead of under electron.exe.
 
 ## Test the update flow without Windows
 

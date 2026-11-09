@@ -27,7 +27,10 @@ const GITHUB = process.env.LENS_UPDATE_GITHUB === "1";
 
 function serve(dir: string, rewriteYml?: (s: string) => string): Promise<http.Server> {
   const srv = http.createServer((req, res) => {
-    const f = path.join(dir, decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname).replace(/^\/+/, ""));
+    // The NSIS updater forced on Linux (LENS_UPDATE_NSIS=1) still names its channel file by the host
+    // platform (latest-linux-arm64.yml); Windows reads latest.yml. Serve latest.yml for both.
+    const rel = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname).replace(/^\/+/, "").replace(/^latest-(linux|mac)[^/]*\.yml$/, "latest.yml");
+    const f = path.join(dir, rel);
     if (!f.startsWith(dir) || !fs.existsSync(f) || !fs.statSync(f).isFile()) {
       res.statusCode = 404;
       return res.end();
@@ -39,7 +42,12 @@ function serve(dir: string, rewriteYml?: (s: string) => string): Promise<http.Se
   return new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv)));
 }
 
-const sha512 = (f: string) => crypto.createHash("sha512").update(fs.readFileSync(f)).digest("base64");
+// streamed: reading a 113 MB installer whole (three times per run) got the worker OOM-killed on a 1.3 GB box
+const sha512 = (f: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const h = crypto.createHash("sha512");
+    fs.createReadStream(f, { highWaterMark: 1 << 20 }).on("data", (c) => h.update(c)).on("error", reject).on("end", () => resolve(h.digest("base64")));
+  });
 
 let xvfb: ChildProcess | null = null;
 test.beforeAll(async () => {
@@ -82,7 +90,7 @@ test("detects, downloads and sha512-verifies an update; shows Update / Restart t
     report.downloaded = { ...done, seconds: (Date.now() - t0) / 1000 };
     expect(done.status, done.message).toBe("downloaded");
     await expect(page.locator("[data-testid=update-btn]")).toHaveText("Restart to update");
-    const fileSha = sha512(done.file);
+    const fileSha = await sha512(done.file);
     report.fileSha512 = fileSha;
     expect(fileSha).toBe(done.sha512);
     if (FEED) {
@@ -91,7 +99,7 @@ test("detects, downloads and sha512-verifies an update; shows Update / Restart t
       const exe = fs.readdirSync(FEED).find((f) => f.endsWith(".exe"))!;
       report.ymlSha512 = ymlSha;
       expect(fileSha).toBe(ymlSha);
-      expect(sha512(path.join(FEED, exe))).toBe(ymlSha);
+      expect(await sha512(path.join(FEED, exe))).toBe(ymlSha);
     }
     // the update never writes outside its cache: the recordings folder is untouched
     report.recordingsDir = fs.existsSync(path.join(ud, "rec")) ? fs.readdirSync(path.join(ud, "rec")) : [];

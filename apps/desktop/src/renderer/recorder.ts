@@ -375,7 +375,8 @@ $("check-updates").onclick = (e) => {
 };
 lens.onUpdate(renderUpdate);
 void lens.updateState().then((u) => {
-  $("version").textContent = `v${u.current ?? "?"}`;
+  // footer shows the running version with the product name (0.1.1: "Lens v0.1.1", was "v0.1.0")
+  $("version").textContent = `Lens v${u.current ?? "?"}`;
   renderUpdate(u);
 });
 
