@@ -1,12 +1,97 @@
 import type { CameraLayoutKind, CameraLayoutSegment, Rect } from "./types.js";
 import type { ProjectConfig } from "./project.js";
 
+const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+
 /** Output pixel size for an aspect ratio. resolution is the short side (the height for 16:9). */
 export function outputSize(aspect: string, resolution: number): { width: number; height: number } {
   const [aw, ah] = aspect.split(":").map(Number) as [number, number];
-  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
   if (aw >= ah) return { width: even((resolution * aw) / ah), height: even(resolution) };
   return { width: even(resolution), height: even((resolution * ah) / aw) };
+}
+
+/**
+ * Canvas size of a project (feat/canvas-layout): a custom W x H in px (output.size) wins; aspect
+ * "auto" follows the (user-cropped) source, `source` w x h; otherwise outputSize(aspect, resolution).
+ */
+export function canvasSize(output: ProjectConfig["output"], source: { width: number; height: number }): { width: number; height: number } {
+  const sz = output.size;
+  if (sz && sz.width > 0 && sz.height > 0) return { width: even(sz.width), height: even(sz.height) };
+  if (output.aspect === "auto") {
+    const r = source.width / Math.max(1, source.height);
+    const res = output.resolution;
+    return r >= 1 ? { width: even(res * r), height: even(res) } : { width: even(res), height: even(res / r) };
+  }
+  return outputSize(output.aspect, output.resolution);
+}
+
+// ------------------------------------------------------------------ the screen card (feat/canvas-layout)
+
+/** A free card placement: top-left and size as fractions of the canvas width / height. */
+export interface CardTransform {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export function validCard(c: CardTransform | null | undefined): c is CardTransform {
+  return !!c && [c.x, c.y, c.w, c.h].every(Number.isFinite) && c.w > 0 && c.h > 0;
+}
+
+/** Today's placement (and the Fit button): the source aspect fitted inside the padded canvas. */
+export function fittedCardRect(out: { width: number; height: number }, sourceAspect: number, cfg: Pick<ProjectConfig, "background" | "frame">): Rect {
+  const short = Math.min(out.width, out.height);
+  const pad = cfg.background.kind === "hidden" ? 0 : cfg.frame.padding * short;
+  return fitRect({ x: pad, y: pad, w: out.width - 2 * pad, h: out.height - 2 * pad }, sourceAspect);
+}
+
+/**
+ * THE screen card rect (output px) before any per-frame motion: the one place the card's base
+ * placement is computed. Auto zoom happens inside it (the virtual camera's viewport is drawn into
+ * this rect), so cursor, clicks, masks and screen-anchored annotations move with it. A 3D / perspective
+ * pass composes on top of the rect this returns (see docs/Editor.md "Screen card").
+ * `sourceAspect` is the aspect of the content shown in the card (the effective crop, cardCrop()).
+ */
+export function cardRect(out: { width: number; height: number }, sourceAspect: number, cfg: Pick<ProjectConfig, "background" | "frame" | "card">): Rect {
+  const c = cfg.card;
+  if (validCard(c)) return { x: c.x * out.width, y: c.y * out.height, w: c.w * out.width, h: c.h * out.height };
+  return fittedCardRect(out, sourceAspect, cfg);
+}
+
+/** Card rect (output px) -> fractions of the canvas, rounded to 1e-5 (what project.card stores). */
+export function cardFromRect(r: Rect, out: { width: number; height: number }): CardTransform {
+  const q = (v: number) => Math.round(v * 1e5) / 1e5;
+  return { x: q(r.x / out.width), y: q(r.y / out.height), w: q(r.w / out.width), h: q(r.h / out.height) };
+}
+
+/** Fill: a card covering the whole canvas (its shape trims the source, centred). */
+export function fillCard(): CardTransform {
+  return { x: 0, y: 0, w: 1, h: 1 };
+}
+
+/** Centre a card on the canvas, keeping its size. */
+export function centerCard(c: CardTransform): CardTransform {
+  const q = (v: number) => Math.round(v * 1e5) / 1e5;
+  return { x: q((1 - c.w) / 2), y: q((1 - c.h) / 2), w: c.w, h: c.h };
+}
+
+/**
+ * The part of the (user-cropped) source shown in the card. A card whose shape differs from the
+ * crop's (a free resize without Shift, Fill on another aspect) trims the crop, centred, to the card's
+ * aspect, so nothing is ever stretched. No custom card = the crop unchanged (today's behaviour).
+ */
+export function cardCrop(crop: Rect, out: { width: number; height: number }, cfg: Pick<ProjectConfig, "card">): Rect {
+  const c = cfg.card;
+  if (!validCard(c)) return crop;
+  const a = (c.w * out.width) / (c.h * out.height);
+  const ca = crop.w / crop.h;
+  if (Math.abs(a - ca) / ca < 1e-3) return crop;
+  let w = crop.w;
+  let h = crop.h;
+  if (a > ca) h = Math.max(2, Math.round(w / a));
+  else w = Math.max(2, Math.round(h * a));
+  return { x: Math.round(crop.x + (crop.w - w) / 2), y: Math.round(crop.y + (crop.h - h) / 2), w, h };
 }
 
 /** Largest rect with the given aspect that fits inside box, centered. */
@@ -32,7 +117,8 @@ export interface FrameLayout {
 
 /**
  * Static layout for each camera layout kind (D01). Rects are in output px.
- * The screen always keeps its source aspect (H05: re-fit when the output aspect changes).
+ * The screen always keeps its source aspect (H05: re-fit when the output aspect changes). Screen-only,
+ * overlay and cutout layouts put the screen in the card (cardRect); split / fullscreen camera own their slots.
  */
 export function layoutFor(
   kind: CameraLayoutKind,
@@ -44,6 +130,7 @@ export function layoutFor(
   // a hidden backdrop has nothing to show around the recording: it fills the frame
   const pad = cfg.background.kind === "hidden" ? 0 : cfg.frame.padding * short;
   const area: Rect = { x: pad, y: pad, w: out.width - 2 * pad, h: out.height - 2 * pad };
+  const card = cardRect(out, sourceAspect, cfg);
   const camSize = cfg.camera.size * short;
   const margin = Math.max(pad * 0.5, short * 0.03);
   const corner = (size: number): Rect => {
@@ -63,12 +150,12 @@ export function layoutFor(
   };
   switch (kind) {
     case "screen-only":
-      return { screen: fitRect(area, sourceAspect), screenOpacity: 1, camera: null, cameraOpacity: 0, cameraCutout: false, kind };
+      return { screen: card, screenOpacity: 1, camera: null, cameraOpacity: 0, cameraCutout: false, kind };
     case "camera-overlay":
-      return { screen: fitRect(area, sourceAspect), screenOpacity: 1, camera: corner(camSize), cameraOpacity: 1, cameraCutout: false, kind };
+      return { screen: card, screenOpacity: 1, camera: corner(camSize), cameraOpacity: 1, cameraCutout: false, kind };
     case "camera-cutout": {
       const size = camSize * 1.5;
-      return { screen: fitRect(area, sourceAspect), screenOpacity: 1, camera: corner(size), cameraOpacity: 1, cameraCutout: true, kind };
+      return { screen: card, screenOpacity: 1, camera: corner(size), cameraOpacity: 1, cameraCutout: true, kind };
     }
     case "split": {
       const gap = short * 0.025;
