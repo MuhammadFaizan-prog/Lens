@@ -190,7 +190,9 @@ export class Recording {
     const tracks: unknown[] = [];
     if (info.mic && fs.existsSync(path.join(dir, "mic.webm")) && fs.statSync(path.join(dir, "mic.webm")).size > 0) {
       onProgress?.("audio");
-      await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "mic.webm"), "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")]);
+      // pinned to 48 kHz stereo here, so every later step (preview, STT, export) reads one fixed format
+      // (a mono / layout-less Opus mic broke the v0.1.0 export graph on Windows)
+      await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "mic.webm"), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")]);
       tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: Math.round((info.mic.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
     }
     const pixelRatio = this.captured ? this.captured.scaleFactor * (info.capture.width / (this.captured.physical?.width ?? this.captured.bounds.width * this.captured.scaleFactor)) : 1;

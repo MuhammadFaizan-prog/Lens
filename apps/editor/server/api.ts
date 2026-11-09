@@ -436,7 +436,7 @@ function startExportBrowser(bundle: string, rawProject: unknown): BrowserExportJ
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
   const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
-  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id);
+  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT);
   jobs.set(id, job);
   return job;
 }

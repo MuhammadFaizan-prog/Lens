@@ -116,3 +116,30 @@ export function flashAt(f: DecodedFrame, w: number, h: number, scale: number, x:
 export function ffprobeJson(args: string[]): any {
   return JSON.parse(execFileSync("ffprobe", ["-v", "error", "-of", "json", ...args], { encoding: "utf8" }));
 }
+
+/**
+ * The app under test: the packaged build when LENS_PACKAGED_APP points at its executable
+ * (scripts/dist-win.mjs --linux-dir -> out/desktop/linux-<arch>-unpacked/lens), else the dev build.
+ */
+export function appLaunchOptions(extraArgs: string[] = []): { executablePath?: string; args: string[] } {
+  const exe = process.env.LENS_PACKAGED_APP;
+  if (exe) {
+    if (!fs.existsSync(exe)) throw new Error(`LENS_PACKAGED_APP not found: ${exe}`);
+    return { executablePath: exe, args: ["--no-sandbox", ...extraArgs] };
+  }
+  return { args: [DESKTOP, "--no-sandbox", ...extraArgs] };
+}
+export const PACKAGED = !!process.env.LENS_PACKAGED_APP;
+
+/** A small Lens bundle: 640x360 test-pattern screen.mp4, a header-only event log, meta / project. */
+export function makeBundle(dir: string, opts: { seconds: number; mic?: string; project?: Record<string, unknown> }): string {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", `testsrc2=s=640x360:r=30:d=${opts.seconds}`, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", path.join(dir, "screen.mp4")]);
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width: 640, height: 360, fps: 30, durationMs: opts.seconds * 1000, pixelRatio: 1 }));
+  fs.writeFileSync(path.join(dir, "events.jsonl"), `# lens-events v1 ${JSON.stringify({ capture: { width: 640, height: 360 }, source: "screen", platform: "linux", displayId: null })}\n{"t":0,"type":"move","x":320,"y":180}\n`);
+  const tracks = opts.mic ? [{ id: "mic", kind: "mic", path: path.basename(opts.mic), offsetMs: 0, volume: 1, muted: false }] : [];
+  if (opts.mic) fs.copyFileSync(opts.mic, path.join(dir, path.basename(opts.mic)));
+  fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(opts.project ?? {}) }, null, 2));
+  return dir;
+}

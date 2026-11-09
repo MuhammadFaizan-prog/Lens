@@ -458,3 +458,31 @@ Suite counts 2026-11-09 (this code): `npm run build && npm test` engine 156 / 15
 on rerun; compositor export lost to the OOM killer twice), stepsExport 2 / 2. pytest not run (no
 Python changed).
 
+
+## Desktop runtime fixes (branch fix/desktop-runtime, 2026-11-09): Windows v0.1.0 bugs 1, 5, 6, 7, 9, 10, 16-19
+
+Bounds, written before each measurement (a later change to a bound or a test is logged below it):
+- #10 export audio: a real Chromium MediaRecorder mono Opus webm (test/fixtures/audio/mono-opus.webm)
+  and an ADTS AAC stream that changes mono -> stereo mid-way export without error, through the pinned
+  filter graph (system ffmpeg 7.1 and the ffmpeg-static 6.0 build the installer ships) and the export
+  path; exported MP4 |audio - video| duration <= 0.1 s.
+
+### Results
+
+#10 reproduced first: the old graph failed on ffmpeg 6.0 with exactly the Windows error ("Cannot select
+channel layout for the link between filters Parsed_aresample_16 and Parsed_apad_17 ... Error
+reinitializing filters") for the mono Opus webm AND for a mono s16 WAV (what v0.1.0 writes at Stop),
+whenever loudness was on (the unpinned `loudnorm,aresample,apad` tail). With 3 pieces and a 2x piece the
+old graph also ran ffmpeg out of memory here (asplit buffers the padded source for every piece).
+Fix: the export no longer mixes audio inside the video encoder's graph; server/exportAudio.ts decodes
+each track once with the format pinned, lays the pieces in 1 s blocks (atempo per sped piece), runs
+two-pass loudnorm and muxes with the video at the end.
+audioFilterGraph is kept and now pins aformat fltp/stereo/48k at every input, piece and the tail. At
+Stop the mic is written as 48 kHz stereo. Measured (exportAudio.test.ts): mono Opus export video 3.000 s,
+audio 3.000 s; layout-change export 4.000 / 4.000 s; graph runs on ffmpeg 6.0 and 7.1 for both inputs.
+Packaged app (new: `node scripts/dist-win.mjs --linux-dir` stages the app exactly as the installer does
+and builds an unpacked Linux app for this box's arch; e2e specs run against it with
+LENS_PACKAGED_APP=out/desktop/linux-arm64-unpacked/lens): e2e/packaged-export.spec.ts, bounds set
+before measuring (export done; |A - V| <= 0.1 s; mic audible, mean > -40 dBFS): mono s16 WAV mic (the
+v0.1.0 Stop output) and the raw mono Opus webm both export on the shipped ffmpeg 6.0: video 5.000 s,
+audio 5.000 s, mean -18.3 dBFS. 2 / 2 passed.
