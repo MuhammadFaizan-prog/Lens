@@ -21,6 +21,7 @@ import { isColorValue } from "./palette.js";
 import { validateTranslations, type TranslationSettings } from "./translation.js";
 import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
+import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -203,6 +204,11 @@ export interface ProjectConfig {
   crop: Rect | null;
   /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05); tracked when they have keys. */
   masks: MaskRegion[];
+  /**
+   * 3D motion of the screen card (feat/motion-3d), source time: rotate / move the card on X, Y, Z
+   * with perspective, composed outside the 2D zoom. Empty by default = the flat card as before.
+   */
+  motion3d: Motion3DSegment[];
   /** Automatic privacy redaction (demand #3): the scan's detections and their review state. */
   privacy: PrivacySettings;
   /** Per-segment overrides of cursor and audio volume, source time (CUR-01, EDT-05/06). */
@@ -376,6 +382,7 @@ export function defaultProject(): ProjectConfig {
     transcription: { mode: "auto", track: null, model: "base.en", language: null },
     crop: null,
     masks: [],
+    motion3d: [],
     privacy: defaultPrivacy(),
     overrides: [],
     annotations: [],
@@ -449,6 +456,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     const ke = validateKeys(m.keys);
     if (ke) errs.push(`mask ${m.id} ${ke}`);
   }
+  errs.push(...validateMotion3d(p.motion3d));
   errs.push(...validatePrivacy(p.privacy));
   errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
   for (const o of p.overrides) {

@@ -9,6 +9,7 @@ import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTra
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
 import { fillScreenRect, layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
+import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
@@ -112,6 +113,11 @@ export interface PlanFrame {
   annotations: AnnFrame[];
   /** A full-frame text slide over everything (output px), or null. */
   slide: SlideFrame | null;
+  /**
+   * 3D transform of the screen card (feat/motion-3d); absent when the card is flat, so plans of
+   * projects without 3D motion are unchanged.
+   */
+  m3d?: Motion3DFrame;
 }
 
 export interface PlanInputs {
@@ -229,6 +235,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     // during a slide the source holds still: no clicks, shortcut or caption from the frozen moment
     const sc = span ? undefined : shortcuts.find((s) => src >= s.startMs && src < s.endMs);
     const cap = span ? undefined : captions.find((b) => src >= b.startMs && src < b.endMs);
+    const m3 = project.motion3d.length ? motion3dAt(project.motion3d, src) : null;
+    const screenR: [number, number, number, number] = [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)];
     planFrames.push({
       t: r2(t),
       src: r2(src),
@@ -237,7 +245,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
       clicks: span ? [] : activeClicks,
       layout: {
-        screen: [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)],
+        screen: screenR,
         screenOpacity: r4(layout.screenOpacity),
         camera: layout.camera ? [r2(layout.camera.x), r2(layout.camera.y), r2(layout.camera.w), r2(layout.camera.h)] : null,
         cameraOpacity: r4(layout.cameraOpacity),
@@ -248,6 +256,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
+      ...(m3 ? { m3d: motion3dFrame(m3, screenR, out, resScale) } : {}),
     });
   }
 

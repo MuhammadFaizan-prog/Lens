@@ -26,3 +26,4 @@ export * from "./demo.js";
 export * from "./demoExport.js";
 export * from "./captionsManual.js";
 export * from "./backdropArt.js";
+export * from "./motion3d.js";
