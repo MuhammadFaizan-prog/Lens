@@ -98,7 +98,7 @@ def test_affine_matches_renderer_formula():
 
 @pytest.fixture(scope="module")
 def marker_sessions(tmp_path_factory):
-    from lensharness.steps_synth import generate
+    from lensharness.demo_synth import generate
 
     out = {}
     for name, zoom in (("whole", False), ("zoomed", True)):
