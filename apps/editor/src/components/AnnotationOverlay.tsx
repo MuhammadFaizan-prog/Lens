@@ -71,7 +71,7 @@ export function itemBounds(plan: RenderPlan, f: PlanFrame, a: AnnFrame): [number
       const py = o.bg ? o.bg.padY * k : 0;
       add(bx - px, by - py);
       add(bx + bw + px, by + bh + py);
-    } else {
+    } else if (o.op === "fill" || o.op === "stroke") {
       const w = o.op === "stroke" ? (o.width * k) / 2 : 0;
       for (let i = 0; i < o.pts.length; i += 2) {
         const p = map(o.pts[i]!, o.pts[i + 1]!);

@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
+import { projectPalette, resolveColor } from "@lens/engine";
+import { useEditor } from "../state/store";
 
 export function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
   return (
@@ -75,14 +77,30 @@ export function Segmented<T extends string>({ label, value, options, onChange, t
   );
 }
 
-export function ColorInput({ label, value, onChange, testId }: { label: string; value: string; onChange: (v: string) => void; testId?: string }) {
+/**
+ * Colour field. A theme reference ("@primary") shows the colour it resolves to (preset palette <
+ * brand kit) with a "Brand" / "Theme" tag; picking a colour makes it this item's own override,
+ * and `onReset` (when given) puts the reference back.
+ */
+export function ColorInput({ label, value, onChange, testId, onReset }: { label: string; value: string; onChange: (v: string) => void; testId?: string; onReset?: () => void }) {
+  const project = useEditor((s) => s.project);
+  const pal = useMemo(() => projectPalette(project), [project]);
+  const token = value.startsWith("@");
+  const shown = token ? resolveColor(value, pal) : value;
+  const tag = token ? (project.brand.enabled ? "Brand" : "Theme") : null;
   return (
-    <label className="ctl color">
+    <label className={`ctl color ${token ? "inherited" : ""}`}>
       <span className="ctl-label">{label}</span>
-      <span className="swatch" style={{ background: value }}>
-        <input type="color" value={value} aria-label={label} data-testid={testId} onChange={(e) => onChange(e.target.value)} />
+      <span className="swatch" style={{ background: shown }}>
+        <input type="color" value={shown} aria-label={label} data-testid={testId} data-token={token ? value : undefined} onChange={(e) => onChange(e.target.value)} />
       </span>
-      <span className="ctl-value mono">{value.toUpperCase()}</span>
+      <span className="ctl-value mono">{shown.toUpperCase()}</span>
+      {tag && <span className="inherit-tag" title={`Follows the ${tag.toLowerCase()} ${value.slice(1)} colour`}>{tag}</span>}
+      {!token && onReset && (
+        <button type="button" className="mini-reset" title="Follow the theme / brand colour again" aria-label={`Reset ${label} to theme`} data-testid={testId ? `${testId}-reset` : undefined} onClick={(e) => { e.preventDefault(); onReset(); }}>
+          ↺
+        </button>
+      )}
     </label>
   );
 }

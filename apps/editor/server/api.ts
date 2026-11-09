@@ -5,6 +5,9 @@
  *   GET  /api/frames/:track/:n.jpg   decoded source frame n (0-based) of screen | cam
  *   GET  /api/media/:name            a file inside the bundle (audio tracks)
  *   GET  /api/font/caption.ttf       the caption font the reference compositor uses (DejaVu Sans Bold)
+ *   GET  /api/font/file?ref=         a theme / brand font: builtin:<file> (assets/fonts), system:<file>, or a bundle path
+ *   GET  /api/asset?path=            a file inside the bundle (brand logo, user fonts)
+ *   POST /api/asset?name=            { data: base64 } -> saves <bundle>/brand/<name>, returns { path }
  *   POST /api/project                save project.json into the bundle
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
@@ -220,6 +223,27 @@ function extractFrames(bundle: string, track: "screen" | "cam"): Promise<number>
   return p;
 }
 
+/** A path inside the bundle (no escaping it with .. or an absolute path). */
+function insideBundle(bundle: string, rel: string): string | null {
+  const p = path.resolve(bundle, rel);
+  return p.startsWith(path.resolve(bundle) + path.sep) ? p : null;
+}
+
+function fontFile(bundle: string, ref: string): string | null {
+  if (ref.startsWith("builtin:")) {
+    const f = path.join(ROOT, "assets", "fonts", path.basename(ref.slice(8)));
+    return fs.existsSync(f) ? f : null;
+  }
+  if (ref.startsWith("system:")) {
+    const name = path.basename(ref.slice(7));
+    return [...FONT_CANDIDATES, ...FONT_REGULAR].find((c) => path.basename(c) === name && fs.existsSync(c)) ?? null;
+  }
+  const p = path.isAbsolute(ref) ? ref : insideBundle(bundle, ref);
+  return p && fs.existsSync(p) ? p : null;
+}
+
+const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".otf": "font/otf" };
+
 function readJson(file: string): unknown {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
 }
@@ -241,6 +265,8 @@ async function loadBundle(dir: string) {
   return {
     dir,
     name: path.basename(dir),
+    /** No project.json yet: the editor applies the user's default preset. */
+    isNew: !fs.existsSync(path.join(dir, "project.json")),
     meta,
     events,
     project,
@@ -325,6 +351,28 @@ export function apiMiddleware() {
         if (!f) return sendJson(res, { error: "font not installed" }, 404);
         res.setHeader("content-type", "font/ttf");
         return fs.createReadStream(f).pipe(res);
+      }
+      if (url.pathname === "/api/font/file") {
+        const f = fontFile(bundle, url.searchParams.get("ref") ?? "");
+        if (!f) return sendJson(res, { error: "font not found" }, 404);
+        res.setHeader("content-type", "font/ttf");
+        res.setHeader("cache-control", "max-age=3600");
+        return fs.createReadStream(f).pipe(res);
+      }
+      if (url.pathname === "/api/asset" && req.method === "GET") {
+        const f = insideBundle(bundle, url.searchParams.get("path") ?? "");
+        if (!f || !fs.existsSync(f)) return sendJson(res, { error: "not found" }, 404);
+        res.setHeader("content-type", MIME[path.extname(f).toLowerCase()] ?? "application/octet-stream");
+        res.setHeader("cache-control", "no-store");
+        return fs.createReadStream(f).pipe(res);
+      }
+      if (url.pathname === "/api/asset" && req.method === "POST") {
+        const name = path.basename(url.searchParams.get("name") ?? "").replace(/[^A-Za-z0-9._-]/g, "_");
+        if (!name || !MIME[path.extname(name).toLowerCase()]) return sendJson(res, { error: "unsupported file type" }, 400);
+        const body = JSON.parse(await readBody(req)) as { data: string };
+        fs.mkdirSync(path.join(bundle, "brand"), { recursive: true });
+        fs.writeFileSync(path.join(bundle, "brand", name), Buffer.from(body.data, "base64"));
+        return sendJson(res, { path: `brand/${name}` });
       }
       if (url.pathname === "/api/project" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

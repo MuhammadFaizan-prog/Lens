@@ -17,26 +17,18 @@ import {
   type TrackKind,
 } from "../state/timelineOps";
 import { Icon } from "./Icon";
+import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 
 const LABEL_W = 112;
 const SNAP_PX = 8;
 const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0 };
-const ANN_ROW = 15;
+const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
+const SLIDE_ROW_H = 18;
+const COLLAPSED_H = 30;
 
-/** Stack overlapping annotation blocks into rows (greedy, by start time). */
-function annotationRows(items: Array<{ startMs: number; endMs: number }>): number[] {
-  const order = items.map((a, i) => ({ a, i })).sort((x, y) => x.a.startMs - y.a.startMs);
-  const ends: number[] = [];
-  const rows = new Array<number>(items.length).fill(0);
-  for (const { a, i } of order) {
-    let r = ends.findIndex((e) => e <= a.startMs);
-    if (r < 0) {
-      r = ends.length;
-      ends.push(a.endMs);
-    } else ends[r] = a.endMs;
-    rows[i] = r;
-  }
-  return rows;
+/** Label of an annotation block on the lane. */
+function annLabel(a: { stepId?: string; text?: string; kind: string }): string {
+  return `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`;
 }
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
@@ -233,8 +225,16 @@ export function Timeline() {
     requestAnimationFrame(() => (el.scrollLeft = (t / 1000) * next - (e.clientX - el.getBoundingClientRect().left)));
   };
 
-  const annRows = annotationRows(project.annotations);
-  const annLaneH = Math.max(34, 4 + (annRows.length ? Math.max(...annRows) + 1 : 1) * ANN_ROW);
+  // Annotations lane (demand #9 UI fix): auto-stacked sub-rows, packed in pixels so no two blocks
+  // overlap and every block keeps room for a readable label; collapsible to one summary row.
+  const [annExpanded, setAnnExpanded] = useState(() => localStorage.getItem(ANN_EXPANDED_KEY) !== "0");
+  const toggleAnn = () => {
+    localStorage.setItem(ANN_EXPANDED_KEY, annExpanded ? "0" : "1");
+    setAnnExpanded(!annExpanded);
+  };
+  const annPack = useMemo(() => packLane(project.annotations.map((a) => ({ startMs: a.startMs, endMs: a.endMs, label: annLabel(a) })), pps / 1000), [project.annotations, pps]);
+  const slideRow = project.slides.length ? SLIDE_ROW_H : 0;
+  const annLaneH = annExpanded ? Math.max(34, slideRow + 4 + annPack.rowCount * (ROW_H + ROW_GAP)) : COLLAPSED_H;
 
   /** Drag a slide marker along the source timeline (one undo step). */
   const startSlideDrag = (e: React.PointerEvent, index: number, at0: number) => {
@@ -319,8 +319,14 @@ export function Timeline() {
           <div className="tl-ruler-spacer" />
           {TRACKS.map((t) => (
             <div key={t.kind} className={`tl-label tl-label-${t.kind}`} style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
+              {t.kind === "annotation" ? (
+                <button className="lane-toggle" aria-expanded={annExpanded} data-testid="ann-lane-toggle" title={annExpanded ? "Collapse to one row" : "Expand into rows"} onClick={toggleAnn}>
+                  {annExpanded ? "▾" : "▸"}
+                </button>
+              ) : null}
               <span className={`dot dot-${t.kind}`} />
               {t.label}
+              {t.kind === "annotation" && project.annotations.length > 0 && <span className="lane-count" data-testid="ann-lane-rows">{annExpanded ? `${annPack.rowCount} row${annPack.rowCount > 1 ? "s" : ""}` : project.annotations.length}</span>}
               {["zoom", "cut", "speed", "mask", "annotation"].includes(t.kind) && (
                 <button className="mini-add" title={`Add ${t.label.toLowerCase()} at playhead`} aria-label={`Add ${t.kind}`} data-testid={`add-${t.kind}`} onClick={() => create(t.kind as TrackKind, playSrc)}>
                   <Icon name="plus" size={12} />
@@ -401,10 +407,20 @@ export function Timeline() {
             <div className="lane" data-testid="lane-mask" onPointerDown={scrubLane} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
               {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}
             </div>
-            <div className="lane lane-annotation" data-testid="lane-annotation" style={{ height: annLaneH }} onPointerDown={scrubLane} onDoubleClick={(e) => create("annotation", msOf(laneX(e.clientX)))}>
-              {project.annotations.map((a, i) =>
-                block("annotation", i, a, `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`, a.stepId ? "step" : "", `block-annotation-${a.id}`, { top: 2 + annRows[i]! * ANN_ROW, height: ANN_ROW - 2 }),
-              )}
+            <div className={`lane lane-annotation ${annExpanded ? "expanded" : "collapsed"}`} data-testid="lane-annotation" data-rows={annPack.rowCount} style={{ height: annLaneH }} onPointerDown={scrubLane} onDoubleClick={(e) => create("annotation", msOf(laneX(e.clientX)))}>
+              {project.annotations.map((a, i) => {
+                const label = annLabel(a);
+                const w = xOf(a.endMs) - xOf(a.startMs);
+                const row = annPack.rows[i]!;
+                if (!annExpanded) {
+                  // collapsed: thin bars in their rows, no labels (hover for the title)
+                  const h = Math.max(2, Math.floor((COLLAPSED_H - 6) / annPack.rowCount) - 1);
+                  return block("annotation", i, a, label, `${a.stepId ? "step" : ""} mini`, `block-annotation-${a.id}`, { top: 3 + row * (h + 1), height: h });
+                }
+                const narrow = w < labelWidth(label);
+                return block("annotation", i, a, label, `${a.stepId ? "step" : ""}${narrow ? " narrow" : ""}`, `block-annotation-${a.id}`,
+                  { top: slideRow + 3 + row * (ROW_H + ROW_GAP), height: ROW_H, ["--label-room" as string]: `${Math.max(0, labelWidth(label) - Math.max(4, w) - 3)}px` });
+              })}
               {project.slides.map((sl, i) => (
                 <div
                   key={`slide-${sl.id}`}

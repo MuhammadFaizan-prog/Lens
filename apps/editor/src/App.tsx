@@ -7,6 +7,8 @@ import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { AnnotationToolbar } from "./components/AnnotationToolbar";
+import { BrandPanel } from "./components/BrandPanel";
+import { PresetsMenu } from "./components/PresetsMenu";
 import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
@@ -48,6 +50,7 @@ function TopBar() {
           <Icon name="redo" />
         </button>
         <span className="divider" />
+        <PresetsMenu />
         <input ref={file} type="file" accept=".json,application/json" hidden data-testid="open-input" onChange={(e) => onFile(e.target.files?.[0])} />
         <button className="btn ghost" data-testid="open" onClick={() => file.current?.click()}>
           <Icon name="open" /> Open
@@ -67,6 +70,7 @@ function LeftPanel() {
   const panel = useEditor((s) => s.leftPanel);
   const pending = useEditor((s) => privacyCounts(s.project).pending);
   const steps = useEditor((s) => s.project.stepLabels.drafts.filter((d) => d.state === "pending").length);
+  const brandOn = useEditor((s) => (s.project.brand.enabled ? s.project.brand.colors.primary : null));
   return (
     <div className="left-col">
       <nav className="left-tabs" role="tablist">
@@ -81,8 +85,12 @@ function LeftPanel() {
           Steps
           {steps > 0 && <span className="tab-badge" data-testid="st-pending-badge">{steps}</span>}
         </button>
+        <button role="tab" aria-selected={panel === "brand"} className={panel === "brand" ? "on" : ""} data-testid="left-tab-brand" onClick={() => store.setLeftPanel("brand")}>
+          Brand
+          {brandOn && <span className="tab-dot" style={{ background: brandOn }} />}
+        </button>
       </nav>
-      {panel === "transcript" ? <TranscriptPanel /> : panel === "privacy" ? <PrivacyPanel /> : <StepsPanel />}
+      {panel === "transcript" ? <TranscriptPanel /> : panel === "privacy" ? <PrivacyPanel /> : panel === "steps" ? <StepsPanel /> : <BrandPanel />}
     </div>
   );
 }

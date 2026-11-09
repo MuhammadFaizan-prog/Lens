@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { maxZoomsPerMinute, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
+import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
@@ -117,24 +117,33 @@ function SelectionCard() {
 
 function LookTab({ p }: { p: ProjectConfig }) {
   const t = (label: string, fn: (q: ProjectConfig) => ProjectConfig) => store.tweak(label, fn);
+  // the backdrop as drawn: the theme's (preset palette < brand kit) while it inherits
+  const pal = projectPalette(p);
+  const bgNow = p.background.inherit ? { ...p.background, kind: pal.background.kind, colors: pal.background.colors, angle: pal.background.angle } : p.background;
+  const own = (q: ProjectConfig): ProjectConfig["background"] => (q.background.inherit ? { ...q.background, ...{ kind: pal.background.kind, colors: [...pal.background.colors], angle: pal.background.angle }, inherit: false } : q.background);
+  const themeCss = pal.background.colors.length > 1 ? `linear-gradient(135deg, ${pal.background.colors.join(", ")})` : pal.background.colors[0];
   return (
     <>
       <Section title="Backdrop">
         <div className="backdrops" data-testid="backdrops">
+          <button className={`backdrop ${p.background.inherit ? "on" : ""}`} title={p.brand.enabled ? "Brand backdrop" : "Theme backdrop (from the preset)"} aria-label="Backdrop Theme" data-testid="backdrop-theme" style={{ background: themeCss }}
+            onClick={() => store.edit("Theme backdrop", (q) => ({ ...q, background: { ...q.background, inherit: true } }))}>
+            <span>{p.brand.enabled ? "Brand" : "Theme"}</span>
+          </button>
           {BACKDROPS.map((b) => {
-            const on = b.kind === p.background.kind && b.colors.join() === p.background.colors.join();
+            const on = !p.background.inherit && b.kind === p.background.kind && b.colors.join() === p.background.colors.join();
             const css = b.kind === "solid" ? b.colors[0] : `linear-gradient(135deg, ${b.colors.join(", ")})`;
             return (
-              <button key={b.name} className={`backdrop ${on ? "on" : ""} ${b.name === "Paper" ? "light" : ""}`} title={b.name} aria-label={`Backdrop ${b.name}`} style={{ background: css }} onClick={() => store.edit(`Backdrop ${b.name}`, (q) => ({ ...q, background: { ...q.background, kind: b.kind, colors: [...b.colors] } }))}>
+              <button key={b.name} className={`backdrop ${on ? "on" : ""} ${b.name === "Paper" ? "light" : ""}`} title={b.name} aria-label={`Backdrop ${b.name}`} style={{ background: css }} onClick={() => store.edit(`Backdrop ${b.name}`, (q) => ({ ...q, background: { ...q.background, kind: b.kind, colors: [...b.colors], inherit: false } }))}>
                 <span>{b.name}</span>
               </button>
             );
           })}
         </div>
-        {p.background.kind === "gradient" && <Slider label="Angle" value={p.background.angle} min={0} max={360} step={5} format={(v) => `${v}°`} onChange={(v) => t("Backdrop angle", (q) => ({ ...q, background: { ...q.background, angle: v } }))} />}
-        <ColorInput label={p.background.kind === "gradient" ? "From" : "Colour"} value={p.background.colors[0] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => ({ ...q, background: { ...q.background, colors: [v, ...q.background.colors.slice(1)] } }))} />
-        {p.background.kind === "gradient" && (
-          <ColorInput label="To" value={p.background.colors[p.background.colors.length - 1] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => ({ ...q, background: { ...q.background, colors: [...q.background.colors.slice(0, -1), v] } }))} />
+        {bgNow.kind === "gradient" && <Slider label="Angle" value={bgNow.angle} min={0} max={360} step={5} format={(v) => `${v}°`} onChange={(v) => t("Backdrop angle", (q) => ({ ...q, background: { ...own(q), angle: v } }))} />}
+        <ColorInput label={bgNow.kind === "gradient" ? "From" : "Colour"} value={bgNow.colors[0] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [v, ...b.colors.slice(1)] } }; })} />
+        {bgNow.kind === "gradient" && (
+          <ColorInput label="To" value={bgNow.colors[bgNow.colors.length - 1] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [...b.colors.slice(0, -1), v] } }; })} />
         )}
       </Section>
       <Section title="Frame">
@@ -234,7 +243,8 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
       <Slider label="Size" value={cs.fontSize} min={24} max={84} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
       <Segmented label="Position" value={cs.position === "custom" ? "bottom" : cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
       <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
-      <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))} />
+      <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))}
+        onReset={() => store.edit("Highlight follows theme", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, highlightColor: "@highlight" } } }))} />
       <ColorInput label="Text" value={cs.textColor} onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
       <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />

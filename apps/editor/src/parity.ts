@@ -7,6 +7,7 @@ import type { RenderPlan } from "@lens/engine";
 import { FrameStore } from "./media/frames";
 import { PlanRenderer } from "./render/renderer";
 import { buildPlan, fetchBundle, loadCaptionFont } from "./state/bundle";
+import { ensurePlanAssets, setAssetBundle } from "./render/assets";
 
 declare global {
   interface Window {
@@ -27,6 +28,8 @@ const ready = (async () => {
   plan = buildPlan(b, b.project);
   // frames from the bundle opened with ?dir= (the annotations parity run), not the default sample
   const q = dir ? `?dir=${encodeURIComponent(dir)}` : "";
+  setAssetBundle(q);
+  await ensurePlanAssets(plan);
   screen = new FrameStore("screen", b.screen.frames, b.screen.fps, q);
   cam = b.camera && b.project.camera.enabled ? new FrameStore("cam", b.camera.frames, b.camera.fps, q) : null;
   canvas.width = plan.output.width;

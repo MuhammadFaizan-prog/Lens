@@ -1,3 +1,4 @@
+import { defaultAnnotationStyle } from "@lens/engine";
 import type { Annotation, AnnotationStyle, ArrowHead, InAnimation, OutAnimation, TextSlide } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { timecode } from "../state/timelineOps";
@@ -20,6 +21,12 @@ export function AnnotationCard({ a }: { a: Annotation }) {
   const st = (label: string, patch: Partial<AnnotationStyle>, live = true) => store.updateAnnotation(id, (x) => ({ ...x, style: { ...x.style, ...patch } }), live ? "tweak" : "edit", label);
   const set = (label: string, patch: Partial<Annotation>, live = false) => store.updateAnnotation(id, (x) => ({ ...x, ...patch }), live ? "tweak" : "edit", label);
   const hasText = a.kind === "text" || a.kind === "callout" || a.kind === "badge";
+  // colours whose default is a theme slot can be put back to follow the preset / brand
+  const def = defaultAnnotationStyle(a.kind, a.anchor);
+  const reset = (f: "color" | "fill" | "textColor") => {
+    const v = def[f];
+    return typeof v === "string" && v.startsWith("@") ? () => st("Follow theme colour", { [f]: v }, false) : undefined;
+  };
   const hasFill = a.kind !== "arrow";
   return (
     <div className="selection-card ann-card" data-testid="ann-card">
@@ -39,10 +46,10 @@ export function AnnotationCard({ a }: { a: Annotation }) {
           <input className="ann-text-input" value={a.text ?? ""} data-testid="ann-text" onChange={(e) => set("Edit text", { text: e.target.value }, true)} />
         </label>
       )}
-      <ColorInput label={a.kind === "badge" ? "Ring" : a.kind === "text" ? "Accent" : "Colour"} value={a.style.color} testId="ann-color" onChange={(v) => st("Annotation colour", { color: v })} />
+      <ColorInput label={a.kind === "badge" ? "Ring" : a.kind === "text" ? "Accent" : "Colour"} value={a.style.color} testId="ann-color" onChange={(v) => st("Annotation colour", { color: v })} onReset={reset("color")} />
       {hasFill && (
         <>
-          <ColorInput label="Fill" value={a.style.fill ?? "#000000"} testId="ann-fill" onChange={(v) => st("Annotation fill", { fill: v })} />
+          <ColorInput label="Fill" value={a.style.fill ?? "#000000"} testId="ann-fill" onChange={(v) => st("Annotation fill", { fill: v })} onReset={reset("fill")} />
           <Slider label="Fill opacity" value={a.style.fill ? a.style.fillOpacity : 0} min={0} max={1} step={0.02} format={pct} onChange={(v) => st("Fill opacity", { fillOpacity: v, fill: a.style.fill ?? "#000000" })} />
         </>
       )}
@@ -104,7 +111,7 @@ export function SlideCard({ index, s }: { index: number; s: TextSlide }) {
       <Slider label="Cross-fade" value={s.fadeMs} min={0} max={1000} step={50} format={ms} onChange={(v) => store.updateSlide(index, { fadeMs: v }, true)} />
       <ColorInput label="Background" value={s.background} onChange={(v) => store.updateSlide(index, { background: v }, true)} />
       <ColorInput label="Text" value={s.textColor} onChange={(v) => store.updateSlide(index, { textColor: v }, true)} />
-      <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "#ff5a36" : null })} />
+      <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "@primary" : null })} />
       <Segmented label="Size" value={s.titleSize >= 96 ? "l" : s.titleSize <= 64 ? "s" : "m"} options={[{ value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }]}
         onChange={(v) => store.updateSlide(index, { titleSize: v === "s" ? 60 : v === "m" ? 84 : 110 })} />
     </div>

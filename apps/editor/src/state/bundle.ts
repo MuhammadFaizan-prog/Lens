@@ -13,6 +13,8 @@ export interface TrackInfo {
 export interface Bundle {
   dir: string;
   name: string;
+  /** The bundle had no project.json (a new recording). */
+  isNew: boolean;
   meta: RecordingMeta;
   events: InputEvent[];
   project: ProjectConfig;
@@ -28,6 +30,7 @@ export async function fetchBundle(dir?: string): Promise<Bundle> {
   return {
     dir: j.dir,
     name: j.name,
+    isNew: !!j.isNew,
     meta: j.meta,
     events: parseEventLog(j.events),
     project: resolveProject(j.project),

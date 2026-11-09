@@ -4,6 +4,10 @@
  * through useEditor(selector) so the preview can redraw at 60 fps without re-rendering React.
  */
 import { useSyncExternalStore } from "react";
+import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS } from "@lens/engine";
+import type { BrandKit, Preset, PresetSection } from "@lens/engine";
+import { ensurePlanAssets, setAssetBundle } from "../render/assets";
+import * as lib from "./presetLibrary";
 import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
 import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
@@ -70,7 +74,10 @@ export interface EditorState {
   /** Export asked while privacy detections are unreviewed: the sheet asks first. */
   exportWarning: { pending: number } | null;
   /** Which panel the left column shows. */
-  leftPanel: "transcript" | "privacy" | "steps";
+  leftPanel: "transcript" | "privacy" | "steps" | "brand";
+  /** Built-in and saved style presets (demand #9), and the default for new projects. */
+  presets: Preset[];
+  defaultPresetId: string | null;
   /** Annotation tool on the preview (select = pick / move / resize existing items). */
   tool: AnnotationTool;
   /** Anchor for newly drawn items: follow the screen (zoom / pan) or stay fixed on the frame. */
@@ -112,6 +119,8 @@ export class EditorStore {
     privacyScan: null,
     exportWarning: null,
     leftPanel: "transcript",
+    presets: [],
+    defaultPresetId: null,
     tool: "select",
     newAnchor: "screen",
     editingText: null,
@@ -156,12 +165,18 @@ export class EditorStore {
       const maxBitmaps = Number((globalThis as { __lensMaxBitmaps?: number }).__lensMaxBitmaps) || 24;
       // frames come from the opened bundle (?dir=...), not the server's default one
       const q = this.dirQuery();
+      setAssetBundle(q);
+      this.refreshPresets();
+      // a new recording (no project.json yet) starts from the user's default preset
+      const def = bundle.isNew ? this.s.presets.find((x) => x.id === this.s.defaultPresetId) : undefined;
+      if (def) bundle.project = resolveProject(applyPreset(bundle.project, def));
       this.screen = new FrameStore("screen", bundle.screen.frames, bundle.screen.fps, q, maxBitmaps);
       this.cam = bundle.camera ? new FrameStore("cam", bundle.camera.frames, bundle.camera.fps, q, maxBitmaps) : null;
       this.history.reset(bundle.project);
       this.set({ bundle, status: "ready", error: null, frame: 0, selection: null, selectedWords: [], savedAt: null, dirty: false });
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
+      if (def) this.notify(`New project: default preset ${def.name} applied`);
     } catch (e) {
       this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
     }
@@ -187,6 +202,10 @@ export class EditorStore {
     const plan = buildPlan(b, planProject);
     const planMs = performance.now() - t0;
     const frame = Math.min(this.s.frame, plan.frames.length - 1);
+    // fonts and logo images the plan uses: redraw once they have loaded
+    void ensurePlanAssets(plan).then((changed) => {
+      if (changed && this.s.plan === plan) this.set({ revision: this.s.revision + 1 });
+    });
     const h = this.history;
     this.set({
       project,
@@ -286,6 +305,118 @@ export class EditorStore {
 
   applyPreset(name: ZoomPresetName): void {
     this.edit(`Zoom preset ${name}`, (p) => applyZoomPreset(p, name));
+  }
+
+  // ------------------------------------------------------------------ style presets + brand kit (demand #9)
+
+  refreshPresets(): void {
+    this.set({ presets: lib.allPresets(), defaultPresetId: lib.defaultPresetId() });
+  }
+
+  /** Apply a style preset, whole or by section: one undo step. */
+  applyStylePreset(id: string, sections: PresetSection[] = PRESET_SECTIONS): void {
+    const pr = this.s.presets.find((x) => x.id === id);
+    if (!pr || !sections.length) return;
+    const partial = sections.length < PRESET_SECTIONS.filter((k) => pr.sections[k] !== undefined).length;
+    const label = partial ? `Apply ${pr.name} (${sections.map((k) => SECTION_LABELS[k]).join(", ")})` : `Apply preset ${pr.name}`;
+    this.edit(label, (p) => resolveProject(applyPreset(p, pr, sections)));
+    this.notify(partial ? `Applied ${pr.name}: ${sections.map((k) => SECTION_LABELS[k].toLowerCase()).join(", ")}` : `Applied preset ${pr.name}`);
+  }
+
+  saveCurrentAsPreset(name: string): Preset | null {
+    if (!name.trim()) return null;
+    const pr = lib.addPreset(presetFromProject(this.history.doc, name.trim()));
+    this.refreshPresets();
+    this.notify(`Saved preset ${pr.name}`);
+    return pr;
+  }
+
+  renameStylePreset(id: string, name: string): void {
+    if (lib.renamePreset(id, name)) this.refreshPresets();
+  }
+
+  duplicateStylePreset(id: string): void {
+    const pr = lib.duplicatePreset(id);
+    this.refreshPresets();
+    if (pr) this.notify(`Duplicated as ${pr.name}`);
+  }
+
+  deleteStylePreset(id: string): void {
+    const name = this.s.presets.find((x) => x.id === id)?.name;
+    if (lib.deletePreset(id)) {
+      this.refreshPresets();
+      this.notify(`Deleted preset ${name}`);
+    }
+  }
+
+  setDefaultStylePreset(id: string | null): void {
+    lib.setDefaultPreset(id);
+    this.refreshPresets();
+    this.notify(id ? `New projects start with ${this.s.presets.find((x) => x.id === id)?.name}` : "New projects start with Lens defaults");
+  }
+
+  /** The .lenspreset text of a preset (for Export). */
+  presetFile(id: string): { name: string; text: string } | null {
+    const pr = this.s.presets.find((x) => x.id === id);
+    return pr ? { name: `${pr.id}.lenspreset`, text: serializePreset(pr) } : null;
+  }
+
+  importStylePreset(text: string, fileName = "preset"): Preset | null {
+    try {
+      const pr = lib.importPresetText(text);
+      this.refreshPresets();
+      this.notify(`Imported preset ${pr.name}`);
+      return pr;
+    } catch (e) {
+      this.notify(`Could not import ${fileName}: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
+
+  /** Brand kit edit: one undo step, or a live slider / colour tweak. */
+  editBrand(label: string, fn: (b: BrandKit) => BrandKit, live = false): void {
+    const f = (p: ProjectConfig) => ({ ...p, brand: fn(p.brand) });
+    if (live) this.tweak(label, f);
+    else this.edit(label, f);
+  }
+
+  private async upload(file: File): Promise<string> {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    const q = this.dirQuery();
+    const r = await fetch(`/api/asset${q}${q ? "&" : "?"}name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: btoa(bin) }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error ?? String(r.status));
+    return j.path as string;
+  }
+
+  /** Upload a logo image into the bundle (brand/) and use it (its aspect read from the file). */
+  async uploadLogo(file: File): Promise<void> {
+    try {
+      const bm = await createImageBitmap(file);
+      const aspect = Math.round((bm.width / bm.height) * 10000) / 10000;
+      bm.close();
+      const path = await this.upload(file);
+      this.editBrand("Brand logo", (b) => ({ ...b, logo: { ...b.logo, path, aspect } }));
+    } catch (e) {
+      this.notify(`Could not use ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Add the user's own font files (regular, and bold if given) and make it the brand font. */
+  async addBrandFont(files: File[]): Promise<void> {
+    if (!files.length) return;
+    try {
+      const sorted = [...files].sort((a, b) => Number(/bold/i.test(a.name)) - Number(/bold/i.test(b.name)));
+      const paths = await Promise.all(sorted.map((f) => this.upload(f)));
+      const regular = paths[0]!;
+      const bold = paths[1] ?? regular;
+      const family = sorted[0]!.name.replace(/\.(ttf|otf)$/i, "").replace(/[-_ ](regular|bold|medium|book)$/i, "").replace(/[-_]/g, " ");
+      this.editBrand(`Add font ${family}`, (b) => ({ ...b, font: family, customFonts: [...b.customFonts.filter((f) => f.family !== family), { family, regular, bold }] }));
+    } catch (e) {
+      this.notify(`Could not add the font: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // ------------------------------------------------------------------ transcript
@@ -491,6 +622,9 @@ export class EditorStore {
 
   /** Add an annotation (one undo step) and select it. */
   addAnnotation(a: Annotation, label = `Add ${a.kind}`): void {
+    // new items start from the applied preset's annotation styles (titles / lower-thirds keep their role sizes)
+    const roleText = a.kind === "text" && (a.role === "title" || a.role === "lower-third");
+    if (!roleText) a = { ...a, style: themedNewStyle(this.history.doc, a.kind, a.style) };
     this.edit(label, (p) => ({ ...p, annotations: [...p.annotations, a] }));
     this.selectAnnotation(a.id);
   }

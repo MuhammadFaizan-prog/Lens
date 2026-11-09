@@ -15,6 +15,7 @@ import type { PlanFrame, RenderPlan } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
+import { fontCss, imageAt } from "./assets";
 
 export { makeCanvas };
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
@@ -192,8 +193,20 @@ export class PlanRenderer {
     if (f.shortcut) this.drawShortcut(g, f.shortcut, W, H);
     if (f.caption) this.drawCaption(g, plan, f, W, H);
 
+    // 9b. brand watermark above the caption (slides cover it)
+    const wm = plan.watermark;
+    if (wm) {
+      const im = imageAt(wm.path, wm.w, wm.h);
+      if (im) {
+        g.save();
+        g.globalAlpha = wm.opacity;
+        g.drawImage(im as CanvasImageSource, wm.x, wm.y);
+        g.restore();
+      }
+    }
+
     // 10. text slide over everything
-    if (f.slide) drawItems(g, W, H, [{ ops: f.slide.ops, opacity: f.slide.opacity, shadow: null }], (x, y) => [x, y], 1);
+    if (f.slide) drawItems(g, W, H, [{ ops: f.slide.ops, opacity: f.slide.opacity, shadow: null }], (x, y) => [x, y], 1, 1, { background: this.background(plan) as CanvasImageSource });
     g.restore();
   }
 
@@ -487,7 +500,7 @@ export class PlanRenderer {
     if (!words.length) return;
     const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
     g.save();
-    g.font = `bold ${size}px ${FONT_STACK}`;
+    g.font = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
     setNoKerning(g);
     g.textBaseline = "alphabetic";
     const space = g.measureText(" ").width;

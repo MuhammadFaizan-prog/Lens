@@ -9,6 +9,7 @@
  */
 import type { AnnOp } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
+import { fontCss, imageAt } from "./assets";
 
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
@@ -49,7 +50,7 @@ export interface TextLayout {
 /** Lay out a text op at output scale k with its box at (x, y) in output px (render.py text_geometry). */
 export function layoutText(g: Canvas2D, op: Extract<AnnOp, { op: "text" }>, x: number, y: number, k: number): TextLayout {
   const size = Math.max(6, pyRound(op.size * k));
-  const font = `${op.bold ? "bold " : ""}${size}px ${TEXT_FONT_STACK}`;
+  const font = `${op.bold ? "bold " : ""}${size}px ${fontCss(op.font, TEXT_FONT_STACK)}`;
   g.font = font;
   (g as unknown as { fontKerning: string }).fontKerning = "none";
   const wbox = op.w * k;
@@ -97,7 +98,8 @@ function ctx(c: AnyCanvas): Canvas2D {
  * Draw items onto g (W x H). toPx maps item coordinates to g px; k scales widths and sizes.
  * Screen-anchored items are drawn into the view canvas, frame-anchored and slides into the output.
  */
-export function drawItems(g: Canvas2D, W: number, H: number, items: DrawableItem[], toPx: (x: number, y: number) => [number, number], k: number, opacityMul = 1): void {
+export function drawItems(g: Canvas2D, W: number, H: number, items: DrawableItem[], toPx: (x: number, y: number) => [number, number], k: number, opacityMul = 1,
+  extra: { background?: CanvasImageSource | null } = {}): void {
   for (const it of items) {
     if (!it.ops.length) continue;
     const layer = layerOf(W, H);
@@ -110,6 +112,22 @@ export function drawItems(g: Canvas2D, W: number, H: number, items: DrawableItem
     lg.lineCap = "round";
     lg.lineJoin = "round";
     for (const o of it.ops) {
+      if (o.op === "background") {
+        if (extra.background) lg.drawImage(extra.background, 0, 0);
+        continue;
+      }
+      if (o.op === "image") {
+        const [ix, iy] = toPx(o.x, o.y);
+        const w = Math.max(1, Math.round(o.w * k));
+        const h = Math.max(1, Math.round(o.h * k));
+        const im = imageAt(o.path, w, h);
+        if (im) {
+          lg.globalAlpha = o.alpha;
+          lg.drawImage(im as CanvasImageSource, Math.round(ix), Math.round(iy));
+          lg.globalAlpha = 1;
+        }
+        continue;
+      }
       if (o.op === "fill" || o.op === "stroke") {
         const n = o.pts.length / 2;
         lg.beginPath();
