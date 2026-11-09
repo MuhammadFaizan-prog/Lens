@@ -260,7 +260,7 @@ function CameraTab({ p }: { p: ProjectConfig }) {
       <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} disabled={off} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
       <Segmented label="Shape" stacked value={p.camera.shape} disabled={off} testId="cam-shape" options={WEBCAM_SHAPES} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
       <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
-      <Slider label="Shrink on zoom" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+      <Slider label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
     </Section>
   );
 }
