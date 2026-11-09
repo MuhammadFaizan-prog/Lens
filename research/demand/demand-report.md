@@ -272,6 +272,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Round-trip tests (save → reopen → byte-identical render). Measure preset reuse: share of exports that use a saved preset after 2 weeks of dogfooding.
 
+**Status (2026-11-09): presets and brand kit built, first version.** `.lenspreset` files (seven sections, versioned schema with migration), five built-in presets, partial apply as one undo step, a library with live thumbnails, default for new projects, import / export; a brand kit (colours, derived backdrop, caption highlight, fonts, logo watermark, intro / outro cards) that every themed element inherits (see `docs/Presets.md`). Measured on exports: watermark alpha within 0.0036 of target and 0 px off position; a brand primary change reaches the annotation box, caption highlight and backdrop (e.g. #1c7ed6 read back as (29.0, 125.8, 216.6) on the box); preview ↔ export SSIM on brand frames mean 0.987 / min 0.972. Save → apply round trip is byte-identical for preset files. Not done: the versioned `.lens` project folder with history and autosave, a brand library shared across projects, the preset-reuse metric.
+
 ---
 
 ## 10. Never lose a take: crash-safe autosave, drift-free long recordings, salvage — 150 · M–L (gate)

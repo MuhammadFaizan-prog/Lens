@@ -199,7 +199,7 @@ test("brand kit: changing the primary colour updates captions, annotations and b
   });
   expect(plan.ann).toContain("box");
   expect(plan.wm).toBeTruthy();
-  // the watermark is drawn: switching it off changes its rect (mean |diff| >= 20) and nothing outside it
+  // the watermark is drawn: switching it off shows its alpha in its rect (recovered below) and changes nothing outside it
   // (pixels stay in the page: copying two full frames into the test process got it OOM-killed)
   await page.evaluate(() => {
     const cv = document.querySelector('[data-testid="preview"]') as HTMLCanvasElement;

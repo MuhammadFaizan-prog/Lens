@@ -31,6 +31,7 @@
 | Multi-take with automatic best take (demand #1): retakes found in the transcript (fuzzy prefix alignment of word sequences + restart cues: phrases, long pause, filler, stutter, low confidence), groups of 2+ takes, keep last or best (completeness, fillers, pauses, confidence), rejected takes as reversible plan cuts that video, audio and captions follow; per-group choice, mark retake, not-a-retake; `edits.takes`; editor Alt takes lane, struck-through alt-take words, one-click swap, A/B preview, all undoable. See `docs/Takes.md` | done | vitest `takes.test.ts` (17): HELD_OUT word precision 0.957 / recall 1.000, group precision 0.933 / recall 1.000 (bounds 0.95 / 0.90 / 0.90 / 0.90), DEV 1.0 on all four, 0 groups on ~180 words of normal narration. pytest `test_takes.py`: espeak fumbles -> lens-transcribe -> render -> re-transcribe: WER 9.5% (2/21, bound 10%), fumble-only word gone, frames = plan, video 10466.7 / audio 10474.7 ms vs plan 10467.0 (bound 1 frame), sync median 20 ms / p90 41 ms (bounds 60 / 150), captions on 20/20 matched words. Playwright `takes.spec.ts` (2): swap changes kept take, transcript, plan and drawn pixels; A/B preview adds no undo step and ends by itself; undo restores take, frames, source time and pixels; mark retake + toggle undo |
 | Automatic privacy redaction (demand #3): on-device OCR (Tesseract) on sampled frames + scene changes, classifiers (email, phone, Luhn + IIN cards, API-key prefixes, JWT, high-entropy tokens, IPv4), notification banners in corners; frame-by-frame NCC tracking with backward fill, scroll prediction, piece matching and coasting; tracks merged / bridged into review items; `privacy.detections` (pending / accepted / dismissed), accepted items as tracked masks (`keys`, `privacyId`); `lens-redact` CLI, `lens-plan --privacy-scan --accept-privacy`; editor Privacy panel (scan, grouped list with thumbnails, accept / dismiss one or all, blur / pixelate, undo), Masks lane, export warning. See `docs/Privacy.md` | done (first version) | pytest `test_privacy.py`: fresh (unseen) session instance recall 1.000 (13/13), frame recall 0.991, 0 false positives (bounds ≥ 0.95 / ≥ 0.95 / ≤ 1 per min); dev 1.000 / 1.000 / 0; heldout first run frame recall 0.942 (failed, two bugs fixed, then 1.000); export with all accepted, 1.6x zoom: 6041 secret regions OCR'd, 0 leaked frames, control read 431/447 (0.96, bound 0.70); scan 32-46 s per minute of 720p30 video. Engine vitest `privacy.test.ts` (9), editor vitest (2), Playwright `privacy.spec.ts` (1) |
 | Annotations (demand #4): text (title / lower-third / label), arrows (straight / curved, head + tail styles), box / ellipse highlights, numbered step badges, callouts with pointer; fade / spring pop / draw-on / typewriter in and out; screen anchor (follows zoom + pan) or frame anchor; full-frame text slides inserted into the edit timeline with their own duration; auto step labels from clicks + local OCR (`lens-redact steps`), reviewed before they become badges; engine emits drawing ops, compositor and preview draw them; editor tool bar, on-preview drawing / handles / inline text, Annotations lane, style inspector, Steps panel, undo. See `docs/Annotations.md` | done (first version) | vitest `annotations.test.ts` 14 + editor `annotationOps.test.ts` 3; pytest `test_annotations.py` 6: arrow draw-on inside ±1 frame of the plan, export text OCR 14/14 words, screen-anchored box worst edge error 1.68 px over 135 zoomed frames (bound 2), slide exactly 45 frames + beeps after it within a frame + silent slide, step labels dev 14/14 and **held-out 16/16 exact** (bound 0.90), numbering 100% in click order; Playwright annotations parity SSIM mean 0.99043 / min 0.98289 (bounds 0.97 / 0.95), `annotations.spec.ts` 2/2 |
+| Presets and brand kit (demand #9): `.lenspreset` v2 (seven sections, validation with paths, v1 migration, canonical serialisation), built-ins (Clean Product Demo, Tutorial, Social Vertical 9:16, Dark Dev, Minimal), partial apply as one undo step, library with live thumbnails, default for new projects, import / export; theme slots (`@primary`, `@accent`, `@highlight`, `@font`, inherited backdrop) resolved item > brand > preset > built-in; brand kit (colours, derived backdrop, caption highlight, fonts incl. user files, logo watermark, intro / outro cards); editor Presets menu and Brand panel. See `docs/Presets.md` | done (first version) | vitest `presets.test.ts` 19; pytest `test_brand.py` 3: watermark alpha worst error 0.0036, position error 0 px; brand colour propagation #e8132a -> box (233.2, 18.6, 48.3), caption highlight (235.5, 18.5, 43.2), backdrop (51.9, 9.9, 17.9); #1c7ed6 -> box (29.0, 125.8, 216.6), caption (26.8, 126.2, 218.1), backdrop (11, 32, 52) exact; intro card exact length + backdrop. Playwright parity brand case SSIM mean 0.98722 / min 0.97228 and annotations 0.99042 / 0.98289 (bounds 0.97 / 0.95, unchanged); `presets.spec.ts` 4, `annotationsLane.spec.ts` 1 |
 | Tauri app shell | not started | |
 | GPU renderer (wgpu) | not started | |
 
@@ -207,3 +208,42 @@ was changed.
    numbers rise with click time. Found at the same time: the Steps panel numbered accepted steps
    1..6 on their own, which did not match the drawn badges; it now shows the drawn number.
 4. Audio: joins where the output has a gap (a text slide) now get the same 3 ms fades as cuts.
+
+Presets and brand kit (demand #9), 2026-11-09. Bounds were written into `tests/test_brand.py`,
+`packages/engine/test/presets.test.ts` and `apps/editor/e2e/presets.spec.ts` before the first
+measurement; the parity bounds are the existing ones.
+1. Measured: watermark alpha worst error 0.0036 (opaque half and alpha-128 half, against 0.6 and
+   0.6 x 128 / 255), position 0 px. Brand colour propagation (box stroke, caption highlight, derived
+   backdrop top-left, read back from the exported MP4):
+
+   | Primary | Box | Caption highlight | Backdrop |
+   |---|---|---|---|
+   | #e8132a | (233.2, 18.6, 48.3) | (235.5, 18.5, 43.2) | (51.9, 9.9, 17.9) |
+   | #1c7ed6 | (29.0, 125.8, 216.6) | (26.8, 126.2, 218.1) | (11, 32, 52), exact |
+
+   Parity (editor preview vs compositor): brand frames mean 0.98722 / min 0.97228; annotation frames
+   0.99042 / 0.98289.
+2. Test changes after first runs, recorded as changes to how a check measures (none lowers a stated
+   accuracy bound):
+   (a) `test_brand` "the change moved every element": the first version asked each element's colour
+   to move by an absolute 60 between the two primaries; the backdrop moved 40.9. The backdrop is a
+   deep shade (80% of the way to near-black), so the expected difference between the two primaries'
+   backdrops is itself small. The check is now "measured change >= 80% of the expected change" per
+   element, computed from the two primaries. This replaced a fixed bound with a relative one; it is a
+   change of criterion, recorded here.
+   (b) Preview watermark e2e: the first version required mean |diff| >= 20 inside the watermark
+   rect when it is switched off; it measured 18.4 (much of the rect is the logo's transparent
+   margin and its alpha-128 half). It now recovers the alpha from the white logo over what is under
+   it and requires the opaque core's p95 alpha to be 0.8 ± 0.03 (the brand opacity), and still 0
+   changed pixels outside the rect. This is a stricter, direct measurement of the same property.
+   (c) The logo probe frame moved to a frame where nothing else draws under the logo.
+   (d) Two unit-test fixture bugs were fixed (fixtures, not the code under test).
+3. Runs on this machine, Part A of the 2026-11-09 session (before any demand #8 code was built):
+   `npm run build && npm test` green (engine 131, editor 26). `python3 -m pytest`, run alone:
+   109 collected; the full run passed 102 and was then SIGKILLed by the kernel's global OOM killer
+   (dmesg: python3, anon-rss 426 MB; the root filesystem is RAM-backed and had just received 900 MB
+   of translation-model downloads for demand #8, since moved to the workspace disk); the two files
+   it had not finished, `test_stt.py` and `test_takes.py`, were rerun alone: 14/14 passed (after a
+   second OOM kill of the same cause). So every one of the 109 tests passed on the final Part A code;
+   not proven: one uninterrupted full run.
+

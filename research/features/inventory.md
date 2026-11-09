@@ -284,6 +284,8 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | TXT-01 (basic) | Shortcut overlays for modifier combos with Mac glyphs, repeat merging, 1200 ms display | `events.ts` shortcutOverlays, `render.py` |
 | AI-13 (text), (demand #3) | Automatic privacy redaction: on-device OCR + classifiers (emails, phones, Luhn cards, API keys, JWTs, tokens, IPs) and corner notification banners, tracked frame by frame (scroll, moving cards, partial cover), review list (accept / dismiss, blur / pixelate), accepted items as tracked masks that follow zooms; export warns while items are pending. Screen Studio's version is unique to it; FocuSee has manual masks only | `redact/lens_redact`, `privacy.ts`, `masks.ts` keyedRect, editor PrivacyPanel, `docs/Privacy.md` |
 | TXT-02, TXT-03, TXT-06 (callout), (demand #4) | Annotations: text (title, lower-third, label), arrows (straight / curved, triangle / open / dot heads and tails), box and ellipse highlights, numbered step badges, callout bubbles with a pointer; colour, fill, stroke, font size, bold, radius, shadow, opacity; in / out animations (fade, spring pop, draw-on, typewriter); anchored to the screen (follow zoom / pan) or to the frame; full-frame text slides inserted between segments with their own duration (audio shifts with them); auto step labels from clicks + local OCR ("Click Save", "Open Settings") reviewed before they become numbered badges. Editor: draw / move / resize on the preview, inline text editing, Annotations lane, style inspector, Steps panel. FocuSee has text / shapes / callouts; neither product drafts step labels | `annotations.ts`, `timeline.ts` insertSlides, `annotations.py`, editor `render/annotations.ts` + AnnotationOverlay / StepsPanel, `lens_redact/steps.py`, `docs/Annotations.md` |
+| OTH-01, (demand #9) | Style presets: named `.lenspreset` files (look, zoom, cursor, webcam, captions, audio cleanup, annotation styles), five built-ins, partial apply, live thumbnails, default for new projects, import / export, schema validation and migration; theme slots so presets restyle without overwriting hand-set colours | `presets.ts`, `theme.ts`, editor PresetsMenu, `docs/Presets.md` |
+| TXT-07, (demand #9) | Watermark and brand kit: logo watermark (corner, width, opacity, safe margin; premultiplied, area-resampled at pixel parity in preview and export), brand colours / backdrop / caption highlight / fonts, intro and outro cards | `brand.ts`, `render.py` draw_watermark, editor BrandPanel, `docs/Presets.md` |
 | (demand #1) | Multi-take with automatic best take: retakes found in the transcript, keep last / best take, rejected takes as reversible cuts (video, audio, captions follow), per-group swap, mark retake; editor Alt takes lane with A/B preview and undo. Neither product has it (Screen Studio: planned) | `takes.ts` resolveTakes, `plan.ts`, editor Timeline / TranscriptPanel, `docs/Takes.md` |
 | EXP-01, EXP-02, EXP-03 (basic) | H.264 MP4 via ffmpeg, CRF 18, fps 24/30/60 | `render.py`, `project.ts` |
 
@@ -304,7 +306,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | ZM-04 / ZM-06 | Zoom limits | `maxScale` isn't clamped for manual segments (only `scale<1` is rejected); no apply-to-all helper | P3 |
 | EXP-03 / EXP-08 | Export presets | Only CRF and preset in `RenderOptions`; no quality presets, size estimate or saved defaults | P2 |
 | LOOK-01 | Wallpapers | Image background works, but there's no bundled wallpaper library | P2 |
-| OTH-03 | Project files | `project.json` document defined; no saving or versioning, bundle, backups or project history | P2 |
+| OTH-03 | Project files | `project.json` saved into the bundle by the editor; no versioning, `.lens` package, backups or project history (the `.lens` folder from demand #9 is not built) | P2 |
 | REC-21 | Pre-record toggles | `zoom.auto` exists; no recorder to attach it to | P2 |
 
 ### Missing
@@ -317,7 +319,6 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | REC-11/12/13 | Pause/resume, countdown, global hotkeys | **P1** | |
 | AUD-05 | Background music (library, fade, loop, range) | P2 | |
 | COL-01/02 | Shareable links with access control | P2 | Needs a hosting backend |
-| OTH-01 | Style presets (save/apply/default/share) | P2 | `resolveProject` merge makes this cheap |
 | REC-05 / LOOK-15 | iPhone/iPad capture and device frames | P2 | |
 | REC-15 | Teleprompter / speaker notes excluded from capture | P2 | |
 | EDT-14 | Import an existing video as a project | P2 | |
@@ -328,7 +329,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | ZM-11 | 3D Motion | P2 | Unique to FocuSee |
 | ZM-12 | AI upscaling of zoomed text | P3 | Unique to Screen Studio |
 | AI-14 | Auto-hide faces | P2 | Sensitive text (AI-13) is implemented (demand #3, `docs/Privacy.md`); faces are not |
-| TXT-06 (magnifier), TXT-07 | Magnifier, watermark | P2 | FocuSee only. Text, shapes and callouts are implemented (demand #4, `docs/Annotations.md`) |
+| TXT-06 (magnifier) | Magnifier | P2 | FocuSee only. Text, shapes and callouts (demand #4) and the watermark (TXT-07, demand #9) are implemented |
 | EXP-05 | ProRes export | P3 | |
 | EXP-09/11/12 | Batch export, estimates, quick-share widget | P3 | |
 | REC-06 | Android capture | P3 | |

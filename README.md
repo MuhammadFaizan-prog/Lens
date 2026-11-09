@@ -67,6 +67,10 @@ redact/lens-redact steps screen.mp4 --events events.jsonl -o steps.json
 node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
   --step-labels steps.json --accept-steps --out plan.json
 
+# presets: apply a .lenspreset (all sections or some) before planning
+node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
+  --preset look.lenspreset --preset-sections look,captions --out plan.json
+
 # privacy: find sensitive text, then hide everything found (or review it in the editor's Privacy panel)
 redact/lens-redact screen.mp4 --events events.jsonl -o privacy.json --thumbs thumbs/
 node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
@@ -115,5 +119,8 @@ Annotations: text, arrows, box / ellipse highlights, numbered step badges and ca
 pop / draw-on / typewriter animations, anchored to the screen (they follow zooms) or the frame, plus
 full-frame text slides; auto step labels drafted from clicks + local OCR and reviewed in the editor's
 Steps panel (`annotations`, `slides`, `stepLabels`, see `docs/Annotations.md`).
+Presets and brand kit: `.lenspreset` files for the whole look (five built-ins, partial apply, live
+thumbnails, default for new projects, import / export) and a brand kit (colours, fonts, logo
+watermark, intro / outro cards) that themed elements inherit (`theme`, `brand`, see `docs/Presets.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.
