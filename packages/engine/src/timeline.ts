@@ -76,3 +76,60 @@ export function sourceToOutput(pieces: TimelinePiece[], srcMs: number): number |
   for (const p of pieces) if (srcMs >= p.srcStart && srcMs < p.srcEnd) return p.outStart + (srcMs - p.srcStart) / p.rate;
   return null;
 }
+
+/** Where a text slide sits on the output clock: [outStart, outEnd), holding source time srcAt. */
+export interface SlideSpan {
+  id: string;
+  outStart: number;
+  outEnd: number;
+  srcAt: number;
+}
+
+/**
+ * Insert full-frame slides into the edit timeline (demand #4 text slides). Each slide goes in at its
+ * source time (inside a cut: where the cut is, i.e. before the next kept source); the piece there is
+ * split and everything after it moves later by the slide's duration. Audio pieces are derived from
+ * these pieces, so the audio after a slide shifts by exactly the same amount and stays in sync, and
+ * the slide itself is silent. outputToSource holds the slide's source time during the slide.
+ */
+export function insertSlides(pieces: TimelinePiece[], slides: Array<{ id: string; atMs: number; durationMs: number }>): { pieces: TimelinePiece[]; spans: SlideSpan[] } {
+  let ps = pieces.map((p) => ({ ...p }));
+  const spans: SlideSpan[] = [];
+  const order = slides.map((s, i) => ({ s, i })).sort((a, b) => a.s.atMs - b.s.atMs || a.i - b.i);
+  for (const { s } of order) {
+    const d = Math.max(0, s.durationMs);
+    let idx = ps.findIndex((p) => s.atMs < p.srcEnd);
+    let outAt: number;
+    let srcAt: number;
+    if (idx < 0) {
+      // after the last kept source: at the end of the output
+      const last = ps[ps.length - 1];
+      outAt = Math.max(last ? last.outEnd : 0, spans.length ? spans[spans.length - 1]!.outEnd : 0);
+      srcAt = last ? last.srcEnd : s.atMs;
+      idx = ps.length;
+    } else {
+      const p = ps[idx]!;
+      if (s.atMs > p.srcStart) {
+        // split the piece at the slide
+        const mid = p.outStart + (s.atMs - p.srcStart) / p.rate;
+        const a = { ...p, srcEnd: s.atMs, outEnd: mid };
+        const b = { ...p, srcStart: s.atMs, outStart: mid };
+        ps.splice(idx, 1, a, b);
+        idx += 1;
+        outAt = mid;
+        srcAt = s.atMs;
+      } else {
+        outAt = p.outStart;
+        srcAt = p.srcStart;
+      }
+    }
+    ps = ps.map((p, j) => (j >= idx ? { ...p, outStart: p.outStart + d, outEnd: p.outEnd + d } : p));
+    for (const sp of spans) if (sp.outStart >= outAt) {
+      sp.outStart += d;
+      sp.outEnd += d;
+    }
+    spans.push({ id: s.id, outStart: outAt, outEnd: outAt + d, srcAt });
+  }
+  spans.sort((a, b) => a.outStart - b.outStart);
+  return { pieces: ps, spans };
+}

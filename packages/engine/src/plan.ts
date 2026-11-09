@@ -7,7 +7,8 @@ import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events
 import { layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
-import { buildTimeline, mergeRanges, outputDuration, outputToSource } from "./timeline.js";
+import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, type SlideSpan } from "./timeline.js";
+import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
 import { resolveTakes, type TakeGroup } from "./takes.js";
 import { captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
@@ -54,6 +55,8 @@ export interface RenderPlan {
   /** The part of cuts that removes rejected takes. */
   takeCuts: TimeRange[];
   zoomSegments: ZoomSegment[];
+  /** Text slides on the output clock (demand #4): each holds its source time and has no audio. */
+  slides: SlideSpan[];
   frames: PlanFrame[];
 }
 
@@ -74,6 +77,14 @@ export interface PlanFrame {
   masks: MaskFrame[];
   shortcut: string | null;
   caption: CaptionFrame | null;
+  /**
+   * Annotations on this frame (demand #4), as drawing ops: screen-anchored ones in cropped source px
+   * (mapped through the camera, drawn inside the screen under the cursor), frame-anchored ones in
+   * output px (drawn above the webcam, under shortcut and caption). List order = draw order.
+   */
+  annotations: AnnFrame[];
+  /** A full-frame text slide over everything (output px), or null. */
+  slide: SlideFrame | null;
 }
 
 export interface PlanInputs {
@@ -127,9 +138,10 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   // Multi-take (demand #1): rejected takes become cuts, so audio, captions and video all follow.
   const takes = resolveTakes(words, project.edits.takes, cl.fillers, meta.durationMs);
   const allCuts = mergeRanges([...project.edits.cuts, ...autoCuts, ...takes.cuts]);
-  const timeline = buildTimeline(meta.durationMs, allCuts, speed);
+  const slideList = project.slides;
+  const { pieces: timeline, spans: slideSpans } = insertSlides(buildTimeline(meta.durationMs, allCuts, speed), slideList);
   const blend = project.camera.zoomedSize !== 1 ? zoomBlendTrack(camera, zoomSegments, project.zoom.spring) : [];
-  const durationMs = outputDuration(timeline);
+  const durationMs = Math.max(outputDuration(timeline), ...slideSpans.map((sp) => sp.outEnd));
   const frames = Math.max(1, Math.round((durationMs / 1000) * fps));
 
   const clickList = clickEffects(events).filter((c) => insideCrop(c, crop));
@@ -138,10 +150,15 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
   const captions = project.captions.enabled ? captionBlocks(shownWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
 
+  const annSpace = { cropX: crop.x, cropY: crop.y, width: out.width, height: out.height, resScale };
+  const numbers = badgeNumbers(project.annotations);
+
   const planFrames: PlanFrame[] = [];
   for (let i = 0; i < frames; i++) {
     const t = (i * 1000) / fps;
-    const src = outputToSource(timeline, t);
+    const span = slideSpans.find((sp) => t >= sp.outStart - 1e-6 && t < sp.outEnd - 1e-6);
+    const src = span ? span.srcAt : outputToSource(timeline, t);
+    const slide = span ? slideList.find((x) => x.id === span.id) : undefined;
     const c = sampleTrack(camera, src, lerpCamera);
     const k = sampleTrack(cursor, src, lerpCursor);
     let layout = layoutAt(src, project.camera.layouts, out, sourceAspect, project);
@@ -155,15 +172,16 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
       : clickList
           .filter((cl) => src >= cl.t && src - cl.t < project.cursor.clickEffectMs && !cursorOverrideAt(project.overrides, cl.t).hidden)
           .map((cl) => [r2(cl.x), r2(cl.y), r4((src - cl.t) / project.cursor.clickEffectMs)] as [number, number, number]);
-    const sc = shortcuts.find((s) => src >= s.startMs && src < s.endMs);
-    const cap = captions.find((b) => src >= b.startMs && src < b.endMs);
+    // during a slide the source holds still: no clicks, shortcut or caption from the frozen moment
+    const sc = span ? undefined : shortcuts.find((s) => src >= s.startMs && src < s.endMs);
+    const cap = span ? undefined : captions.find((b) => src >= b.startMs && src < b.endMs);
     planFrames.push({
       t: r2(t),
       src: r2(src),
       cam: [r2(c.cx), r2(c.cy), r4(c.scale)],
-      camVel: [r2(c.vx), r2(c.vy), r4(c.vScale)],
+      camVel: span ? [0, 0, 0] : [r2(c.vx), r2(c.vy), r4(c.vScale)],
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
-      clicks: activeClicks,
+      clicks: span ? [] : activeClicks,
       layout: {
         screen: [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)],
         screenOpacity: r4(layout.screenOpacity),
@@ -174,6 +192,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
       masks: masksAt(masks, src),
       shortcut: sc ? sc.label : null,
       caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight) : null,
+      annotations: annotationsAt(project.annotations, src, annSpace, numbers),
+      slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale) : null,
     });
   }
 
@@ -214,6 +234,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
     takes: takes.groups,
     takeCuts: takes.cuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     zoomSegments,
+    slides: slideSpans.map((sp) => ({ id: sp.id, outStart: r2(sp.outStart), outEnd: r2(sp.outEnd), srcAt: r2(sp.srcAt) })),
     frames: planFrames,
   };
 }

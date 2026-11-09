@@ -15,6 +15,7 @@ import { springFromSettle } from "./spring.js";
 import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
 import { DEFAULT_TAKES, type TakeSettings } from "./takes.js";
 import { defaultPrivacy, validateKeys, validatePrivacy, type PrivacySettings } from "./privacy.js";
+import { normalizeAnnotation, normalizeSlide, validateAnnotations, type Annotation, type StepLabelSettings, type TextSlide } from "./annotations.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -163,6 +164,12 @@ export interface ProjectConfig {
   privacy: PrivacySettings;
   /** Per-segment overrides of cursor and audio volume, source time (CUR-01, EDT-05/06). */
   overrides: SegmentOverride[];
+  /** Text, arrows, highlights, step badges and callouts (demand #4); later items draw on top. */
+  annotations: Annotation[];
+  /** Full-frame title cards inserted into the output at a source time (demand #4). */
+  slides: TextSlide[];
+  /** Auto step-label drafts from clicks + local OCR and their review state (demand #4). */
+  stepLabels: StepLabelSettings;
   audio: {
     tracks: AudioTrack[];
     /** FFT denoise (ffmpeg afftdn); amountDb is the noise reduction in dB. */
@@ -308,6 +315,9 @@ export function defaultProject(): ProjectConfig {
     masks: [],
     privacy: defaultPrivacy(),
     overrides: [],
+    annotations: [],
+    slides: [],
+    stepLabels: { drafts: [], generatedAt: null },
     audio: {
       tracks: [],
       noiseReduction: { enabled: false, amountDb: 12 },
@@ -339,6 +349,9 @@ export class ProjectValidationError extends Error {}
 export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {}): ProjectConfig {
   const p = deepMerge(defaultProject(), partial);
   const errs: string[] = [];
+  // annotations / slides written by hand may leave out style and animation fields
+  if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
+  if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
   if (p.version !== 1) errs.push(`unsupported project version ${String(p.version)}`);
   if (!/^\d+:\d+$/.test(p.output.aspect)) errs.push(`output.aspect must look like 16:9, got ${p.output.aspect}`);
   if (![24, 30, 60].includes(p.output.fps)) errs.push("output.fps must be 24, 30 or 60");
@@ -368,6 +381,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (ke) errs.push(`mask ${m.id} ${ke}`);
   }
   errs.push(...validatePrivacy(p.privacy));
+  errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
   for (const o of p.overrides) {
     if (o.endMs <= o.startMs) errs.push("override ends before it starts");
     if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");
