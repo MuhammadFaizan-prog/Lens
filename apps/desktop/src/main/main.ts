@@ -43,6 +43,10 @@ let hotkey = settings.shortcuts.startStop;
 function applySettingsEnv(): void {
   process.env.LENS_SAVE_DIR = settings.general.saveDir;
   process.env.LENS_EXPORT_DIR = settings.general.exportDir;
+  // read per job by the editor server: export bitrate (browserExport.ts) and whether the finalize may
+  // use a hardware H.264 encoder (h264.ts; Settings > Hardware acceleration off = libx264 only)
+  process.env.LENS_EXPORT_BITRATE_MBPS = String(settings.export.bitrateMbps);
+  process.env.LENS_H264_HW = settings.general.hardwareAcceleration ? "on" : "off";
 }
 applySettingsEnv();
 if (!settings.general.hardwareAcceleration) app.disableHardwareAcceleration();

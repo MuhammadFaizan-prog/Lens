@@ -3,7 +3,8 @@
  * 2026-11-09: saving slow, "not optimized acc to fps n quality"). A hardware encoder is used when the
  * ffmpeg build has one and a 1-frame test encode with it succeeds on this machine (h264_nvenc /
  * h264_qsv / h264_amf on Windows, h264_videotoolbox on macOS); otherwise libx264 at a fast preset.
- * Quality follows Settings > Record quality. LENS_H264_ENCODER=<name> forces one (libx264 = software).
+ * Quality follows Settings > Record quality. LENS_H264_ENCODER=<name> forces one (libx264 = software);
+ * LENS_H264_HW=off (Settings > Hardware acceleration off) skips the hardware encoders.
  */
 import { spawn } from "node:child_process";
 
@@ -54,6 +55,7 @@ const broken = new Set<string>();
 export function pickH264(ffmpeg: string): Promise<string> {
   const forced = process.env.LENS_H264_ENCODER;
   if (forced) return Promise.resolve(forced);
+  if (process.env.LENS_H264_HW === "off") return Promise.resolve("libx264");
   let p = picked.get(ffmpeg);
   if (!p) {
     p = (async () => {
