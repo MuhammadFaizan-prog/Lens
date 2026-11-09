@@ -20,6 +20,11 @@ interface Bridge {
   captureSource(id: string, opts?: { systemAudio?: boolean }): Promise<{ ok: boolean }>;
   pickRegion(displayId: string | undefined): Promise<{ x: number; y: number; w: number; h: number } | null>;
   teleprompter(): Promise<{ open: boolean }>;
+  history(): Promise<Array<{ dir: string; name: string; createdMs: number; durationMs: number | null; imported: boolean; thumbnail: string | null }>>;
+  historyOpen(dir: string): Promise<void>;
+  historyReveal(dir: string): Promise<void>;
+  historyDelete(dir: string): Promise<void>;
+  importVideo(file?: string): Promise<{ dir: string } | null>;
   status(): Promise<{ hotkey: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
   begin(): Promise<{ dir: string }>;
   started(info: unknown): Promise<unknown>;
@@ -507,6 +512,73 @@ async function drawRegion(): Promise<void> {
   setMode("region");
 }
 
+// ---- File menu (Windows #18): History, Import Video
+const fmt = (ms: number | null) => (ms == null ? "?" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+async function showHistory(): Promise<number> {
+  $("file-menu").hidden = true;
+  $("history").hidden = false;
+  const list = $("history-list");
+  list.textContent = "Loading…";
+  const items = await lens.history();
+  list.textContent = "";
+  if (!items.length) list.textContent = "No recordings yet.";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "hitem";
+    row.dataset.testid = "history-item";
+    row.dataset.dir = it.dir;
+    const img = document.createElement(it.thumbnail ? "img" : "div");
+    if (it.thumbnail) (img as HTMLImageElement).src = it.thumbnail;
+    else img.className = "noimg";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const b = document.createElement("b");
+    b.textContent = it.name.replace(/^Lens-/, "") + (it.imported ? " (imported)" : "");
+    meta.append(b, `${new Date(it.createdMs).toLocaleString()} · ${fmt(it.durationMs)}`);
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    for (const [label, fn] of [
+      ["Open", () => void lens.historyOpen(it.dir)],
+      ["Show in folder", () => void lens.historyReveal(it.dir)],
+      ["Delete", async () => {
+        if (!confirm(`Delete ${it.name}? This removes the recording and its edits.`)) return;
+        await lens.historyDelete(it.dir);
+        void showHistory();
+      }],
+    ] as const) {
+      const btn = document.createElement("button");
+      btn.className = "tab";
+      btn.textContent = label;
+      btn.dataset.testid = `history-${label.split(" ")[0]!.toLowerCase()}`;
+      btn.onclick = fn as () => void;
+      acts.append(btn);
+    }
+    row.append(img, meta, acts);
+    list.append(row);
+  }
+  return items.length;
+}
+async function importVideo(file?: string): Promise<unknown> {
+  $("file-menu").hidden = true;
+  setStatus("Importing…");
+  try {
+    const r = await lens.importVideo(file);
+    setStatus(r ? "Imported — opened in the editor" : "Ready");
+    return r;
+  } catch (e) {
+    setStatus(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+$("file-btn").onclick = (e) => {
+  e.stopPropagation();
+  $("file-menu").hidden = !$("file-menu").hidden;
+};
+document.addEventListener("click", () => ($("file-menu").hidden = true));
+$("menu-history").onclick = () => void showHistory();
+$("menu-import").onclick = () => void importVideo();
+$("history-close").onclick = () => ($("history").hidden = true);
+
 document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => (b.onclick = () => setMode(b.dataset.mode as Mode)));
 $("mic-device").onchange = () => void applyDevices();
 $("cam-device").onchange = () => void applyDevices();
@@ -581,6 +653,8 @@ void lens.updateState().then((u) => {
   start,
   stop,
   setMode,
+  showHistory,
+  importVideo,
   setRegion: (r: typeof region) => ((region = r), setMode("region")),
   devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,

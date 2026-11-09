@@ -4,11 +4,12 @@
  * (recording.ts) and the bundled editor (editorServer.ts), opened on the new project after Stop.
  * See docs/Desktop.md.
  */
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, Menu, nativeImage, screen, session, Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, shell, globalShortcut, ipcMain, Menu, nativeImage, screen, session, Tray } from "electron";
 import path from "node:path";
 import { displayForSource } from "../shared/coords";
 import { startEditorServer, type EditorServer } from "./editorServer";
 import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
+import { IMPORT_EXTENSIONS, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
 
@@ -316,6 +317,24 @@ function registerIpc(): void {
     const captured = info.kind === "screen" ? displayForSource(info.displayId, info.sourceId, displays) : null;
     rec.start(info, captured);
     return { ok: true };
+  });
+  ipcMain.handle("lens:history", () => listHistory(recordingsDir(), ffmpegPath()));
+  ipcMain.handle("lens:history-open", async (_e, dir: string) => {
+    await openEditor(dir);
+  });
+  ipcMain.handle("lens:history-reveal", (_e, dir: string) => shell.showItemInFolder(path.join(dir, "screen.mp4")));
+  ipcMain.handle("lens:history-delete", (_e, dir: string) => deleteBundle(recordingsDir(), dir));
+  ipcMain.handle("lens:import", async (_e, file?: string) => {
+    let f = file;
+    if (!f) {
+      const r = await dialog.showOpenDialog(recorderWin ?? undefined!, { title: "Import video to create a Lens project", properties: ["openFile"], filters: [{ name: "Video", extensions: IMPORT_EXTENSIONS }] });
+      if (r.canceled || !r.filePaths[0]) return null;
+      f = r.filePaths[0];
+    }
+    const dir = await importVideo(recordingsDir(), ffmpegPath(), f);
+    (globalThis as Record<string, unknown>).lensLastImport = dir;
+    await openEditor(dir);
+    return { dir };
   });
   ipcMain.handle("lens:pick-region", (_e, displayId?: string) => pickRegion(displayId));
   ipcMain.handle("lens:teleprompter", () => toggleTeleprompter());

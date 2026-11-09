@@ -9,9 +9,22 @@
   <body>
     <div id="update" class="update" data-testid="update" hidden><span id="update-text"></span><button id="update-btn" data-testid="update-btn"></button></div>
     <header>
-      <h1>Lens</h1>
+      <div class="brand">
+        <h1>Lens</h1>
+        <div class="menu">
+          <button id="file-btn" class="tab" data-testid="file-menu" aria-haspopup="true">File ▾</button>
+          <div id="file-menu" class="menu-list" hidden>
+            <button id="menu-history" data-testid="menu-history">History</button>
+            <button id="menu-import" data-testid="menu-import">Import Video to Create Project…</button>
+          </div>
+        </div>
+      </div>
       <span id="status" data-testid="status">Ready</span>
     </header>
+    <section id="history" class="history" data-testid="history" hidden>
+      <div class="tabs"><span class="pick-title">History</span><button id="history-close" class="tab">Back</button></div>
+      <div id="history-list" class="history-list"></div>
+    </section>
     <main class="home">
       <div class="left">
         <section id="pick">
