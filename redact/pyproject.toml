@@ -1,0 +1,17 @@
+[project]
+name = "lens-redact"
+version = "0.1.0"
+description = "Lens on-device privacy scan: OCR, sensitive-text classifiers and box tracking for automatic redaction"
+requires-python = ">=3.10"
+dependencies = ["numpy", "opencv-python-headless"]
+license = { text = "UNLICENSED" }
+
+[project.scripts]
+lens-redact = "lens_redact.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lens_redact"]

@@ -79,6 +79,16 @@ def transcribe_track(project: dict, project_dir: Path, out_path: Path) -> Option
     return out_path
 
 
+def privacy_warning(project: dict) -> Optional[str]:
+    """A warning when the scan found sensitive items nobody reviewed yet (they render unmasked)."""
+    dets = _get(project, "privacy", "detections", default=[]) or []
+    pending = [d for d in dets if d.get("state", "pending") == "pending"]
+    if not pending:
+        return None
+    kinds = sorted({d.get("type", "?") for d in pending})
+    return f"warning: {len(pending)} privacy detection{'s' if len(pending) > 1 else ''} not reviewed ({', '.join(kinds)}); they are not masked in this export"
+
+
 @dataclass
 class PipelineResult:
     plan: Path
@@ -98,6 +108,9 @@ def run(meta: str, events: str, project_path: Optional[str], screen: str, out: s
     for t in _get(project, "audio", "tracks", default=[]) or []:
         if t.get("path") and not Path(t["path"]).is_absolute():
             t["path"] = str((project_dir / t["path"]).resolve())
+    warn = privacy_warning(project)
+    if warn:
+        print(warn, file=sys.stderr)
     resolved = work / f"{stem}.project.json"
     resolved.write_text(json.dumps(project))
     transcript = Path(words) if words else transcribe_track(project, project_dir, work / f"{stem}.transcript.json")
