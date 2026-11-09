@@ -278,7 +278,7 @@ function pickRegion(displayId?: string): Promise<{ x: number; y: number; w: numb
   });
   return new Promise((resolve) => {
     const done = (_e: unknown, r: { x: number; y: number; w: number; h: number } | null) => {
-      ipcMain.removeAllListeners("lens:region-done");
+      ipcMain.removeListener("lens:region-done", once);
       if (!win.isDestroyed()) win.destroy();
       if (regionWin === win) regionWin = null;
       if (hadRecorder) showRecorder();

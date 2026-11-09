@@ -245,6 +245,15 @@ async function start(sourceId?: string): Promise<void> {
   if (!selected) await loadSources();
   const src = selected;
   if (!src) throw new Error("no capture source");
+  // Custom mode with no area yet: open the drag overlay now instead of failing (Windows report 2026-11-09)
+  if (mode === "region" && !region) {
+    await drawRegion();
+    if (state !== "idle") return; // a second Record press shared this overlay and already started
+    if (!region) {
+      setStatus("Custom mode: drag an area to record, or pick Full Screen");
+      return;
+    }
+  }
   state = "starting";
   lastError = null;
   if (COUNTDOWN > 0) {
@@ -532,14 +541,23 @@ function setMode(m: Mode): void {
   document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
   if (selected && selected.kind !== tab) selected = sources.find((s) => s.kind === tab) ?? null;
   $("region-info").hidden = m !== "region";
-  if (m === "region") $("region-info").textContent = region ? `Area ${Math.round(region.w * 100)}% x ${Math.round(region.h * 100)}% of the screen · click the screen again to redraw` : "Click a screen to drag the area to record.";
+  if (m === "region") $("region-info").textContent = region ? `Area ${Math.round(region.w * 100)}% x ${Math.round(region.h * 100)}% of the screen · click the screen again to redraw` : "Drag the area to record. Click a screen to redraw.";
   renderSources();
 }
 
-async function drawRegion(): Promise<void> {
-  const r = await lens.pickRegion(selected?.displayId);
-  if (r && r.w > 0.01 && r.h > 0.01) region = r;
-  setMode("region");
+// single flight: the mode card, a screen thumbnail and Record can all ask for the overlay; only one opens
+let regionPick: Promise<void> | null = null;
+function drawRegion(): Promise<void> {
+  regionPick ??= (async () => {
+    try {
+      const r = await lens.pickRegion(selected?.displayId);
+      if (r && r.w > 0.01 && r.h > 0.01) region = r;
+    } finally {
+      regionPick = null;
+    }
+    setMode("region");
+  })();
+  return regionPick;
 }
 
 // ---- File menu (Windows #18): History, Import Video
@@ -614,7 +632,17 @@ $("menu-history").onclick = () => void showHistory();
 $("menu-import").onclick = () => void importVideo();
 $("history-close").onclick = () => ($("history").hidden = true);
 
-document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => (b.onclick = () => setMode(b.dataset.mode as Mode)));
+document.querySelectorAll<HTMLButtonElement>(".mode").forEach(
+  (b) =>
+    (b.onclick = () => {
+      setMode(b.dataset.mode as Mode);
+      // Custom: open the drag overlay straight away on the selected (or first) screen
+      if (b.dataset.mode === "region" && state === "idle") {
+        if (!selected) selected = sources.find((s) => s.kind === "screen") ?? null;
+        void drawRegion();
+      }
+    }),
+);
 $("mic-device").onchange = () => void applyDevices();
 $("cam-device").onchange = () => void applyDevices();
 $("teleprompter").onclick = () => void lens.teleprompter();

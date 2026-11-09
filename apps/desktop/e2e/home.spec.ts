@@ -2,6 +2,8 @@
  * Windows #7: recorder home. Mode cards (Full Screen / Custom / Window / Device-disabled), a Devices
  * column (camera with preview, mic with a level meter, system audio, teleprompter). Chromium's fake
  * capture devices stand in for a webcam and a mic (a beeping tone).
+ * Custom: clicking only the mode card opens the "Lens region" overlay; Record in Custom mode with no
+ * area opens the overlay (no "Could not start" error) and cancelling it leaves the recorder idle.
  * Bounds: 4 mode cards, Device disabled; Window mode lists windows (or its empty state); >= 1 camera
  * and >= 1 mic listed; mic meter peak > 5% within 2 s; camera preview playing; Custom: a drag from
  * (200,150) to (840,510) on the 1280x720 screen gives region within 1% and project.json crop within
@@ -23,6 +25,15 @@ test.afterAll(async () => {
   await app?.close().catch(() => undefined);
   xvfb?.kill();
 });
+
+async function waitRegionOverlay(a: ElectronApplication, ms = 10_000): Promise<boolean> {
+  for (let i = 0; i < ms / 100; i++) {
+    const has = await a.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === "Lens region" && w.isVisible()));
+    if (has) return true;
+    await sleep(100);
+  }
+  return false;
+}
 
 test("recorder home: modes, devices, custom region, webcam take, teleprompter", async () => {
   test.setTimeout(300_000);
@@ -61,14 +72,10 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   report.sysAudioDisabled = await rec.locator('[data-testid="sys-audio"]').isDisabled();
   await rec.screenshot({ path: path.join(run, "home-devices.png") });
 
-  // Custom region: pick the screen, drag on the overlay
+  // Custom region: clicking ONLY the mode card opens the drag overlay (v0.1.2 needed a thumbnail click, which nobody does)
   await rec.click('[data-testid="mode-region"]');
-  await rec.click('[data-testid="sources"] button.src');
-  for (let i = 0; i < 50; i++) {
-    const has = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === "Lens region" && w.isVisible()));
-    if (has) break;
-    await sleep(100);
-  }
+  report.overlayOnCard = await waitRegionOverlay(app);
+  expect(report.overlayOnCard, "Custom mode card opens the Lens region overlay").toBe(true);
   await sleep(500);
   report.windowsAtDrag = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => [w.getTitle(), w.isVisible(), w.getBounds()]));
   console.log("windows at drag", JSON.stringify(report.windowsAtDrag));
@@ -105,6 +112,18 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   }
   report.micWav = fs.existsSync(path.join(dir, "mic.wav"));
 
+  // Record in Custom mode with no area: opens the overlay instead of "Could not start: drag the area to record first"
+  await rec.evaluate(() => (window as any).lensRecorder.setRegion(null));
+  await rec.waitForFunction(() => (window as any).lensRecorder.state().state === "idle", null, { timeout: 10_000 });
+  await rec.click('[data-testid="go"]');
+  report.overlayOnRecord = await waitRegionOverlay(app);
+  report.statusOnRecord = await rec.locator('[data-testid="status"]').textContent().catch(() => null);
+  report.lastErrorOnRecord = (await rec.evaluate(() => (window as any).lensRecorder.state().lastError)) ?? null;
+  // cancel the overlay (closing it resolves the pick with null): Lens stays idle with a hint, no error
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === "Lens region")?.close());
+  await rec.waitForFunction(() => /drag an area/i.test(document.getElementById("status")?.textContent ?? ""), null, { timeout: 10_000 }).catch(() => undefined);
+  report.afterCancel = await rec.evaluate(() => ({ state: (window as any).lensRecorder.state().state, status: document.getElementById("status")?.textContent, region: (window as any).lensRecorder.devices().region }));
+
   // teleprompter
   const recWin = await app.browserWindow(rec);
   void recWin;
@@ -139,6 +158,11 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   expect(report.camMp4).toBe(true);
   expect(Math.abs(report.camFrames - report.expectFrames)).toBeLessThanOrEqual(2);
   expect(report.micWav).toBe(true);
+  expect(report.overlayOnRecord, "Record in Custom mode with no area opens the overlay").toBe(true);
+  expect(String(report.statusOnRecord)).not.toMatch(/Could not start/);
+  expect(report.afterCancel.state).toBe("idle");
+  expect(report.afterCancel.region).toBeNull();
+  expect(String(report.afterCancel.status)).not.toMatch(/Could not start/);
   expect(report.prompter.open).toBe(true);
   expect(report.prompter.alwaysOnTop).toBe(true);
   // setContentProtection is a no-op on Linux (Electron supports it on Windows and macOS only)
