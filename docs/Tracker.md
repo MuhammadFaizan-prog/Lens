@@ -362,6 +362,19 @@ PDF pages = steps + 1; no network request offline). No bound was changed.
    the step-label tests in `tests/test_annotations.py` use. The original came back from 74332aa and
    the marker session moved to `lensharness/demo_synth.py` (a795aef); `test_annotations.py` 6 / 6 and
    `test_steps_export.py` 6 / 6 after the fix.
-4. Not done: per-step video snippets, the analytics beacon and the 5-team pilot, branching demos,
+4. Full verification after the fix (2026-11-09, commit feab5e7 code, one suite per invocation):
+   `npm run build && npm test` engine 156 / 156, cli unit 27 / 27, editor 26 / 26; CLI integration
+   core 27 / 27, cli 20 / 20, mcp 6 / 6, script 4 / 4; pytest 124 / 124 passed before the kernel OOM
+   killer took the pytest process inside `test_translation.py` (test 4 of 9; the sandbox restarted
+   minutes later), then `test_translation.py` alone 9 / 9, so 130 / 130 over two invocations;
+   Playwright annotations 2 / 2, annotationsLane 1 / 1, demo 1 / 1 (its first attempt lost the worker
+   to the OOM killer), editor 14 / 14, presets 4 / 4, privacy 1 / 1, stepsExport 2 / 2, takes 2 / 2,
+   translate 1 / 1. Parity (4 tests) was run three times and every run lost one test's process to the
+   OOM killer (python3 `parity_ssim.py` or the Playwright worker, each confirmed in `dmesg`), never
+   the same test twice in a row and never by an assertion: every parity test passed in at least one
+   run, with the same numbers as before (sample 0.98948 / 0.98311, annotations 0.99042 / 0.98289,
+   brand 0.98722 / 0.97228, Urdu 0.98955 / 0.98399; bounds 0.97 / 0.95). Not retried further. The
+   sandbox has ~1.3-2 GB free while the editor, Chromium and a compositor job run together.
+5. Not done: per-step video snippets, the analytics beacon and the 5-team pilot, branching demos,
    hosting.
 
