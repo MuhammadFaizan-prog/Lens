@@ -4,13 +4,14 @@ import { store, useEditor } from "../state/store";
 import {
   addBlock,
   blocksOf,
+  canOverlap,
   createRange,
-  deleteBlock,
   freeSpan,
   MIN_BLOCK_MS,
   moveRange,
   normalizeCuts,
   resizeRange,
+  snap,
   timecode,
   updateBlock,
   type Range,
@@ -41,6 +42,18 @@ const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: st
   { kind: "caption", label: "Captions" },
   { kind: "audio", label: "Audio" },
 ];
+
+/** Lane id in TRACKS -> the block track it holds (takes hold none). */
+const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
+const MARQUEE_PX = 4;
+
+type MenuState = { x: number; y: number; kind: "block" } | { x: number; y: number; kind: "lane"; track: TrackKind; label: string };
+
+/** True when keyboard focus is inside the timeline (arrow keys nudge, Ctrl+A selects all). */
+export function timelineHasFocus(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  return !!el?.closest?.("[data-timeline-root]");
+}
 
 interface DragState {
   track: TrackKind;
@@ -73,6 +86,7 @@ export function Timeline() {
   const bundle = useEditor((s) => s.bundle);
   const frame = useEditor((s) => s.frame);
   const selection = useEditor((s) => s.selection);
+  const multi = useEditor((s) => s.multi);
   const audition = useEditor((s) => s.audition);
   const playing = useEditor((s) => s.playing);
   const duration = bundle?.meta.durationMs ?? 1;
@@ -83,6 +97,32 @@ export function Timeline() {
   const [guide, setGuide] = useState<number | null>(null);
   const drag = useRef<DragState | null>(null);
   const [, force] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const isSel = (track: TrackKind, index: number) => multi.some((x) => x.track === track && x.index === index);
+
+  // menus close on any outside press, Escape, scroll or resize
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e.type === "pointerdown" && (e.target as Element)?.closest?.(".tl-menu")) return;
+      setMenu(null);
+    };
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", close, true);
+    window.addEventListener("resize", close);
+    const el = scroller.current;
+    el?.addEventListener("scroll", close);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", close, true);
+      window.removeEventListener("resize", close);
+      el?.removeEventListener("scroll", close);
+    };
+  }, [menu]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -118,11 +158,12 @@ export function Timeline() {
     return mergeCaptionCues(captionBlocks(kept, project.captions.maxWordsPerBlock, project.captions.maxBlockMs), project.captions.cues).filter((b) => !b.manual);
   }, [bundle, plan?.cuts, project.edits.cleanup, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, project.captions.cues, project.captions.wordEdits]);
 
-  const snapTargets = (exclude: { track: TrackKind; index: number } | null): number[] => {
+  const snapTargets = (exclude: { track: TrackKind; index: number } | null, group?: Set<string>): number[] => {
     const t: number[] = [0, duration, playSrc];
     for (const k of ["zoom", "cut", "speed", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
+        if (group?.has(`${k}:${i}`)) return;
         t.push(b.startMs, b.endMs);
       });
     }
@@ -139,9 +180,20 @@ export function Timeline() {
   const startDrag = (e: React.PointerEvent, track: TrackKind, index: number, r: Range) => {
     e.stopPropagation();
     if (e.button !== 0) return;
+    root.current?.focus({ preventScroll: true });
+    // Ctrl/Cmd+click toggles a block in the group, Shift+click adds the run between it and the primary
+    if (e.ctrlKey || e.metaKey) {
+      store.toggleSelect({ track, index });
+      return;
+    }
+    if (e.shiftKey) {
+      store.selectRange({ track, index });
+      return;
+    }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const off = e.clientX - rect.left;
     const mode: DragState["mode"] = off < 7 ? "start" : off > rect.width - 7 ? "end" : "move";
+    if (mode === "move" && store.get().multi.length > 1 && isSel(track, index)) return startGroupDrag(e, track, index, r);
     let idx = index;
     if (track === "zoom") {
       // live auto zooms become editable blocks first (see freezeAutoZooms)
@@ -151,8 +203,8 @@ export function Timeline() {
     }
     store.select({ track, index: idx });
     const blocks = blocksOf(store.get().project, track);
-    // cuts merge and annotations may overlap: they can go anywhere
-    const [lo, hi] = track === "cut" || track === "annotation" ? [0, duration] : freeSpan(blocks, (r.startMs + r.endMs) / 2, duration, idx);
+    // tracks whose blocks may overlap (cuts merge) can go anywhere
+    const [lo, hi] = canOverlap(track) ? [0, duration] : freeSpan(blocks, (r.startMs + r.endMs) / 2, duration, idx);
     drag.current = { track, index: idx, mode, x0: e.clientX, r0: { startMs: r.startMs, endMs: r.endMs }, lo, hi, moved: false };
     store.beginGesture();
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -181,6 +233,128 @@ export function Timeline() {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  };
+
+  /** Drag a block of a multi-selection: the whole group moves (clamped as a group), one undo step. */
+  const startGroupDrag = (e: React.PointerEvent, track: TrackKind, index: number, r: Range) => {
+    const x0 = e.clientX;
+    let moved = false;
+    let begun = false;
+    const sel = store.get().multi;
+    const exclude = new Set(sel.map((x) => `${x.track}:${x.index}`));
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - x0) < 2) return;
+      moved = true;
+      if (!begun) {
+        begun = true;
+        store.beginMoveSelected();
+      }
+      let delta = msOf(ev.clientX - x0);
+      let snapped: number | null = null;
+      if (snapOn && !ev.altKey) {
+        const targets = snapTargets(null, exclude);
+        const opts = { targets, thresholdMs: msOf(SNAP_PX) };
+        const a = snap(r.startMs + delta, opts);
+        const b = snap(r.endMs + delta, opts);
+        const da = a.snapped !== null ? Math.abs(a.t - (r.startMs + delta)) : Infinity;
+        const db = b.snapped !== null ? Math.abs(b.t - (r.endMs + delta)) : Infinity;
+        if (da <= db && a.snapped !== null) {
+          delta = a.t - r.startMs;
+          snapped = a.snapped;
+        } else if (b.snapped !== null) {
+          delta = b.t - r.endMs;
+          snapped = b.snapped;
+        }
+      }
+      const applied = store.previewMoveSelected(Math.round(delta));
+      setGuide(snapped !== null && Math.abs(applied - Math.round(delta)) < 1 ? snapped : null);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setGuide(null);
+      if (begun) store.endMoveSelected();
+      // a plain click (no drag) on a grouped block makes it the only selection
+      else store.setSelection([{ track, index }]);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** Right-click a block: it joins (or keeps) the selection and the Delete / Duplicate menu opens. */
+  const openBlockMenu = (e: React.MouseEvent, track: TrackKind, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isSel(track, index)) store.setSelection([{ track, index }]);
+    root.current?.focus({ preventScroll: true });
+    setMenu({ x: e.clientX, y: e.clientY, kind: "block" });
+  };
+
+  /** Blocks (data-track / data-index) whose box intersects the marquee, in client space. */
+  const marqueeHits = (m: { x0: number; y0: number; x1: number; y1: number }) => {
+    const el = inner.current;
+    if (!el) return [];
+    const base = el.getBoundingClientRect();
+    const L = base.left + Math.min(m.x0, m.x1), R = base.left + Math.max(m.x0, m.x1);
+    const T = base.top + Math.min(m.y0, m.y1), B = base.top + Math.max(m.y0, m.y1);
+    const out: Array<{ track: TrackKind; index: number }> = [];
+    el.querySelectorAll<HTMLElement>("[data-sel-track]").forEach((b) => {
+      const r = b.getBoundingClientRect();
+      if (r.right >= L && r.left <= R && r.bottom >= T && r.top <= B) out.push({ track: b.dataset.selTrack as TrackKind, index: Number(b.dataset.selIndex) });
+    });
+    return out;
+  };
+
+  /**
+   * Press on an empty lane area: seeks there (as before); dragging past a few pixels turns it into a
+   * marquee that selects every block it touches, across lanes. Ctrl/Cmd/Shift adds to the selection.
+   */
+  const laneDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const el = inner.current;
+    if (!el) return;
+    root.current?.focus({ preventScroll: true });
+    const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+    const base = additive ? store.get().multi : [];
+    const prim = additive ? store.get().selection : null;
+    if (!additive) store.select(null);
+    store.pause();
+    store.seekSource(msOf(laneX(e.clientX)));
+    const pos = (ev: { clientX: number; clientY: number }) => {
+      const b = el.getBoundingClientRect();
+      return { x: ev.clientX - b.left, y: ev.clientY - b.top };
+    };
+    const p0 = pos(e);
+    let boxing = false;
+    const move = (ev: PointerEvent) => {
+      const p = pos(ev);
+      if (!boxing && Math.hypot(p.x - p0.x, p.y - p0.y) < MARQUEE_PX) return;
+      boxing = true;
+      const m = { x0: p0.x, y0: p0.y, x1: p.x, y1: p.y };
+      setMarquee(m);
+      store.setSelection([...base, ...marqueeHits(m)], prim);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setMarquee(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const selectLane = (track: TrackKind) => {
+    store.selectAll(track);
+    root.current?.focus({ preventScroll: true });
+  };
+  const deleteLane = (track: TrackKind, label: string) => {
+    const n = track === "zoom" ? (store.get().plan?.zoomSegments ?? project.zoom.segments).length : blocksOf(store.get().project, track).length;
+    if (!n) return store.notify(`Nothing on the ${label} lane`);
+    if (n > 3 && !window.confirm(`Delete all ${n} blocks on the ${label} lane?`)) return;
+    store.selectAll(track);
+    const d = store.deleteSelected();
+    store.notify(`Deleted ${d} block${d === 1 ? "" : "s"} from ${label}`);
   };
 
   const create = (track: TrackKind, t: number) => createBlock(track, t);
@@ -225,6 +399,10 @@ export function Timeline() {
   const startSlideDrag = (e: React.PointerEvent, index: number, at0: number) => {
     e.stopPropagation();
     if (e.button !== 0) return;
+    root.current?.focus({ preventScroll: true });
+    if (e.ctrlKey || e.metaKey) return store.toggleSelect({ track: "slide", index });
+    if (e.shiftKey) return store.selectRange({ track: "slide", index });
+    if (store.get().multi.length > 1 && isSel("slide", index)) return startGroupDrag(e, "slide", index, { startMs: at0, endMs: at0 });
     store.select({ track: "slide", index });
     store.beginGesture();
     const x0 = e.clientX;
@@ -252,13 +430,18 @@ export function Timeline() {
   const peaks = store.audio.peaks;
 
   const block = (track: TrackKind, i: number, r: Range, label: string, extra = "", testId?: string, style: React.CSSProperties = {}) => {
-    const selected = selection?.track === track && selection.index === i && !extra.includes("auto");
+    const selected = isSel(track, i) || (selection?.track === track && selection.index === i && !extra.includes("auto"));
+    const primary = multi.length > 1 && selection?.track === track && selection.index === i;
     return (
       <div
         key={`${track}-${i}-${r.startMs}`}
-        className={`block block-${track} ${selected ? "selected" : ""} ${extra}`}
+        className={`block block-${track} ${selected ? "selected" : ""} ${primary ? "primary" : ""} ${extra}`}
         style={{ left: xOf(r.startMs), width: Math.max(4, xOf(r.endMs) - xOf(r.startMs)), ...style }}
         onPointerDown={(e) => startDrag(e, track, i, r)}
+        onContextMenu={(e) => openBlockMenu(e, track, i)}
+        data-sel-track={track}
+        data-sel-index={i}
+        data-selected={selected ? "1" : "0"}
         onDoubleClick={(e) => e.stopPropagation()}
         data-testid={testId ?? `block-${track}-${i}`}
         data-start={Math.round(r.startMs)}
@@ -273,11 +456,16 @@ export function Timeline() {
   };
 
   return (
-    <div className="timeline" onWheel={onWheel}>
+    <div className="timeline" onWheel={onWheel} ref={root} tabIndex={-1} data-timeline-root data-testid="timeline">
       <div className="timeline-toolbar">
         <span className="tl-title">Timeline</span>
-        <span className="tl-sub">source time · double-click a lane to add · drag to move · edges to trim · Del to remove</span>
+        <span className="tl-sub">source time · double-click a lane to add · drag to move · edges to trim · Ctrl/Shift-click or drag empty space to select several · Del to remove</span>
         <div className="spacer" />
+        {multi.length > 1 && (
+          <span className="tl-badge" data-testid="selection-count" title="Del deletes them, drag any of them to move the group, Esc clears">
+            {multi.length} selected
+          </span>
+        )}
         <button className={`chip-btn ${snapOn ? "on" : ""}`} aria-pressed={snapOn} onClick={() => setSnapOn(!snapOn)} title="Snap to edges, words and playhead (hold Alt to bypass)">
           <Icon name="magnet" /> Snap
         </button>
@@ -316,6 +504,21 @@ export function Timeline() {
                   {annExpanded ? annPack.rowCount : project.annotations.length}
                 </span>
               )}
+              {LANE_TRACK[t.kind] && (
+                <button
+                  className="lane-menu-btn"
+                  title={`${t.label} lane actions`}
+                  aria-label={`${t.label} lane menu`}
+                  aria-haspopup="menu"
+                  data-testid={`lane-menu-${t.kind}`}
+                  onClick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenu({ x: r.left, y: r.bottom + 2, kind: "lane", track: LANE_TRACK[t.kind]!, label: t.label });
+                  }}
+                >
+                  ⋯
+                </button>
+              )}
               {ADDABLE.includes(t.kind) && (
                 <button
                   className="mini-add"
@@ -331,7 +534,7 @@ export function Timeline() {
           ))}
         </div>
         <div className="tl-scroll" ref={scroller} data-testid="timeline-scroll">
-          <div className="tl-inner" style={{ width: innerW }}>
+          <div className="tl-inner" ref={inner} style={{ width: innerW }}>
             <div className="tl-ruler" onPointerDown={scrubLane}>
               {ticks.map((s) => (
                 <div key={s} className="tick" style={{ left: xOf(s * 1000) }}>
@@ -342,16 +545,16 @@ export function Timeline() {
             {plan?.cuts.map((c, i) => (
               <div key={`cut-shade-${i}`} className="cut-shade" style={{ left: xOf(c.startMs), width: xOf(c.endMs) - xOf(c.startMs) }} />
             ))}
-            <div className="lane" data-testid="lane-zoom" onPointerDown={scrubLane} onDoubleClick={(e) => create("zoom", msOf(laneX(e.clientX)))}>
+            <div className="lane" data-testid="lane-zoom" onPointerDown={laneDown} onDoubleClick={(e) => create("zoom", msOf(laneX(e.clientX)))}>
               {plan?.zoomSegments.map((z, i) => block("zoom", i, z, `${z.scale.toFixed(1)}×${z.auto ? " auto" : ""}`, z.auto && project.zoom.auto ? "auto" : ""))}
             </div>
-            <div className="lane" data-testid="lane-cut" onPointerDown={scrubLane} onDoubleClick={(e) => create("cut", msOf(laneX(e.clientX)))}>
+            <div className="lane" data-testid="lane-cut" onPointerDown={laneDown} onDoubleClick={(e) => create("cut", msOf(laneX(e.clientX)))}>
               {(plan?.cleanupCuts ?? []).map((c, i) => (
                 <div key={`cl-${i}`} className="block block-cleanup" style={{ left: xOf(c.startMs), width: Math.max(3, xOf(c.endMs) - xOf(c.startMs)) }} title="Cleanup cut (fillers / pauses)" />
               ))}
               {project.edits.cuts.map((c, i) => block("cut", i, c, "cut"))}
             </div>
-            <div className={`lane lane-takes ${project.edits.takes.enabled ? "" : "off"}`} data-testid="lane-takes" onPointerDown={scrubLane}>
+            <div className={`lane lane-takes ${project.edits.takes.enabled ? "" : "off"}`} data-testid="lane-takes" onPointerDown={laneDown}>
               {(plan?.takes ?? []).map((g, gi) => (
                 <div key={`tg-${g.id}`} className="take-group" style={{ left: xOf(g.startMs), width: Math.max(6, xOf(g.endMs) - xOf(g.startMs)) }} title={`Retake group · ${g.takes.length} takes · ${g.manual ? "marked by you" : `found by ${g.cues.join(", ") || "repeat"}`}`} />
               ))}
@@ -396,13 +599,13 @@ export function Timeline() {
               {project.edits.takes.enabled && !(plan?.takes ?? []).length && <span className="lane-hint">No retakes found</span>}
               {!project.edits.takes.enabled && <span className="lane-hint">Takes off · turn on in the transcript panel</span>}
             </div>
-            <div className="lane" data-testid="lane-speed" onPointerDown={scrubLane} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
+            <div className="lane" data-testid="lane-speed" onPointerDown={laneDown} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
             </div>
-            <div className="lane" data-testid="lane-mask" onPointerDown={scrubLane} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
+            <div className="lane" data-testid="lane-mask" onPointerDown={laneDown} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
               {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}
             </div>
-            <div className={`lane lane-annotation ${annExpanded ? "expanded" : "collapsed"}`} data-testid="lane-annotation" data-rows={annPack.rowCount} style={{ height: annLaneH }} onPointerDown={scrubLane} onDoubleClick={(e) => create("annotation", msOf(laneX(e.clientX)))}>
+            <div className={`lane lane-annotation ${annExpanded ? "expanded" : "collapsed"}`} data-testid="lane-annotation" data-rows={annPack.rowCount} style={{ height: annLaneH }} onPointerDown={laneDown} onDoubleClick={(e) => create("annotation", msOf(laneX(e.clientX)))}>
               {project.annotations.map((a, i) => {
                 const label = annLabel(a);
                 const w = xOf(a.endMs) - xOf(a.startMs);
@@ -421,8 +624,11 @@ export function Timeline() {
               {project.slides.map((sl, i) => (
                 <div
                   key={`slide-${sl.id}`}
-                  className={`slide-marker ${selection?.track === "slide" && selection.index === i ? "selected" : ""}`}
+                  className={`slide-marker ${isSel("slide", i) || (selection?.track === "slide" && selection.index === i) ? "selected" : ""}`}
                   style={{ left: xOf(sl.atMs) }}
+                  data-sel-track="slide"
+                  data-sel-index={i}
+                  onContextMenu={(e) => openBlockMenu(e, "slide", i)}
                   data-testid={`slide-marker-${sl.id}`}
                   title={`Text slide “${sl.title}” · ${(sl.durationMs / 1000).toFixed(1)} s · inserted at ${timecode(sl.atMs, fps)}`}
                   onPointerDown={(e) => startSlideDrag(e, i, sl.atMs)}
@@ -431,7 +637,7 @@ export function Timeline() {
                 </div>
               ))}
             </div>
-            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} data-testid="lane-caption" onPointerDown={scrubLane} onDoubleClick={(e) => create("caption", msOf(laneX(e.clientX)))}>
+            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} data-testid="lane-caption" onPointerDown={laneDown} onDoubleClick={(e) => create("caption", msOf(laneX(e.clientX)))}>
               {(project.captions.cues ?? []).map((c, i) => block("caption", i, c, c.text || "(empty)", "manual", `block-caption-${c.id}`))}
               {captionBlockList.map((b, i) => (
                 <div
@@ -453,17 +659,47 @@ export function Timeline() {
                 </div>
               ))}
             </div>
-            <div className="lane lane-audio" data-testid="lane-audio" onPointerDown={scrubLane} onDoubleClick={(e) => create("volume", msOf(laneX(e.clientX)))}>
+            <div className="lane lane-audio" data-testid="lane-audio" onPointerDown={laneDown} onDoubleClick={(e) => create("volume", msOf(laneX(e.clientX)))}>
               {project.overrides.filter((o) => o.volume !== undefined).map((o, i) => block("volume", i, o, `vol ${Math.round((o.volume ?? 1) * 100)}%`, "", `block-volume-${i}`))}
               <Waveform peaks={peaks} peakMs={store.audio.peakMs} width={innerW} pps={pps} offsetMs={project.audio.tracks[0]?.offsetMs ?? 0} muted={project.audio.tracks[0]?.muted ?? false} />
             </div>
             {guide !== null && <div className="snap-guide" style={{ left: xOf(guide) }} />}
+            {marquee && (
+              <div
+                className="tl-marquee"
+                data-testid="timeline-marquee"
+                style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }}
+              />
+            )}
             <div className="playhead" style={{ left: xOf(playSrc) }} data-testid="playhead">
               <span className="playhead-cap" />
             </div>
           </div>
         </div>
       </div>
+      {menu && (
+        <div className="tl-menu" role="menu" data-testid={menu.kind === "block" ? "block-menu" : "lane-menu"} style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
+          {menu.kind === "block" ? (
+            <>
+              <button role="menuitem" data-testid="block-menu-duplicate" onClick={() => { setMenu(null); store.duplicateSelected(); }}>
+                Duplicate{multi.length > 1 ? ` ${multi.length}` : ""}
+              </button>
+              <button role="menuitem" className="danger" data-testid="block-menu-delete" onClick={() => { setMenu(null); deleteSelection(); }}>
+                Delete{multi.length > 1 ? ` ${multi.length}` : ""}
+              </button>
+            </>
+          ) : (
+            <>
+              <button role="menuitem" data-testid="lane-menu-select-all" onClick={() => { setMenu(null); selectLane(menu.track); }}>
+                Select all in lane
+              </button>
+              <button role="menuitem" className="danger" data-testid="lane-menu-delete-all" onClick={() => { setMenu(null); deleteLane(menu.track, menu.label); }}>
+                Delete all in lane
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -551,10 +787,11 @@ export function addZoomAtPlayhead(): void {
   }
 }
 
+/** Delete the selected block, or every block of a multi-selection, as one undo step. */
 export function deleteSelection(): boolean {
-  const sel = store.get().selection;
-  if (!sel) return false;
-  store.edit(`Delete ${sel.track}`, (p) => deleteBlock(p, sel.track, sel.index));
+  const s = store.get();
+  if (!s.selection && !s.multi.length) return false;
+  store.deleteSelected();
   store.select(null);
   return true;
 }

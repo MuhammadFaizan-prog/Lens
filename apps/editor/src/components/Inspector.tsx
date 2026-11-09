@@ -38,10 +38,32 @@ function settleOf(p: ProjectConfig["zoom"]["spring"]): number {
   return Math.round((6.638 / Math.sqrt(p.stiffness / p.mass)) * 1000);
 }
 
+/** Several timeline blocks selected: a count and the bulk actions. */
+function MultiSelectionCard({ n }: { n: number }) {
+  return (
+    <div className="selection-card multi" data-testid="multi-selection-card">
+      <div className="sel-head">
+        <b data-testid="multi-selection-count">{n} items selected</b>
+      </div>
+      <p className="note">Drag any of them on the timeline to move the group, arrow keys nudge (Shift: 1 s), Esc clears.</p>
+      <div className="cue-actions">
+        <button className="chip-btn" data-testid="multi-duplicate" title="Duplicate the selected blocks right after the group" onClick={() => store.duplicateSelected()}>
+          Duplicate
+        </button>
+        <button className="chip-btn danger" data-testid="multi-delete" title="Delete the selected blocks (Del)" onClick={() => deleteSelection()}>
+          <Icon name="trash" /> Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SelectionCard() {
   const sel = useEditor((s) => s.selection);
+  const multiN = useEditor((s) => s.multi.length);
   const project = useEditor((s) => s.project);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  if (multiN > 1) return <MultiSelectionCard n={multiN} />;
   if (!sel) return null;
   if (sel.track === "annotation") {
     const a = project.annotations[sel.index];
