@@ -29,6 +29,8 @@ working files in `<project>/.lens/` (plans, scans, rendered frames) and exports 
 | `lens project info [<dir>]` | Output size and duration, planned zooms, cuts, captions + languages, transcript, takes, privacy / steps review counts, brand |
 | `lens plan [--out plan.json] [--language es]` | Render plan (deterministic; returns its sha256) |
 | `lens export [--format mp4\|gif\|srt\|vtt] [--out f] [--language es] [--crf n] [--x264-preset p]` (`render` = alias) | Video through the reference compositor, or subtitles on the output clock |
+| `lens export demo [--out folder]` / `lens export guide [--out folder]` (also `--format demo\|guide`) | Interactive click-through demo (one self-contained `index.html`) / step guide (`guide.md`, `guide.html`, `guide.pdf`) from the accepted step labels (`docs/InteractiveDemo.md`) |
+| `lens demo hotspot <step-id> [--x px --y px] [--tooltip text] [--clear]` | Hotspot editor: move a step's hotspot (source px) or change its tooltip; idempotent |
 | `lens frame [--frame n \| --at 1.5s] [--out f.png]` | One output frame, drawn exactly as the export draws it (before the encode) |
 | `lens transcribe [--force] [--model m] [--track id]` | On-device speech-to-text of the mic track; keeps an existing transcript unless `--force`; a transcript the engine rejects never replaces the old one |
 | `lens translate --to es[,fr,de,ur,ar] [--select es\|source] [--no-download]` | Caption tracks per language (`docs/Translation.md`) |

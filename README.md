@@ -52,6 +52,8 @@ node packages/cli/dist/cli.js zoom add --start 1.2s --end 3.8s --scale 2 --focus
 node packages/cli/dist/cli.js frame --at 2s -C demo            # PNG of one output frame
 node packages/cli/dist/cli.js export --format mp4 -C demo       # or gif / srt / vtt
 node packages/cli/dist/cli.js run demo.lens.yaml                # declarative edits + exports
+node packages/cli/dist/cli.js export demo -C demo                # interactive click-through demo (one HTML file)
+node packages/cli/dist/cli.js export guide -C demo               # step guide: Markdown + HTML + PDF
 node packages/cli/dist/mcp.js --root ~/LensProjects             # MCP server (Claude Desktop / Code config in docs/Automation.md)
 npm run test:cli                                                # CLI + MCP + script integration tests
 ```
@@ -153,5 +155,10 @@ Automation: a `lens` CLI and an MCP server (`lens-mcp`) over the same operations
 export mp4 / gif / srt / vtt, frame preview, transcribe, translate, takes, privacy, steps, presets,
 brand, JSON-pointer get / set, zoom / cut / annotate), sandboxed to a root, plus `.lens.yaml`
 demo-as-code scripts that re-render identically (`docs/Automation.md`).
+Interactive demo and step guide: one recording also exports a self-contained offline click-through
+demo (a still per accepted step label with privacy masks applied, pulsing hotspot, tooltip, keys,
+progress bar, call-to-action slide, brand styles) and a Markdown / HTML / PDF step guide with a
+highlight box per step; editor Export dialog with a live preview and hotspot editor (`demo`, see
+`docs/InteractiveDemo.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

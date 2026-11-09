@@ -148,3 +148,11 @@ Intentional or accepted differences:
     SSIM mean 0.990, min 0.983 (bounds unchanged).
 12. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
     to the first colour).
+
+## Export dialog (demand #7)
+
+**Export…** in the top bar opens the Export dialog: **Video** (the MP4 export), **Interactive demo**
+(steps, call-to-action fields, Build demo, live preview in an iframe, Download HTML, and a hotspot
+editor: drag the selected step's hotspot on its still, edit its tooltip; one undo step each, applied
+to the preview at once) and **Step guide** (Build guide, preview, PDF / Markdown / HTML). See
+`docs/InteractiveDemo.md`. Playwright: `e2e/stepsExport.spec.ts`.

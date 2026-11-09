@@ -227,6 +227,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Build size:** L. Click-to-step segmentation, the HTML player and labels are new; stills, masks and labels reuse the compositor.
 
+**Status (2026-11-09): built, first version (stills, no per-step clips, no analytics beacon).** `lens export demo` (CLI, MCP `export_demo`, editor Export dialog) writes one self-contained offline HTML file: one still per accepted step label, drawn by the same compositor as the video (crop, layout, backdrop, privacy masks, watermark), a pulsing hotspot at the click, a tooltip with the step label, next / back / arrow keys / deep links, a progress bar and a call-to-action slide from the project, in the brand's colours, font and logo, responsive down to phone width. `lens export guide` (MCP `export_guide`) writes Markdown, HTML and PDF with a cropped screenshot, a highlight box around the clicked control and the label per step. The editor's Export dialog has format tabs, a live demo preview and a hotspot editor (drag the hotspot, edit the tooltip). Measured: hotspot on the click within 0.13 px (stills, bound 2 px) and 0.16 px in the rendered page at two viewport sizes; 0 secrets readable by OCR in 12 demo / guide images with privacy items accepted (control without masks: 40/41 regions read); the page makes no network request and logs no error offline; guide PDF has the right page and step count and every highlight box. Not done: per-step video snippets, the analytics beacon and the 5-team pilot, branching / multi-path demos, hosting. See `docs/InteractiveDemo.md`.
+
 **How to test:** Fake-door "Export as interactive demo" button in the export dialog; count clicks per export. Then a 5-team pilot comparing time to publish and viewer completion rate (from a tiny analytics beacon in the HTML) against their current tool.
 
 ---
@@ -594,7 +596,7 @@ Pricing and business-model findings are in their own section after #29.
 4. **Callouts + auto step labels** (M): 249 + 223 + 482 Screen Studio votes; Screen Studio still lacks arrows and text.
 5. **Demo-as-code** (L): teams stop making tutorials after UI redesigns; a scripted re-render reuses Lens's engine.
 6. **MCP/CLI** (M): a fast-rising 2026 ask; Lens already has a CLI and plan model.
-7. **Interactive demo + step-guide export** (L): the category with the highest prices (Supademo $27–38/user, Arcade up to $297.50/mo); built from the same click log.
+7. **Interactive demo + step-guide export** (L): the category with the highest prices (Supademo $27–38/user, Arcade up to $297.50/mo); built from the same click log. *Built 2026-11-09 (docs/InteractiveDemo.md); per-step clips, analytics beacon and pilot still to do.*
 8. **On-device caption translation** (M): no Screen Studio or FocuSee support; no credits needed.
 9. **Projects, presets, brand kit** (S–M): "presets" is what users say they pay for; Lens has none.
 10. **Never lose a take** (M–L, gate): the top complaint by raw count (Cap, FocuSee, Screen Studio exports). The reason people go back to paid tools.
