@@ -7,10 +7,11 @@ import { applyPrivacyScan, privacyCounts, reviewPrivacy } from "./privacy.js";
 import { applyStepDrafts, reviewSteps } from "./annotations.js";
 import { parseTranscript, TranscriptError } from "./transcript.js";
 import type { RecordingMeta } from "./types.js";
+import { applyPreset, parsePreset, PresetError, PRESET_SECTIONS, type PresetSection } from "./presets.js";
 
 const USAGE = `lens-plan --meta meta.json --events events.jsonl [--project project.json] [--words transcript.json]
           [--privacy-scan privacy.json [--accept-privacy]] [--step-labels steps.json [--accept-steps]]
-          [--project-out project.json] --out plan.json
+          [--preset look.lenspreset [--preset-sections look,zoom,...]] [--project-out project.json] --out plan.json
 
 Builds a render plan (per-frame camera, cursor, clicks, layout, overlays) from a cursorless
 recording's metadata and its input-event log. The compositor renders the plan to video.
@@ -18,7 +19,8 @@ recording's metadata and its input-event log. The compositor renders the plan to
 --privacy-scan merges a lens-redact scan into project.privacy (review states of items found again are
 kept); --accept-privacy accepts every detection, so each becomes a tracked mask. --step-labels merges
 auto step-label drafts (lens-redact steps output); --accept-steps accepts them all as numbered badges. --project-out
-writes the resulting project. A warning is printed while detections are still pending review.`;
+writes the resulting project. --preset applies a .lenspreset (all sections, or only --preset-sections:
+${PRESET_SECTIONS.join(", ")}) before planning. A warning is printed while detections are still pending review.`;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -42,6 +44,13 @@ function main(): number {
     const events = parseEventLog(readFileSync(eventsPath, "utf8"));
     const projectPath = arg("project");
     let project = resolveProject(projectPath ? JSON.parse(readFileSync(projectPath, "utf8")) : {});
+    const presetPath = arg("preset");
+    if (presetPath) {
+      const secs = arg("preset-sections");
+      const want = secs ? (secs.split(",").map((x) => x.trim()) as PresetSection[]) : PRESET_SECTIONS;
+      for (const s of want) if (!PRESET_SECTIONS.includes(s)) throw new Error(`unknown preset section ${s} (${PRESET_SECTIONS.join(", ")})`);
+      project = resolveProject(applyPreset(project, parsePreset(readFileSync(presetPath, "utf8")), want));
+    }
     const scanPath = arg("privacy-scan");
     if (scanPath) project = applyPrivacyScan(project, JSON.parse(readFileSync(scanPath, "utf8")), new Date().toISOString());
     if (process.argv.includes("--accept-privacy")) project = reviewPrivacy(project, null, "accepted");
@@ -61,6 +70,7 @@ function main(): number {
     return 0;
   } catch (e) {
     if (e instanceof ProjectValidationError) console.error(`invalid project: ${e.message}`);
+    else if (e instanceof PresetError) console.error(`invalid preset: ${e.message}`);
     else if (e instanceof TranscriptError) console.error(`invalid transcript: ${e.message}`);
     else console.error(e instanceof Error ? e.message : e);
     return 1;

@@ -12,6 +12,9 @@ import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame
 import { resolveTakes, type TakeGroup } from "./takes.js";
 import { captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
+import { applyTheme } from "./theme.js";
+import type { WatermarkPlan } from "./brand.js";
+import type { FontFiles } from "./palette.js";
 
 /**
  * The render plan: everything the compositor needs, per output frame, as plain numbers.
@@ -57,6 +60,13 @@ export interface RenderPlan {
   zoomSegments: ZoomSegment[];
   /** Text slides on the output clock (demand #4): each holds its source time and has no audio. */
   slides: SlideSpan[];
+  /**
+   * Fonts the frames use besides the default (DejaVu Sans): family and files ("builtin:" = Lens's
+   * assets/fonts, else relative to the bundle). Text ops and the caption style name the family.
+   */
+  fonts?: FontFiles[];
+  /** Brand logo watermark (demand #9), whole output px, drawn on every frame above the caption and under slides. */
+  watermark?: WatermarkPlan | null;
   frames: PlanFrame[];
 }
 
@@ -94,6 +104,8 @@ export interface PlanInputs {
   words?: Word[];
   /** Measured silences from the transcript (Transcript.pauses); bounds pause cuts when given. */
   pauses?: TimeRange[];
+  /** Build only these output frames (preset thumbnails); plan.frames then holds just them, in this order. */
+  onlyFrames?: number[];
 }
 
 function insideRanges(ranges: TimeRange[], t: number): boolean {
@@ -103,9 +115,12 @@ function insideRanges(ranges: TimeRange[], t: number): boolean {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
-export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, words = [], pauses }: PlanInputs): RenderPlan {
-  const fps = project.output.fps;
-  const out = outputSize(project.output.aspect, project.output.resolution);
+export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: rawProject, words = [], pauses, onlyFrames }: PlanInputs): RenderPlan {
+  const fps = rawProject.output.fps;
+  const out = outputSize(rawProject.output.aspect, rawProject.output.resolution);
+  // Theme (demand #9): resolve "@slot" references (built-in < preset < brand < item), add brand cards.
+  const theme = applyTheme(rawProject, fullMeta.durationMs, out);
+  const project = theme.project;
   const resScale = Math.min(out.width, out.height) / 1080;
 
   // 0. Crop (LOOK-14): move everything into cropped space.
@@ -150,11 +165,13 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
   const captions = project.captions.enabled ? captionBlocks(shownWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
 
-  const annSpace = { cropX: crop.x, cropY: crop.y, width: out.width, height: out.height, resScale };
+  const annSpace = { cropX: crop.x, cropY: crop.y, width: out.width, height: out.height, resScale, palette: theme.palette };
   const numbers = badgeNumbers(project.annotations);
 
   const planFrames: PlanFrame[] = [];
-  for (let i = 0; i < frames; i++) {
+  const frameList = onlyFrames ? onlyFrames.map((i) => Math.max(0, Math.min(frames - 1, Math.round(i)))) : null;
+  for (let n = 0; n < (frameList ? frameList.length : frames); n++) {
+    const i = frameList ? frameList[n]! : n;
     const t = (i * 1000) / fps;
     const span = slideSpans.find((sp) => t >= sp.outStart - 1e-6 && t < sp.outEnd - 1e-6);
     const src = span ? span.srcAt : outputToSource(timeline, t);
@@ -193,7 +210,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
       shortcut: sc ? sc.label : null,
       caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
-      slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale) : null,
+      slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
     });
   }
 
@@ -235,6 +252,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
     takeCuts: takes.cuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     zoomSegments,
     slides: slideSpans.map((sp) => ({ id: sp.id, outStart: r2(sp.outStart), outEnd: r2(sp.outEnd), srcAt: r2(sp.srcAt) })),
+    ...(theme.fonts.length ? { fonts: theme.fonts } : {}),
+    ...(theme.watermark ? { watermark: theme.watermark } : {}),
     frames: planFrames,
   };
 }

@@ -16,6 +16,9 @@ import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
 import { DEFAULT_TAKES, type TakeSettings } from "./takes.js";
 import { defaultPrivacy, validateKeys, validatePrivacy, type PrivacySettings } from "./privacy.js";
 import { normalizeAnnotation, normalizeSlide, validateAnnotations, type Annotation, type StepLabelSettings, type TextSlide } from "./annotations.js";
+import { defaultBrand, validateBrand, type BrandKit } from "./brand.js";
+import { isColorValue } from "./palette.js";
+import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -38,6 +41,12 @@ export interface ProjectConfig {
     angle: number;
     imagePath?: string;
     blur: number;
+    /**
+     * Follow the theme backdrop (preset palette < brand kit, see palette.ts) instead of kind / colors /
+     * angle above. On for new projects; off as soon as a backdrop is picked by hand, and off for
+     * project files that set their own backdrop.
+     */
+    inherit: boolean;
   };
   frame: {
     /** Padding around the recording, fraction of the output short side. */
@@ -179,6 +188,10 @@ export interface ProjectConfig {
     sampleRate: 44100 | 48000;
   };
   export: { gif: { fps: number; width: number; loop: boolean } };
+  /** The applied style preset and its palette / annotation-style layer (demand #9, docs/Presets.md). */
+  theme: ThemeSettings;
+  /** Brand kit: colours, logo watermark, fonts, intro / outro cards (demand #9). */
+  brand: BrandKit;
 }
 
 export type ZoomPresetName = "calm" | "default" | "punchy";
@@ -215,19 +228,22 @@ export interface CaptionStyle {
   /** Font size in px at 1080p (scaled with resolution). */
   fontSize: number;
   textColor: string;
+  /** #rrggbb, or "@highlight" (default): the theme's caption highlight (preset palette < brand kit). */
   highlightColor: string;
   background: { enabled: boolean; color: string; opacity: number };
   position: "top" | "bottom" | "custom";
   /** Vertical center of the caption as a fraction of output height, used when position = custom. */
   y: number;
   maxWordsPerLine: number;
+  /** Font family, or "@font" / absent: the theme font. */
+  font?: string;
 }
 
 export function defaultProject(): ProjectConfig {
   return {
     version: 1,
     output: { aspect: "16:9", resolution: 1080, fps: 60 },
-    background: { kind: "gradient", colors: ["#3a1c71", "#d76d77", "#ffaf7b"], angle: 135, blur: 0 },
+    background: { kind: "gradient", colors: ["#3a1c71", "#d76d77", "#ffaf7b"], angle: 135, blur: 0, inherit: true },
     frame: {
       padding: 0.08,
       radius: 14,
@@ -302,7 +318,7 @@ export function defaultProject(): ProjectConfig {
       style: {
         fontSize: 44,
         textColor: "#ffffff",
-        highlightColor: "#ffd23f",
+        highlightColor: "@highlight",
         background: { enabled: true, color: "#000000", opacity: 0.66 },
         position: "bottom",
         y: 0.88,
@@ -325,6 +341,8 @@ export function defaultProject(): ProjectConfig {
       sampleRate: 48000,
     },
     export: { gif: { fps: 15, width: 640, loop: true } },
+    theme: defaultTheme(),
+    brand: defaultBrand(),
   };
 }
 
@@ -349,6 +367,9 @@ export class ProjectValidationError extends Error {}
 export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {}): ProjectConfig {
   const p = deepMerge(defaultProject(), partial);
   const errs: string[] = [];
+  // a project file that sets its own backdrop (written before presets, or by hand) keeps it
+  const rawBg = isPlainObject(partial) && isPlainObject(partial.background) ? partial.background : null;
+  if (rawBg && rawBg.inherit === undefined && (rawBg.kind !== undefined || rawBg.colors !== undefined || rawBg.imagePath !== undefined)) p.background.inherit = false;
   // annotations / slides written by hand may leave out style and animation fields
   if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
   if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
@@ -407,6 +428,10 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
+  if (!isColorValue(p.captions.style.highlightColor) || !isColorValue(p.captions.style.textColor)) errs.push("caption colours must be #rrggbb or a theme slot (@highlight)");
+  if (typeof p.background.inherit !== "boolean") errs.push("background.inherit must be true or false");
+  errs.push(...validateTheme(p.theme));
+  errs.push(...validateBrand(p.brand));
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");
   if (errs.length) throw new ProjectValidationError(errs.join("; "));

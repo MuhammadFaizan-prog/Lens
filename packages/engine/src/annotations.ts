@@ -16,6 +16,7 @@
  *    the output resolution like captions). Drawn as a fixed overlay above the webcam.
  */
 import type { Rect, Vec2 } from "./types.js";
+import { BUILTIN_PALETTE, DEFAULT_FONT, FONT_TOKEN, isColorValue, resolveColor, resolveFont, type Palette } from "./palette.js";
 
 export type AnnotationKind = "text" | "arrow" | "rect" | "ellipse" | "badge" | "callout";
 export type AnnotationAnchor = "screen" | "frame";
@@ -25,7 +26,10 @@ export type OutAnimation = "none" | "fade" | "pop" | "draw";
 export type ArrowHead = "triangle" | "open" | "dot" | "none";
 
 export interface AnnotationStyle {
-  /** Stroke / main colour (#rrggbb). */
+  /**
+   * Stroke / main colour: #rrggbb (an override on this item) or a theme slot ("@primary"), which
+   * follows the preset palette and the brand kit (see palette.ts). The same holds for fill and textColor.
+   */
   color: string;
   /** Fill colour of shapes, bubbles, badges and text backings; null = no fill. */
   fill: string | null;
@@ -40,6 +44,8 @@ export interface AnnotationStyle {
   shadow: { enabled: boolean; opacity: number; blur: number; offsetY: number };
   /** Overall opacity 0..1. */
   opacity: number;
+  /** Font family, or "@font" (the theme font; the default). */
+  font?: string;
 }
 
 export interface AnimationSpec<K> {
@@ -97,6 +103,12 @@ export interface TextSlide {
   /** px at 1080p */
   titleSize: number;
   subtitleSize: number;
+  /** Font family or "@font" (default). */
+  font?: string;
+  /** solid = the background colour; theme = the project backdrop (brand intro / outro cards). */
+  fill?: "solid" | "theme";
+  /** A logo above the title (brand cards): image path relative to the bundle and its width / height. */
+  logo?: { path: string; aspect: number } | null;
 }
 
 /** One auto step-label draft: a click, the text read around it, and its review state. */
@@ -141,7 +153,13 @@ export type AnnOp =
       /** Visible characters (typewriter); -1 = all. Layout always uses the full text. */
       chars: number;
       bg: { color: string; alpha: number; padX: number; padY: number; radius: number } | null;
-    };
+      /** Font family; absent = the default (DejaVu Sans). */
+      font?: string;
+    }
+  /** An image (logo) in a box, whole px, with alpha. */
+  | { op: "image"; path: string; x: number; y: number; w: number; h: number; alpha: number }
+  /** Paint the plan's backdrop (style.background) over the whole frame. */
+  | { op: "background" };
 
 export interface AnnFrame {
   id: string;
@@ -419,6 +437,18 @@ export interface AnnotationSpace {
   width: number;
   height: number;
   resScale: number;
+  /** Resolved theme palette for "@slot" colours and "@font" (default: the built-in palette). */
+  palette?: Palette;
+}
+
+/** The style with theme references resolved to literal colours. */
+export function themedStyle(s: AnnotationStyle, pal: Palette = BUILTIN_PALETTE): AnnotationStyle {
+  return { ...s, color: resolveColor(s.color, pal), textColor: resolveColor(s.textColor, pal), fill: s.fill === null ? null : resolveColor(s.fill, pal), font: resolveFont(s.font, pal) };
+}
+
+/** Text-op font field: omitted for the default font so pre-#9 plans stay byte-identical. */
+function fontField(family: string | undefined): { font?: string } {
+  return family && family !== DEFAULT_FONT ? { font: family } : {};
 }
 
 /**
@@ -437,7 +467,8 @@ export function annotationFrame(a: Annotation, t: number, sp: AnnotationSpace, n
     const p = P({ x: r.x, y: r.y });
     return screen ? { x: p.x, y: p.y, w: r.w, h: r.h } : { x: p.x, y: p.y, w: r.w * sp.width, h: r.h * sp.height };
   };
-  const s = a.style;
+  const s = themedStyle(a.style, sp.palette);
+  const F = fontField(s.font);
   const sw = Math.max(0, s.strokeWidth * k);
   const font = s.fontSize * k;
   const radius = s.radius * k;
@@ -507,11 +538,11 @@ export function annotationFrame(a: Annotation, t: number, sp: AnnotationSpace, n
       ops.push({ op: "fill", pts: flat(circle), color: s.fill ?? s.color, alpha: s.fill ? r4(clamp01(s.fillOpacity)) : 1 });
       if (sw > 0) ops.push({ op: "stroke", pts: flat(circle), closed: true, width: r2(sw), color: s.color, alpha: 1 });
       const n = numbers.get(a.id) ?? 1;
-      ops.push({ op: "text", text: String(n), x: r2(c.x), y: r2(c.y), w: 0, h: 0, size: r2(rad * 1.05), bold: true, color: s.textColor, align: "center", valign: "middle", chars: -1, bg: null });
+      ops.push({ op: "text", text: String(n), x: r2(c.x), y: r2(c.y), w: 0, h: 0, size: r2(rad * 1.05), bold: true, color: s.textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
       if (a.text) {
         ops.push({
           op: "text", text: a.text, x: r2(c.x + rad + rad * 0.55 + font * 0.5), y: r2(c.y), w: 0, h: 0, size: r2(font), bold: s.bold, color: s.textColor,
-          align: "left", valign: "middle", chars, bg: { color: s.fill ?? s.color, alpha: 0.92, padX: r2(font * 0.5), padY: r2(font * 0.28), radius: r2(font * 0.45) },
+          align: "left", valign: "middle", chars, bg: { color: s.fill ?? s.color, alpha: 0.92, padX: r2(font * 0.5), padY: r2(font * 0.28), radius: r2(font * 0.45) }, ...F,
         });
       }
       break;
@@ -533,7 +564,7 @@ export function annotationFrame(a: Annotation, t: number, sp: AnnotationSpace, n
       if (a.text) {
         const pad = font * 0.6;
         ops.push({ op: "text", text: a.text, x: r2(r.x + pad), y: r2(r.y + r.h / 2), w: r2(Math.max(1, r.w - 2 * pad)), h: 0, size: r2(font), bold: s.bold,
-          color: s.textColor, align: a.align ?? "left", valign: "middle", chars, bg: null });
+          color: s.textColor, align: a.align ?? "left", valign: "middle", chars, bg: null, ...F });
       }
       break;
     }
@@ -548,7 +579,7 @@ export function annotationFrame(a: Annotation, t: number, sp: AnnotationSpace, n
         const bar = { x: r.x - pad.padX - sw * 2.2, y: r.y - pad.padY, w: sw, h: font * 1.25 + pad.padY * 2 };
         ops.push({ op: "fill", pts: flat(roundRectPoints(bar, sw / 2)), color: s.color, alpha: 1 });
       }
-      ops.push({ op: "text", text: a.text ?? "", x: r2(r.x), y: r2(r.y), w: r2(r.w), h: 0, size: r2(font), bold: s.bold, color: s.textColor, align, valign: "top", chars, bg });
+      ops.push({ op: "text", text: a.text ?? "", x: r2(r.x), y: r2(r.y), w: r2(r.w), h: 0, size: r2(font), bold: s.bold, color: s.textColor, align, valign: "top", chars, bg, ...F });
       break;
     }
   }
@@ -563,6 +594,7 @@ function scaleOp(o: AnnOp, pv: Vec2, s: number): AnnOp {
   const sp = (pts: number[]) => pts.map((v, i) => r2(i % 2 === 0 ? pv.x + (v - pv.x) * s : pv.y + (v - pv.y) * s));
   if (o.op === "fill") return { ...o, pts: sp(o.pts) };
   if (o.op === "stroke") return { ...o, pts: sp(o.pts), width: r2(o.width * s) };
+  if (o.op === "image" || o.op === "background") return o;
   return {
     ...o,
     x: r2(pv.x + (o.x - pv.x) * s),
@@ -584,31 +616,41 @@ export function annotationsAt(items: Annotation[], t: number, sp: AnnotationSpac
   return out;
 }
 
-/** The slide drawn at output time t inside its span (output px). */
-export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number, resScale: number): SlideFrame {
+/** The slide drawn at output time t inside its span (output px). Theme references resolve against `pal`. */
+export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number, resScale: number, pal: Palette = BUILTIN_PALETTE): SlideFrame {
   const fade = Math.max(0, Math.min(sl.fadeMs, sl.durationMs / 2));
   const op = fade > 0 ? Math.min(easeOutCubic(tInSlide / fade), easeOutCubic((sl.durationMs - tInSlide) / fade)) : 1;
   const ts = sl.titleSize * resScale;
   const ss = sl.subtitleSize * resScale;
-  const ops: AnnOp[] = [{ op: "fill", pts: [0, 0, W, 0, W, H, 0, H], color: sl.background, alpha: 1 }];
+  const F = fontField(resolveFont(sl.font, pal));
+  const textColor = resolveColor(sl.textColor, pal);
+  const ops: AnnOp[] = [sl.fill === "theme" ? { op: "background" } : { op: "fill", pts: [0, 0, W, 0, W, H, 0, H], color: resolveColor(sl.background, pal), alpha: 1 }];
   const hasSub = !!sl.subtitle.trim();
   const titleY = hasSub ? H * 0.5 - ss * 0.9 : H * 0.5;
-  ops.push({ op: "text", text: sl.title, x: r2(W * 0.1), y: r2(titleY), w: r2(W * 0.8), h: 0, size: r2(ts), bold: true, color: sl.textColor, align: "center", valign: "middle", chars: -1, bg: null });
+  if (sl.logo && sl.logo.path) {
+    // logo centred above the title, whole pixels so preview and export sample it identically
+    const lh = Math.round(Math.min(H * 0.16, W * 0.16 / Math.max(0.05, sl.logo.aspect)));
+    const lw = Math.round(lh * sl.logo.aspect);
+    const ly = Math.round(titleY - ts * 0.75 - lh - H * 0.03);
+    ops.push({ op: "image", path: sl.logo.path, x: Math.round(W / 2 - lw / 2), y: ly, w: lw, h: lh, alpha: 1 });
+  }
+  ops.push({ op: "text", text: sl.title, x: r2(W * 0.1), y: r2(titleY), w: r2(W * 0.8), h: 0, size: r2(ts), bold: true, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
   if (sl.accent) {
     const bw = ts * 1.6;
     const bh = Math.max(3, ts * 0.09);
     const by = hasSub ? H * 0.5 + ts * 0.05 : H * 0.5 + ts * 0.85;
-    ops.push({ op: "fill", pts: flat(roundRectPoints({ x: W / 2 - bw / 2, y: by, w: bw, h: bh }, bh / 2)), color: sl.accent, alpha: 1 });
+    ops.push({ op: "fill", pts: flat(roundRectPoints({ x: W / 2 - bw / 2, y: by, w: bw, h: bh }, bh / 2)), color: resolveColor(sl.accent, pal), alpha: 1 });
   }
-  if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(H * 0.5 + ts * 0.55 + ss * 0.6), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: sl.textColor, align: "center", valign: "middle", chars: -1, bg: null });
+  if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(H * 0.5 + ts * 0.55 + ss * 0.6), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
   return { id: sl.id, opacity: r4(op), ops };
 }
 
 // ------------------------------------------------------------------------------ defaults + presets
 
 export function defaultAnnotationStyle(kind: AnnotationKind, anchor: AnnotationAnchor = "screen"): AnnotationStyle {
+  // "@primary" resolves to #ff5a36 with the built-in palette: the same pixels as before presets
   const base: AnnotationStyle = {
-    color: "#ff5a36",
+    color: "@primary",
     fill: null,
     fillOpacity: 0.18,
     strokeWidth: 5,
@@ -622,9 +664,9 @@ export function defaultAnnotationStyle(kind: AnnotationKind, anchor: AnnotationA
   switch (kind) {
     case "rect":
     case "ellipse":
-      return { ...base, fill: "#ff5a36", fillOpacity: 0.12, shadow: { ...base.shadow, enabled: false } };
+      return { ...base, fill: "@primary", fillOpacity: 0.12, shadow: { ...base.shadow, enabled: false } };
     case "badge":
-      return { ...base, fill: "#ff5a36", fillOpacity: 1, strokeWidth: 3, color: "#ffffff", fontSize: 22, radius: 10 };
+      return { ...base, fill: "@primary", fillOpacity: 1, strokeWidth: 3, color: "#ffffff", fontSize: 22, radius: 10 };
     case "callout":
       return { ...base, fill: "#1f2433", fillOpacity: 0.95, strokeWidth: 0, color: "#1f2433", fontSize: anchor === "frame" ? 34 : 22, radius: 14 };
     case "text":
@@ -642,7 +684,7 @@ export function textPreset(role: TextRole): Pick<Annotation, "anchor" | "rect" |
         style: { fontSize: 64, fill: "#11131a", fillOpacity: 0.7, radius: 16 } };
     case "lower-third":
       return { anchor: "frame", role, rect: { x: 0.08, y: 0.76, w: 0.6, h: 0 }, align: "left", in: { kind: "typewriter", ms: 700 }, out: { kind: "fade", ms: 300 },
-        style: { fontSize: 40, fill: "#11131a", fillOpacity: 0.78, strokeWidth: 8, color: "#ff5a36", radius: 8 } };
+        style: { fontSize: 40, fill: "#11131a", fillOpacity: 0.78, strokeWidth: 8, color: "@primary", radius: 8 } };
     default:
       return { anchor: "screen", role, rect: { x: 0, y: 0, w: 0, h: 0 }, align: "left", in: { kind: "fade", ms: 250 }, out: { kind: "fade", ms: 250 },
         style: { fontSize: 24, fill: "#11131a", fillOpacity: 0.72, radius: 8 } };
@@ -666,7 +708,7 @@ export function defaultAnimations(kind: AnnotationKind): Pick<Annotation, "in" |
 }
 
 export function defaultSlide(id: string, atMs: number): TextSlide {
-  return { id, atMs, durationMs: 2000, title: "Title", subtitle: "", background: "#11131a", textColor: "#ffffff", accent: "#ff5a36", fadeMs: 250, titleSize: 84, subtitleSize: 40 };
+  return { id, atMs, durationMs: 2000, title: "Title", subtitle: "", background: "#11131a", textColor: "#ffffff", accent: "@primary", fadeMs: 250, titleSize: 84, subtitleSize: 40 };
 }
 
 /** Fill in missing fields of a partial annotation (project.json written by hand, or old projects). */
@@ -691,7 +733,6 @@ export function normalizeSlide(raw: Partial<TextSlide> & { id: string }): TextSl
   return { ...defaultSlide(raw.id, raw.atMs ?? 0), ...raw };
 }
 
-const HEX = /^#[0-9a-fA-F]{6}$/;
 const IN_KINDS: InAnimation[] = ["none", "fade", "pop", "draw", "typewriter"];
 const OUT_KINDS: OutAnimation[] = ["none", "fade", "pop", "draw"];
 
@@ -715,7 +756,8 @@ export function validateAnnotations(items: Annotation[], slides: TextSlide[], st
     if (!IN_KINDS.includes(a.in?.kind) || !(a.in.ms >= 0)) errs.push(`${n} has an invalid in-animation`);
     if (!OUT_KINDS.includes(a.out?.kind) || !(a.out.ms >= 0)) errs.push(`${n} has an invalid out-animation`);
     const s = a.style;
-    if (!s || !HEX.test(s.color) || !HEX.test(s.textColor) || (s.fill !== null && !HEX.test(s.fill))) errs.push(`${n} colours must be #rrggbb`);
+    if (!s || !isColorValue(s.color) || !isColorValue(s.textColor) || (s.fill !== null && !isColorValue(s.fill))) errs.push(`${n} colours must be #rrggbb or @primary / @accent / @highlight`);
+    else if (s.font !== undefined && (typeof s.font !== "string" || !s.font)) errs.push(`${n} font must be a family name or ${FONT_TOKEN}`);
     else if (!(s.strokeWidth >= 0) || !(s.fontSize > 0) || !(s.opacity >= 0 && s.opacity <= 1) || !(s.fillOpacity >= 0 && s.fillOpacity <= 1) || !(s.radius >= 0))
       errs.push(`${n} style out of range`);
     if (a.kind === "arrow" && !(a.from && a.to && fin(a.from.x, a.from.y, a.to.x, a.to.y))) errs.push(`${n} needs from and to`);
@@ -734,7 +776,8 @@ export function validateAnnotations(items: Annotation[], slides: TextSlide[], st
       if (ids.has(sl.id)) errs.push(`slide ${sl.id} id is used twice`);
       ids.add(sl.id);
       if (!(sl.durationMs > 0) || !(sl.atMs >= 0)) errs.push(`slide ${sl.id} needs atMs >= 0 and durationMs > 0`);
-      if (!HEX.test(sl.background) || !HEX.test(sl.textColor) || (sl.accent !== null && !HEX.test(sl.accent))) errs.push(`slide ${sl.id} colours must be #rrggbb`);
+      if (!isColorValue(sl.background) || !isColorValue(sl.textColor) || (sl.accent !== null && !isColorValue(sl.accent))) errs.push(`slide ${sl.id} colours must be #rrggbb or a theme slot`);
+      if (sl.fill !== undefined && sl.fill !== "solid" && sl.fill !== "theme") errs.push(`slide ${sl.id} fill must be solid or theme`);
       if (!(sl.fadeMs >= 0)) errs.push(`slide ${sl.id} fadeMs must be >= 0`);
     }
   if (!steps || !Array.isArray(steps.drafts)) errs.push("stepLabels.drafts must be a list");
