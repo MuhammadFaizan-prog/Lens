@@ -38,3 +38,15 @@ describe("9:16 fill and follow (Windows bug #8)", () => {
   });
 });
 
+describe("free overlay positions (Windows bug #12)", () => {
+  it("logo and webcam positions are output fractions, clamped inside the frame", () => {
+    const logo = { ...defaultBrand().logo, path: "l.png", aspect: 2, position: { x: 0.5, y: 0.5 } };
+    expect(watermarkRect(logo, 1920, 1080)).toMatchObject({ x: 960 - 96, y: 540 - 48, w: 192, h: 96 });
+    expect(watermarkRect({ ...logo, position: { x: 1, y: 1 } }, 1920, 1080)).toMatchObject({ x: 1920 - 192, y: 1080 - 96 });
+    const cfg = { ...defaultProject(), camera: { ...defaultProject().camera, enabled: true, position: { x: 0.25, y: 0.5 } } };
+    const l = layoutFor("camera-overlay", { width: 1920, height: 1080 }, 16 / 9, cfg);
+    expect(l.camera!.x + l.camera!.w / 2).toBeCloseTo(480, 6);
+    expect(l.camera!.y + l.camera!.h / 2).toBeCloseTo(540, 6);
+  });
+});
+

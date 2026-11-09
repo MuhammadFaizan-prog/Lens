@@ -123,6 +123,11 @@ export interface ProjectConfig {
      * Animated with the zoom spring so the webcam shrinks as the camera zooms in.
      */
     zoomedSize: number;
+    /**
+     * Free position of the webcam overlay (on-canvas drag): its centre as fractions of the output
+     * width / height. Absent = the corner. Normalized so it survives aspect changes.
+     */
+    position?: { x: number; y: number } | null;
   };
   edits: {
     cuts: TimeRange[];
@@ -448,6 +453,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
   if (p.output.fit !== undefined && p.output.fit !== "fit" && p.output.fit !== "fill") errs.push("output.fit must be fit or fill");
+  const cp = p.camera.position;
+  if (cp && !(Number.isFinite(cp.x) && Number.isFinite(cp.y))) errs.push("camera.position must be {x, y} fractions");
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));

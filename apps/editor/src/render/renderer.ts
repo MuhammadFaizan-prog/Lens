@@ -657,3 +657,35 @@ function pixelateInto(eg: Canvas2D, vg: Canvas2D, _map: ViewMap, rx0: number, ry
   }
   eg.putImageData(out, gx0 - bx0, gy0 - by0);
 }
+
+/**
+ * The caption box drawn on frame f (output px: x, y, w, h including the pill padding), measured the way
+ * drawCaption lays it out (main font only). Used to pick and drag the caption on the preview.
+ */
+export function captionBox(g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, f: PlanFrame): [number, number, number, number] | null {
+  const cap = f.caption;
+  if (!cap || !cap.words.length) return null;
+  const { width: W, height: H } = plan.output;
+  const cs = plan.style.captions;
+  const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
+  g.save();
+  g.font = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
+  const space = g.measureText(" ").width;
+  let i = 0;
+  let bw = 0;
+  for (const n of cap.lines) {
+    let w = 0;
+    for (let j = 0; j < n; j++) w += g.measureText(cap.words[i + j]!).width;
+    bw = Math.max(bw, w + space * Math.max(0, n - 1));
+    i += n;
+  }
+  const fm = g.measureText("Hg");
+  g.restore();
+  const lh = Math.trunc((Math.ceil(fm.fontBoundingBoxAscent) + Math.ceil(fm.fontBoundingBoxDescent)) * 1.12);
+  const blockH = lh * cap.lines.length;
+  const pos = cs.position ?? "bottom";
+  const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
+  const padx = size * 0.55;
+  const pady = size * 0.28;
+  return [(W - bw) / 2 - padx, top - pady, bw + 2 * padx, blockH + 2 * pady];
+}

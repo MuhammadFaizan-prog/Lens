@@ -3,6 +3,7 @@ import type { RenderPlan } from "@lens/engine";
 import { PlanRenderer } from "../render/renderer";
 import { store, useEditor } from "../state/store";
 import { AnnotationOverlay } from "./AnnotationOverlay";
+import { CanvasOverlay, zoomEditFrame, zoomEditing } from "./CanvasOverlay";
 import { useUi } from "../state/uiLayout";
 
 /** Draw frame i of plan into g with the right source images (awaits decoding when needed). */
@@ -95,6 +96,7 @@ export function Preview() {
       <div className="preview-stage" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }}>
         <canvas ref={ref} className="preview-canvas" data-testid="preview" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }} />
         {k > 0 && <AnnotationOverlay cssW={Math.floor(w * k)} cssH={Math.floor(h * k)} />}
+        {k > 0 && <CanvasOverlay cssW={Math.floor(w * k)} cssH={Math.floor(h * k)} />}
       </div>
     </div>
   );

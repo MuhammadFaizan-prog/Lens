@@ -1,0 +1,338 @@
+/**
+ * Direct manipulation of the non-annotation overlays on the preview (Windows bugs #12 / #14):
+ * blur / pixelate / spotlight masks, the brand logo watermark, the webcam bubble, the caption
+ * position, and the zoom target rectangle of a selected zoom block.
+ *
+ * Click to select (annotations are picked first, see AnnotationOverlay), drag to move with snapping
+ * guides to the frame's edges and centre lines, corner handles to resize, arrow keys to nudge
+ * (Shift = 10 px), Del to remove. Everything is stored in the space it lives in: masks and zoom
+ * targets in source px (they follow the recording through zooms and aspect changes), the logo,
+ * webcam and caption as fractions of the output frame.
+ */
+import { useEffect, useRef, useState } from "react";
+import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
+import { captionBox } from "../render/renderer";
+import { makeCanvas } from "../render/canvas";
+import { store, useEditor } from "../state/store";
+import { updateBlock } from "../state/timelineOps";
+import { centre, clampedNormCentre, moveBox, resizeBox, snapBox, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
+import { spaceOf } from "./AnnotationOverlay";
+
+export type CanvasKind = "mask" | "logo" | "webcam" | "caption" | "zoom";
+
+export interface CanvasObj {
+  kind: CanvasKind;
+  /** mask index / zoom segment index (project), else 0 */
+  index: number;
+  /** Output px. */
+  box: Box;
+  keepAspect: boolean;
+  label: string;
+  /** Project edit for a new box (output px). */
+  apply: (b: Box) => (p: ProjectConfig) => ProjectConfig;
+}
+
+/** The frame as the preview shows it while a zoom block is selected: unzoomed, so its target rectangle can be drawn and dragged. */
+export function zoomEditFrame(plan: RenderPlan, f: PlanFrame): PlanFrame {
+  const [, , cw, ch] = plan.source.crop;
+  return { ...f, cam: [cw / 2, ch / 2, 1], camVel: [0, 0, 0] };
+}
+
+export function zoomEditing(): boolean {
+  const sel = store.get().selection;
+  return sel?.track === "zoom" && !!store.get().project.zoom.segments[sel.index];
+}
+
+const scratch = (() => {
+  let g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
+  return () => (g ??= makeCanvas(8, 8).getContext("2d") as CanvasRenderingContext2D);
+})();
+
+/** Every pickable overlay on the current frame, topmost last. */
+export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectConfig): CanvasObj[] {
+  const out: CanvasObj[] = [];
+  const { width: W, height: H } = plan.output;
+  const sel = store.get().selection;
+  const zoomSel = sel?.track === "zoom" ? project.zoom.segments[sel.index] : undefined;
+  const f = zoomSel ? zoomEditFrame(plan, f0) : f0;
+  const sp = spaceOf(plan, f, "screen");
+  const toBox = (r: { x: number; y: number; w: number; h: number }): Box => {
+    const a = sp.toOut({ x: r.x, y: r.y });
+    const b = sp.toOut({ x: r.x + r.w, y: r.y + r.h });
+    return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+  };
+  const fromBox = (b: Box) => {
+    const a = sp.fromOut({ x: b.x, y: b.y });
+    const c = sp.fromOut({ x: b.x + b.w, y: b.y + b.h });
+    return { x: Math.round(a.x), y: Math.round(a.y), w: Math.max(4, Math.round(c.x - a.x)), h: Math.max(4, Math.round(c.y - a.y)) };
+  };
+  // masks active at this source time (tracked: the key in effect)
+  project.masks.forEach((m, i) => {
+    if (!(f.src >= m.startMs && f.src < m.endMs)) return;
+    let r = m.rect;
+    if (m.keys?.length) for (const k of m.keys) if (k.tMs <= f.src) r = k.rect;
+    out.push({
+      kind: "mask",
+      index: i,
+      box: toBox(r),
+      keepAspect: false,
+      label: m.kind,
+      apply: (b) => (p) => {
+        const nr = fromBox(b);
+        const cur = m; // as at the gesture start: deltas are absolute
+        if (!p.masks[i]) return p;
+        // tracked masks: every key moves / grows by the same edge deltas
+        const d = { x0: nr.x - r.x, y0: nr.y - r.y, x1: nr.x + nr.w - (r.x + r.w), y1: nr.y + nr.h - (r.y + r.h) };
+        const shift = (q: typeof r) => ({ x: q.x + d.x0, y: q.y + d.y0, w: Math.max(4, q.w + d.x1 - d.x0), h: Math.max(4, q.h + d.y1 - d.y0) });
+        return updateBlock(p, "mask", i, { rect: shift(cur.rect), ...(cur.keys ? { keys: cur.keys.map((k) => ({ ...k, rect: shift(k.rect) })) } : {}) });
+      },
+    });
+  });
+  // webcam bubble (corner overlays only: split / fullscreen layouts own their slot)
+  const cam = f.layout.camera;
+  if (cam && f.layout.cameraOpacity > 0.5 && project.camera.enabled) {
+    const [x, y, w, h] = cam;
+    const size0 = project.camera.size;
+    out.push({
+      kind: "webcam",
+      index: 0,
+      box: { x, y, w, h },
+      keepAspect: true,
+      label: "webcam",
+      apply: (b) => (p) => {
+        const size = Math.min(0.9, Math.max(0.05, size0 * (b.w / w)));
+        return { ...p, camera: { ...p.camera, size: Math.round(size * 1000) / 1000, position: clampedNormCentre(centre(b), b.w, b.h, W, H) } };
+      },
+    });
+  }
+  // caption: moves vertically (centred horizontally), corners scale the font
+  const cb = captionBox(scratch(), plan, f);
+  if (cb) {
+    const [x, y, w, h] = cb;
+    const fs0 = project.captions.style.fontSize;
+    out.push({
+      kind: "caption",
+      index: 0,
+      box: { x, y, w, h },
+      keepAspect: true,
+      label: "caption",
+      apply: (b) => (p) => {
+        const fontSize = Math.round(Math.min(160, Math.max(14, fs0 * (b.h / h))) * 10) / 10;
+        const yc = Math.min(0.97, Math.max(0.03, (b.y + b.h / 2) / H));
+        return { ...p, captions: { ...p.captions, style: { ...p.captions.style, position: "custom", y: Math.round(yc * 10000) / 10000, fontSize } } };
+      },
+    });
+  }
+  // brand logo watermark
+  const wm = plan.watermark;
+  if (wm) {
+    out.push({
+      kind: "logo",
+      index: 0,
+      box: { x: wm.x, y: wm.y, w: wm.w, h: wm.h },
+      keepAspect: true,
+      label: "logo",
+      apply: (b) => (p) => {
+        const size = Math.min(0.8, Math.max(0.02, b.w / W));
+        return { ...p, brand: { ...p.brand, logo: { ...p.brand.logo, size: Math.round(size * 10000) / 10000, position: clampedNormCentre(centre(b), b.w, b.h, W, H) } } };
+      },
+    });
+  }
+  // zoom target rectangle of the selected zoom block (drawn over the unzoomed frame)
+  if (zoomSel && sel) {
+    const [cx0, cy0, cw, ch] = plan.source.crop;
+    const focus = zoomSel.focus === "follow" ? { x: cw / 2, y: ch / 2 } : { x: zoomSel.focus.x - cx0, y: zoomSel.focus.y - cy0 };
+    const r = zoomRect(focus, zoomSel.scale, cw, ch);
+    const idx = sel.index;
+    out.push({
+      kind: "zoom",
+      index: idx,
+      box: toBox({ x: r.x + cx0, y: r.y + cy0, w: r.w, h: r.h }),
+      keepAspect: true,
+      label: zoomSel.focus === "follow" ? "zoom · follows cursor" : "zoom · fixed point",
+      apply: (b) => (p) => {
+        const sr = fromBoxF(sp, b);
+        const t = zoomTarget({ x: sr.x - cx0, y: sr.y - cy0, w: sr.w, h: sr.h }, cw, ch, 1, p.zoom.maxScale);
+        return updateBlock(p, "zoom", idx, { focus: { x: t.focus.x + cx0, y: t.focus.y + cy0 }, scale: t.scale });
+      },
+    });
+  }
+  return out;
+}
+
+/** Output box -> source rect without rounding (zoom targets keep sub-pixel precision). */
+function fromBoxF(sp: ReturnType<typeof spaceOf>, b: Box): Box {
+  const a = sp.fromOut({ x: b.x, y: b.y });
+  const c = sp.fromOut({ x: b.x + b.w, y: b.y + b.h });
+  return { x: a.x, y: a.y, w: c.x - a.x, h: c.y - a.y };
+}
+
+function selectedKey(): { kind: CanvasKind; index: number } | null {
+  const s = store.get();
+  if (s.canvasSel) return { kind: s.canvasSel, index: 0 };
+  if (s.selection?.track === "mask") return { kind: "mask", index: s.selection.index };
+  if (s.selection?.track === "zoom") return { kind: "zoom", index: s.selection.index };
+  return null;
+}
+
+function selectObj(o: CanvasObj): void {
+  if (o.kind === "mask") store.select({ track: "mask", index: o.index });
+  else if (o.kind === "zoom") store.select({ track: "zoom", index: o.index });
+  else store.selectCanvas(o.kind);
+  canvasFocus = true;
+}
+
+/** True while the last pick was on the canvas: arrow keys nudge instead of stepping frames. */
+let canvasFocus = false;
+export function canvasHasFocus(): boolean {
+  return canvasFocus && !!selectedKey();
+}
+
+/** Pick an overlay under output point p (called by the annotation layer when no annotation is hit). */
+export function pickCanvasObject(p: Vec2): boolean {
+  const s = store.get();
+  const plan = s.plan;
+  const f = plan?.frames[s.frame];
+  if (!plan || !f) return false;
+  const objs = canvasObjects(plan, f, s.project);
+  for (let i = objs.length - 1; i >= 0; i--) {
+    const b = objs[i]!.box;
+    if (p.x >= b.x - 4 && p.x <= b.x + b.w + 4 && p.y >= b.y - 4 && p.y <= b.y + b.h + 4) {
+      selectObj(objs[i]!);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Arrow-key nudge of the selected canvas object by (dx, dy) output px; one undo step per key press. */
+export function nudgeSelected(dx: number, dy: number): boolean {
+  const s = store.get();
+  const plan = s.plan;
+  const f = plan?.frames[s.frame];
+  const key = selectedKey();
+  if (!plan || !f || !key) return false;
+  const o = canvasObjects(plan, f, s.project).find((x) => x.kind === key.kind && x.index === key.index);
+  if (!o) return false;
+  store.edit(`Nudge ${o.label}`, o.apply(moveBox(o.box, o.kind === "caption" ? 0 : dx, dy)));
+  return true;
+}
+
+/** Del on a selected canvas object that is not a timeline block. */
+export function removeCanvasSelection(): boolean {
+  const which = store.get().canvasSel;
+  if (!which) return false;
+  if (which === "logo") store.edit("Hide logo watermark", (p) => ({ ...p, brand: { ...p.brand, logo: { ...p.brand.logo, watermark: false } } }));
+  else if (which === "webcam") store.edit("Hide webcam", (p) => ({ ...p, camera: { ...p.camera, enabled: false } }));
+  else if (which === "caption") store.edit("Captions off", (p) => ({ ...p, captions: { ...p.captions, enabled: false } }));
+  store.selectCanvas(null);
+  return true;
+}
+
+interface Drag {
+  mode: "move" | Corner;
+  start: Vec2;
+  orig: CanvasObj;
+  moved: boolean;
+}
+
+export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
+  const plan = useEditor((s) => s.plan);
+  const frame = useEditor((s) => s.frame);
+  const project = useEditor((s) => s.project);
+  useEditor((s) => s.selection);
+  useEditor((s) => s.canvasSel);
+  const svg = useRef<SVGSVGElement>(null);
+  const drag = useRef<Drag | null>(null);
+  const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
+  const f = plan?.frames[frame];
+  const W = plan?.output.width ?? 1280;
+  const H = plan?.output.height ?? 720;
+
+  const toOut = (e: { clientX: number; clientY: number }): Vec2 => {
+    const r = svg.current!.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) * W) / r.width, y: ((e.clientY - r.top) * H) / r.height };
+  };
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const p = toOut(e);
+      if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < 2) return;
+      d.moved = true;
+      const o = d.orig;
+      let b: Box;
+      let g = { gx: [] as number[], gy: [] as number[] };
+      if (d.mode === "move") {
+        b = moveBox(o.box, o.kind === "caption" ? 0 : p.x - d.start.x, p.y - d.start.y);
+        if (!e.altKey) {
+          const sn = snapBox(b, W, H, 8 * (W / Math.max(1, cssW)));
+          b = o.kind === "caption" ? { ...sn.box, x: o.box.x } : sn.box;
+          g = { gx: o.kind === "caption" ? [] : sn.gx, gy: sn.gy };
+        }
+      } else b = resizeBox(o.box, d.mode, p, o.keepAspect, 8);
+      if (o.kind === "caption" && d.mode !== "move") b = { ...b, y: o.box.y + (o.box.h - b.h) / 2 }; // scale about its centre line
+      setGuides(g);
+      store.preview(o.apply(b));
+    };
+    const up = () => {
+      const d = drag.current;
+      if (!d) return;
+      drag.current = null;
+      setGuides({ gx: [], gy: [] });
+      store.endGesture(d.mode === "move" ? `Move ${d.orig.label}` : `Resize ${d.orig.label}`);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    // a pointer down outside the preview hands the arrow keys back to the transport
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element)?.closest?.(".preview-stage")) canvasFocus = false;
+    };
+    window.addEventListener("pointerdown", away, true);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointerdown", away, true);
+    };
+  }, [W, H, cssW]);
+
+  if (!plan || !f) return null;
+  const key = selectedKey();
+  const objs = canvasObjects(plan, f, project);
+  const sel = key ? objs.find((o) => o.kind === key.kind && o.index === key.index) : undefined;
+  const k = Math.min(cssW / W, cssH / H) || 1;
+  const hr = 6 / k;
+
+  const begin = (e: React.PointerEvent, o: CanvasObj, mode: Drag["mode"]) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    canvasFocus = true;
+    store.pause();
+    store.beginGesture();
+    drag.current = { mode, start: toOut(e), orig: o, moved: false };
+  };
+
+  return (
+    <svg ref={svg} className="canvas-overlay" data-testid="canvas-overlay" viewBox={`0 0 ${W} ${H}`} style={{ width: cssW, height: cssH }}>
+      {objs.map((o) =>
+        o === sel ? null : <rect key={`${o.kind}-${o.index}`} className={`co-outline co-${o.kind}`} data-testid={`co-${o.kind}-${o.index}`} x={o.box.x} y={o.box.y} width={o.box.w} height={o.box.h} />,
+      )}
+      {sel && (
+        <g className={`co-sel co-${sel.kind}`} data-testid={`co-sel-${sel.kind}`} data-box={sel.box.x.toFixed(2) + "," + sel.box.y.toFixed(2) + "," + sel.box.w.toFixed(2) + "," + sel.box.h.toFixed(2)}>
+          <rect className="co-body" data-testid="co-body" x={sel.box.x} y={sel.box.y} width={sel.box.w} height={sel.box.h} onPointerDown={(e) => begin(e, sel, "move")} />
+          {sel.kind === "zoom" && <circle className="co-centre" cx={sel.box.x + sel.box.w / 2} cy={sel.box.y + sel.box.h / 2} r={hr * 0.8} />}
+          <text className="co-label" x={sel.box.x + 4 / k} y={sel.box.y - 6 / k} style={{ fontSize: 12 / k }}>{sel.label}</text>
+          {(["nw", "ne", "sw", "se"] as Corner[]).map((h) => {
+            const cx = h === "nw" || h === "sw" ? sel.box.x : sel.box.x + sel.box.w;
+            const cy = h === "nw" || h === "ne" ? sel.box.y : sel.box.y + sel.box.h;
+            return <rect key={h} className={`co-handle h-${h}`} data-testid={`co-handle-${h}`} x={cx - hr} y={cy - hr} width={hr * 2} height={hr * 2} onPointerDown={(e) => begin(e, sel, h)} />;
+          })}
+        </g>
+      )}
+      {guides.gx.map((x) => <line key={`gx${x}`} className="co-guide" x1={x} x2={x} y1={0} y2={H} />)}
+      {guides.gy.map((y) => <line key={`gy${y}`} className="co-guide" y1={y} y2={y} x1={0} x2={W} />)}
+    </svg>
+  );
+}

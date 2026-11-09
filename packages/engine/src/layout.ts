@@ -46,6 +46,11 @@ export function layoutFor(
   const camSize = cfg.camera.size * short;
   const margin = Math.max(pad * 0.5, short * 0.03);
   const corner = (size: number): Rect => {
+    const pos = cfg.camera.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+      // free position (on-canvas drag): centre in output fractions, kept inside the frame
+      return { x: Math.min(out.width - size, Math.max(0, pos.x * out.width - size / 2)), y: Math.min(out.height - size, Math.max(0, pos.y * out.height - size / 2)), w: size, h: size };
+    }
     const right = cfg.camera.corner.endsWith("right");
     const bottom = cfg.camera.corner.startsWith("bottom");
     return {
@@ -148,13 +153,14 @@ export function overlayAvoidRect(layout: FrameLayout): Rect | null {
  * Scale the webcam rect about its anchored corner (CAM-05). Only corner overlays shrink; split and
  * fullscreen layouts own their slot and are left alone.
  */
-export function scaleCameraRect(layout: FrameLayout, factor: number, corner: ProjectConfig["camera"]["corner"]): FrameLayout {
+export function scaleCameraRect(layout: FrameLayout, factor: number, corner: ProjectConfig["camera"]["corner"], freeCamera = false): FrameLayout {
   if (!layout.camera || factor === 1 || (layout.kind !== "camera-overlay" && layout.kind !== "camera-cutout")) return layout;
   const c = layout.camera;
   const w = c.w * factor;
   const h = c.h * factor;
-  const x = corner.endsWith("right") ? c.x + c.w - w : c.x;
-  const y = corner.startsWith("bottom") ? c.y + c.h - h : c.y;
+  const free = layout.kind === "camera-overlay" || layout.kind === "camera-cutout" ? freeCamera : false;
+  const x = free ? c.x + (c.w - w) / 2 : corner.endsWith("right") ? c.x + c.w - w : c.x;
+  const y = free ? c.y + (c.h - h) / 2 : corner.startsWith("bottom") ? c.y + c.h - h : c.y;
   return { ...layout, camera: { x, y, w, h } };
 }
 

@@ -97,6 +97,8 @@ export interface EditorState {
   stepsExport: Partial<Record<"demo" | "guide", StepsExportRun>>;
   /** The caption translation run in progress (or its last outcome), demand #8. */
   translateRun: TranslateRunState | null;
+  /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
+  canvasSel: "logo" | "webcam" | "caption" | null;
 }
 
 export interface TranslateRunState {
@@ -161,6 +163,7 @@ export class EditorStore {
     exportDialog: null,
     stepsExport: {},
     translateRun: null,
+    canvasSel: null,
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -326,7 +329,11 @@ export class EditorStore {
   }
 
   select(sel: Selection | null): void {
-    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords });
+    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel });
+  }
+
+  selectCanvas(which: EditorState["canvasSel"]): void {
+    this.set({ canvasSel: which, selection: which ? null : this.s.selection });
   }
 
   /** Make auto zooms editable (see freezeAutoZooms); returns the index of `seg` after freezing. */

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
+import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./components/CanvasOverlay";
 import { deleteSelection, Timeline } from "./components/Timeline";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
@@ -275,12 +276,21 @@ function useKeys() {
           store.shuttle(1);
           break;
         case "ArrowLeft":
-          e.preventDefault();
-          store.step(e.shiftKey ? -10 : -1);
-          break;
         case "ArrowRight":
+        case "ArrowUp":
+        case "ArrowDown": {
           e.preventDefault();
-          store.step(e.shiftKey ? 10 : 1);
+          const n = e.shiftKey ? 10 : 1;
+          // a canvas object picked on the preview: nudge it (output px); else step frames
+          if (canvasHasFocus()) {
+            const dx = k === "ArrowLeft" ? -n : k === "ArrowRight" ? n : 0;
+            const dy = k === "ArrowUp" ? -n : k === "ArrowDown" ? n : 0;
+            if (nudgeSelected(dx, dy)) break;
+          }
+          if (k === "ArrowLeft") store.step(-n);
+          else if (k === "ArrowRight") store.step(n);
+          break;
+        }
           break;
         case "Home":
           store.step(-1e9);
@@ -292,6 +302,7 @@ function useKeys() {
         case "Backspace": {
           e.preventDefault();
           if (deleteSelection()) break;
+          if (removeCanvasSelection()) break;
           const sel = store.get().selectedWords;
           if (sel.length) store.deleteWords(sel);
           break;
@@ -303,6 +314,7 @@ function useKeys() {
           break;
         case "Escape":
           if (ui.get().fullscreen) ui.setFullscreen(false);
+          store.selectCanvas(null);
           store.select(null);
           store.selectWords([]);
           store.setTool("select");

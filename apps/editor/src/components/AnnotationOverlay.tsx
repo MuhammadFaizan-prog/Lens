@@ -12,6 +12,7 @@ import { defaultAnnotationStyle, defaultAnimations, normalizeAnnotation, textPre
 import { layoutText } from "../render/annotations";
 import { makeCanvas } from "../render/canvas";
 import { store, useEditor } from "../state/store";
+import { pickCanvasObject, zoomEditFrame } from "./CanvasOverlay";
 import { newId } from "../state/timelineOps";
 
 type Handle = "nw" | "ne" | "sw" | "se" | "from" | "to" | "curve" | "tip";
@@ -283,7 +284,11 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
     }
     const h = hit(p);
     if (!h) {
-      store.select(null);
+      // not an annotation: a mask, the logo, the webcam, the caption or a zoom target?
+      if (!pickCanvasObject(p)) {
+        store.select(null);
+        store.selectCanvas(null);
+      }
       return;
     }
     store.selectAnnotation(h.id);

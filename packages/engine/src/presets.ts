@@ -122,6 +122,7 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
   if (want.has("webcam") && s.webcam) {
     const w = merge(pickWebcam(d.camera), s.webcam);
     p.camera = { ...p.camera, ...w };
+    delete p.camera.position; // the preset places the webcam
   }
   if (want.has("captions") && s.captions) {
     const c = merge(d.captions, s.captions);

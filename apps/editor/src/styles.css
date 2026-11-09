@@ -601,6 +601,18 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 @media (max-width: 1360px) { .top-actions .btn-label { display: none; } .top-actions .btn { padding: 0 9px; } }
 .preview-zoom { width: auto; }
 .preview-zoom button { padding: 3px 8px; font-size: 11.5px; flex: none; }
+/* on-canvas overlays (Windows bugs #12 / #14) */
+.canvas-overlay { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.canvas-overlay .co-outline { fill: none; stroke: rgba(255, 255, 255, 0.35); stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; stroke-width: 1; }
+.canvas-overlay .co-outline.co-mask { stroke: var(--mask); }
+.canvas-overlay .co-body { fill: rgba(94, 234, 212, 0.06); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; cursor: move; }
+.canvas-overlay .co-zoom .co-body { fill: rgba(110, 168, 255, 0.08); stroke: var(--zoom); stroke-dasharray: 8 5; }
+.canvas-overlay .co-handle { fill: #fff; stroke: #0b0d10; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
+.canvas-overlay .h-nw, .canvas-overlay .h-se { cursor: nwse-resize; } .canvas-overlay .h-ne, .canvas-overlay .h-sw { cursor: nesw-resize; }
+.canvas-overlay .co-centre { fill: var(--zoom); }
+.canvas-overlay .co-label { fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 3px; font-weight: 650; }
+.canvas-overlay .co-guide { stroke: #ff3d7f; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.app.preview-fs .canvas-overlay .co-outline { display: none; }
 .inspector .tabs { flex-wrap: wrap; row-gap: 0; }
 .inspector .tabs button { flex: 1 0 auto; padding-left: 6px; padding-right: 6px; }
 /* shrinking the window must shrink the timeline: flex / grid items default to min-width: auto, which
