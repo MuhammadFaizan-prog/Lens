@@ -303,6 +303,7 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
   const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
   const srcLang = useEditor((s) => s.bundle?.transcript?.language || "en");
   const run = useEditor((s) => s.translateRun);
+  const unavailable = useEditor((s) => s.bundle?.translateUnavailable ?? null);
   const tr = p.translations;
   const missing = TRANSLATE_LANGUAGES.filter((l) => !tr.tracks.some((t) => t.language === l.code));
   const [pick, setPick] = useState<string>(missing[0]?.code ?? TRANSLATE_LANGUAGES[0]!.code);
@@ -319,7 +320,7 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
       <Select label="Caption language" value={tr.language ?? ""} options={langOptions} testId="caption-language" onChange={(v) => store.setCaptionLanguage(v || null)} />
       <div className="ctl tr-translate">
         <span className="ctl-label">Translate to…</span>
-        <select value={pick} aria-label="Translate to" data-testid="translate-to" onChange={(e) => setPick(e.target.value)} disabled={busy}>
+        <select value={pick} aria-label="Translate to" data-testid="translate-to" onChange={(e) => setPick(e.target.value)} disabled={busy || !!unavailable}>
           {TRANSLATE_LANGUAGES.map((l) => (
             <option key={l.code} value={l.code}>
               {l.name} · {l.english}
@@ -327,10 +328,15 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
             </option>
           ))}
         </select>
-        <button type="button" className="btn primary" data-testid="translate-go" disabled={busy || !hasWords} onClick={() => void store.translateCaptions([pick])}>
+        <button type="button" className="btn primary" data-testid="translate-go" disabled={busy || !hasWords || !!unavailable} title={unavailable ?? undefined} onClick={() => void store.translateCaptions([pick])}>
           {busy ? "Translating…" : "Translate"}
         </button>
       </div>
+      {unavailable && (
+        <p className="hint" data-testid="translate-unavailable">
+          {unavailable}
+        </p>
+      )}
       {run && run.state !== "done" && (
         <div className="pv-progress" data-testid="translate-progress">
           <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)}><div style={{ width: `${pct}%` }} /></div>

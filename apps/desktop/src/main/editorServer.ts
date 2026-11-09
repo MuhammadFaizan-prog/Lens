@@ -22,6 +22,8 @@ export interface EditorServer {
 
 export async function startEditorServer(): Promise<EditorServer> {
   process.env.LENS_EXPORT = "browser";
+  // caption translation needs Python + models the app does not ship (Windows #1b): shown as unavailable
+  process.env.LENS_TRANSLATE = "off";
   process.env.LENS_ROOT = lensRoot();
   process.env.LENS_FFMPEG = ffmpegPath();
   const fd = fontDir();

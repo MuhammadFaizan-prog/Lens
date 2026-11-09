@@ -172,6 +172,17 @@ interface TranslateJob {
 
 const translateJobs = new Map<string, TranslateJob>();
 
+/**
+ * Windows #1b: caption translation still runs the Python lens-translate (CTranslate2 + OPUS-MT models),
+ * which the desktop app does not ship. The desktop server sets LENS_TRANSLATE=off; the editor then shows
+ * the reason instead of a Translate button that fails with "python3: can't open file".
+ */
+export function translateUnavailable(): string | null {
+  return process.env.LENS_TRANSLATE === "off"
+    ? "Caption translation is not available in the desktop app yet: it needs the on-device translation models, which are not bundled. Captions in the recording's own language work."
+    : null;
+}
+
 /** Caption translation (demand #8): on-device lens-translate over the bundle transcript, one track per language. */
 function startTranslate(bundle: string, langs: string[]): TranslateJob {
   const id = "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -179,6 +190,12 @@ function startTranslate(bundle: string, langs: string[]): TranslateJob {
   translateJobs.set(id, job);
   const transcript = path.join(bundle, "transcript.json");
   const out = path.join(bundle, ".lens-cache", "translate", id);
+  const off = translateUnavailable();
+  if (off) {
+    job.state = "error";
+    job.error = off;
+    return job;
+  }
   if (!fs.existsSync(transcript)) {
     job.state = "error";
     job.error = "this recording has no transcript";
@@ -441,6 +458,7 @@ async function loadBundle(dir: string) {
     silences: micSilences(dir),
     // a fresh desktop recording with a mic (recording.json autoTranscribe, written at Stop): the editor
     // starts on-device speech-to-text once; the marker stops a failed run from repeating on every open
+    translateUnavailable: translateUnavailable(),
     autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
       && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
     screen: { ...probeVideo(path.join(dir, "screen.mp4")), frames: screenFrames },
