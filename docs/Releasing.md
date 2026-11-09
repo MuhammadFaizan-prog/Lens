@@ -122,8 +122,10 @@ installer (`quitAndInstall`) is Windows-only and is not exercised.
 cp -r out/desktop-cache/stage out/desktop/releases/0.1.0/app
 LENS_UPDATE_OLD_APP=$PWD/out/desktop/releases/0.1.0/app LENS_UPDATE_FEED=$PWD/out/desktop/releases/0.1.1 \
   npx playwright test -c apps/desktop/playwright.config.ts e2e/update.spec.ts
-# against the real release instead of a local feed:
-LENS_UPDATE_OLD_APP=... LENS_UPDATE_GITHUB=1 npx playwright test -c apps/desktop/playwright.config.ts e2e/update.spec.ts
+# against the published release: download its three assets into a folder and use that as the feed
+# (LENS_UPDATE_GITHUB=1 only works on Windows: on Linux electron-updater asks GitHub for
+# latest-linux-<arch>.yml, which a Windows release does not have)
+LENS_UPDATE_OLD_APP=... LENS_UPDATE_FEED=$PWD/downloaded-v0.1.1 npx playwright test -c apps/desktop/playwright.config.ts e2e/update.spec.ts
 ```
 
 Switches (development and tests only): `LENS_UPDATE_URL` (generic feed URL), `LENS_UPDATE_NSIS=1`,
