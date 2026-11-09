@@ -16,6 +16,10 @@ export const MODELS = [
   // work and not subject to copyright. ffmpeg's arnndn (RNNoise, BSD-3-Clause) runs it. 0.3 MB
   { group: "rnnoise", file: "rnnoise/sh.rnnn", url: "https://raw.githubusercontent.com/GregorR/rnnoise-models/master/somnolent-hogwash-2018-09-01/sh.rnnn",
     sha256: "70bb6685eb0c2a1d18e2918dca3fbfbd39317010b1802eb1b6ea73a92f3fdec0" },
+  // Tesseract English LSTM model, tessdata_fast 4.1.0 (Apache-2.0); the same file Debian's tesseract-ocr-eng ships.
+  // In-app OCR (privacy scan, step labels) runs it through tesseract.js. 4.1 MB
+  { group: "tessdata", file: "tessdata/eng.traineddata", url: "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata",
+    sha256: "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2" },
 ];
 const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
 const sha = (f) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");

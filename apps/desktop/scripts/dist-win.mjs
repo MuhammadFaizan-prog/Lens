@@ -51,13 +51,27 @@ fs.mkdirSync(STAGE, { recursive: true });
 fs.cpSync(path.join(DESKTOP, "dist"), path.join(STAGE, "dist"), { recursive: true, filter: (f) => !f.endsWith(".map") });
 // unpackaged runs of the staged app (the update test on Linux) read the feed from dev-app-update.yml
 fs.copyFileSync(path.join(DESKTOP, "dev-app-update.yml"), path.join(STAGE, "dev-app-update.yml"));
-const deps = { "electron-updater": pkg.dependencies["electron-updater"], "uiohook-napi": pkg.dependencies["uiohook-napi"] };
+const edDeps = JSON.parse(fs.readFileSync(path.join(REPO, "apps", "editor", "package.json"), "utf8")).dependencies;
+// tesseract.js: in-app OCR for the privacy scan and step labels (Windows #1), no Python
+const deps = { "electron-updater": pkg.dependencies["electron-updater"], "uiohook-napi": pkg.dependencies["uiohook-napi"],
+  "tesseract.js": edDeps["tesseract.js"], "wasm-feature-detect": edDeps["wasm-feature-detect"] };
 fs.writeFileSync(path.join(STAGE, "package.json"), JSON.stringify({
   name: "lens", productName: "Lens", version, description: "Lens screen recorder with auto-zoom", author: "MuhammadFaizan-prog",
   license: "UNLICENSED", main: "dist/main.cjs", dependencies: deps,
 }, null, 2));
 // production deps from the registry, no install scripts (uiohook-napi ships its Windows prebuild)
 execFileSync("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], { cwd: STAGE, stdio: "inherit" });
+// tesseract.js-core: Node loads only the LSTM builds (tesseract-core[-simd]-lstm.js + .wasm; Lens runs
+// OEM LSTM_ONLY); drop the legacy-engine builds and the base64 .wasm.js browser copies (30 MB -> ~6 MB)
+const tcore = path.join(STAGE, "node_modules", "tesseract.js-core");
+for (const f of fs.readdirSync(tcore)) if (/^tesseract-core/.test(f) && (f.endsWith(".wasm.js") || !f.includes("-lstm."))) fs.rmSync(path.join(tcore, f));
+// tesseract.js 6.0.1's Node getCore() is handed the boolean `lstmOnly` but compares it with the OEM
+// numbers, so it always asks for the legacy build (which we just dropped): accept `true` as LSTM-only
+const getCore = path.join(STAGE, "node_modules", "tesseract.js", "src", "worker-script", "node", "getCore.js");
+const gc = fs.readFileSync(getCore, "utf8");
+const gcFixed = gc.replaceAll("[OEM.DEFAULT, OEM.LSTM_ONLY].includes(oem)", "(oem === true || [OEM.DEFAULT, OEM.LSTM_ONLY].includes(oem))");
+if (gcFixed === gc) throw new Error("tesseract.js getCore.js changed upstream: re-check the LSTM-only core selection");
+fs.writeFileSync(getCore, gcFixed);
 const pre = path.join(STAGE, "node_modules", "uiohook-napi", "prebuilds");
 for (const d of fs.readdirSync(pre)) if (d !== PLAT) fs.rmSync(path.join(pre, d), { recursive: true, force: true });
 // linux-arm64: upstream's linux-arm64 prebuild is an x86-64 binary; use the one built from source
@@ -99,7 +113,9 @@ const config = {
   copyright: "MuhammadFaizan-prog",
   directories: { app: STAGE, output: OUT },
   files: ["dist/**", "package.json", "node_modules/**", "!dev-app-update.yml"],
-  asarUnpack: ["node_modules/uiohook-napi/**"],
+  asarUnpack: ["node_modules/uiohook-napi/**", "dist/jobWorker.cjs", "node_modules/tesseract.js/**", "node_modules/tesseract.js-core/**",
+    "node_modules/wasm-feature-detect/**", "node_modules/bmp-js/**", "node_modules/idb-keyval/**", "node_modules/is-url/**", "node_modules/node-fetch/**",
+    "node_modules/whatwg-url/**", "node_modules/tr46/**", "node_modules/webidl-conversions/**", "node_modules/regenerator-runtime/**", "node_modules/zlibjs/**"],
   extraResources: [
     { from: path.join(res, "ffmpeg"), to: "ffmpeg" },
     { from: path.join(res, "fonts"), to: "fonts" },

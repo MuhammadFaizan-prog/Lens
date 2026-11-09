@@ -34,6 +34,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
+import { startJob } from "./jobs";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
@@ -48,6 +49,8 @@ const FONT_DIR = process.env.LENS_FONT_DIR ? [process.env.LENS_FONT_DIR] : [];
 const FONT_CANDIDATES = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans-Bold.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"];
 const FONT_REGULAR = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/DejaVuSans.ttf"];
 /** "browser": export through the editor's Canvas2D renderer + ffmpeg (no Python); default: compositor/render.py. */
+/** Privacy scan / step labels: in-app (Node + tesseract.js, no Python) unless LENS_REDACT=python (the reference). */
+const PYTHON_JOBS = process.env.LENS_REDACT === "python";
 const EXPORT_PATH = process.env.LENS_EXPORT === "browser" ? "browser" : "compositor";
 
 type Next = (err?: unknown) => void;
@@ -98,8 +101,19 @@ function startScan(bundle: string, force: boolean): ScanJob {
   }
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const args = [path.join(ROOT, "redact", "lens-redact"), video, "-o", out, "--thumbs", dir, "--progress"];
   const ev = path.join(bundle, "events.jsonl");
+  if (!PYTHON_JOBS) {
+    // in-app (Windows #1): Node + tesseract.js on a worker thread, no Python
+    startJob({ kind: "scan", ffmpeg: FFMPEG, video, events: fs.existsSync(ev) ? ev : null, thumbs: dir }, (stage, done, total) => Object.assign(job, { stage, done, total }))
+      .then((r) => {
+        fs.writeFileSync(out, JSON.stringify(r));
+        fs.writeFileSync(stamp, mtime);
+        Object.assign(job, { result: r, state: "done", finishedAt: Date.now() });
+      })
+      .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+    return job;
+  }
+  const args = [path.join(ROOT, "redact", "lens-redact"), video, "-o", out, "--thumbs", dir, "--progress"];
   if (fs.existsSync(ev)) args.push("--events", ev);
   const py = spawn("python3", args, { cwd: ROOT });
   let err = "";
@@ -228,6 +242,16 @@ function startSteps(bundle: string): StepJob {
     return job;
   }
   fs.mkdirSync(dir, { recursive: true });
+  if (!PYTHON_JOBS) {
+    startJob({ kind: "steps", ffmpeg: FFMPEG, video, events: ev }, () => undefined)
+      .then((r) => {
+        fs.writeFileSync(out, JSON.stringify(r));
+        fs.writeFileSync(stamp, key);
+        Object.assign(job, { result: r, state: "done", finishedAt: Date.now() });
+      })
+      .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+    return job;
+  }
   const py = spawn("python3", [path.join(ROOT, "redact", "lens-redact"), "steps", video, "--events", ev, "-o", out], { cwd: ROOT });
   let err = "";
   py.stderr.on("data", (d: Buffer) => (err += d.toString()));

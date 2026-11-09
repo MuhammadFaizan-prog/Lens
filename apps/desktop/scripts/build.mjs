@@ -19,8 +19,19 @@ await build({
   outfile: path.join(DIST, "main.cjs"),
   platform: "node",
   format: "cjs",
-  external: ["electron", "uiohook-napi", "electron-updater", "vite"],
+  external: ["electron", "uiohook-napi", "electron-updater", "vite", "tesseract.js"],
   // the editor middleware (apps/editor/server/api.ts) is ESM and reads import.meta.url
+  define: { "import.meta.url": "__lensMetaUrl" },
+  banner: { js: 'const __lensMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
+});
+// on-device jobs (privacy scan, step labels; Windows #1) run on a worker thread: dist/jobWorker.cjs
+await build({
+  ...common,
+  entryPoints: [path.join(ROOT, "..", "editor", "server", "jobWorker.ts")],
+  outfile: path.join(DIST, "jobWorker.cjs"),
+  platform: "node",
+  format: "cjs",
+  external: ["tesseract.js"],
   define: { "import.meta.url": "__lensMetaUrl" },
   banner: { js: 'const __lensMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
 });
