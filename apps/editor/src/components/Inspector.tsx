@@ -8,6 +8,7 @@ import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
+import { webcamPanelState } from "../state/webcamPanel";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -234,17 +235,32 @@ function CursorTab({ p }: { p: ProjectConfig }) {
   );
 }
 
+/** Short labels on a full-width row so the three fit the inspector at 1280 px windows (Windows v0.1.2: "Rou..."); the tooltip says the rest. */
+export const WEBCAM_SHAPES: Array<{ value: ProjectConfig["camera"]["shape"]; label: string; hint: string }> = [
+  { value: "rounded", label: "Round", hint: "Rounded rectangle" },
+  { value: "circle", label: "Circle", hint: "Circle" },
+  { value: "square", label: "Square", hint: "Square corners" },
+];
+
 function CameraTab({ p }: { p: ProjectConfig }) {
-  const hasCam = useEditor((s) => !!s.bundle?.camera);
+  const ui = webcamPanelState(useEditor((s) => s.bundle));
+  const off = ui.controlsDisabled;
   const t = (label: string, fn: (c: ProjectConfig["camera"]) => Partial<ProjectConfig["camera"]>) => store.tweak(label, (q) => ({ ...q, camera: { ...q.camera, ...fn(q.camera) } }));
   return (
-    <Section title="Webcam" aside={!hasCam ? <span className="stat">no webcam track</span> : undefined}>
-      <Toggle label="Show webcam" value={p.camera.enabled} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
-      <Select label="Corner" value={p.camera.corner} options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
-      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
-      <Segmented label="Shape" value={p.camera.shape} options={[{ value: "rounded", label: "Rounded" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }]} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
-      <Toggle label="Mirror" value={p.camera.mirror} onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
-      <Slider label="Shrink on zoom" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+    <Section title="Webcam" aside={off ? <span className="stat" data-testid="cam-none-stat">no camera</span> : undefined}>
+      {ui.empty && (
+        <div className="cam-empty" data-testid="cam-empty" role="note">
+          <strong data-testid="cam-empty-title">{ui.empty.title}</strong>
+          <span data-testid="cam-empty-hint">{ui.empty.hint}</span>
+        </div>
+      )}
+      {ui.warning && <p className="note warn" data-testid="cam-warning">Recorder: {ui.warning}</p>}
+      <Toggle label="Show webcam" value={!off && p.camera.enabled} disabled={off} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
+      <Select label="Corner" value={p.camera.corner} disabled={off} testId="cam-corner" options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
+      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} disabled={off} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
+      <Segmented label="Shape" stacked value={p.camera.shape} disabled={off} testId="cam-shape" options={WEBCAM_SHAPES} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
+      <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
+      <Slider label="Shrink on zoom" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
     </Section>
   );
 }

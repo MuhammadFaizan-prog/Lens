@@ -445,6 +445,7 @@ function registerIpc(): void {
     const displays = displayGeoms();
     const captured = info.kind === "screen" ? displayForSource(info.displayId, info.sourceId, displays) : null;
     rec.start({ ...info, quality: settings.record.quality, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
+    logLine(info.webcamError ? "WARN" : "INFO", `recording started: camera ${info.webcamDevice ? JSON.stringify(info.webcamDevice) : "none"}${info.webcam ? ` (${info.webcam.mime})` : ""}${info.webcamError ? ` — ${info.webcamError}` : ""}`);
     if (settings.record.hideWhileRecording) recorderWin?.hide();
     return { ok: true };
   });

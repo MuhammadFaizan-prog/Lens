@@ -29,6 +29,8 @@ export interface Bundle {
   silences?: Array<{ startMs: number; endMs: number }>;
   screen: TrackInfo;
   camera: TrackInfo | null;
+  /** The recorder's reason a selected camera is missing or broken (recording.json), or null. */
+  cameraWarning?: string | null;
 }
 
 export async function fetchBundle(dir?: string): Promise<Bundle> {
@@ -49,6 +51,7 @@ export async function fetchBundle(dir?: string): Promise<Bundle> {
     silences: Array.isArray(j.silences) ? j.silences : [],
     screen: j.screen,
     camera: j.camera,
+    cameraWarning: typeof j.cameraWarning === "string" ? j.cameraWarning : null,
   };
 }
 

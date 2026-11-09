@@ -286,7 +286,21 @@ async function start(sourceId?: string): Promise<void> {
     let mic: MediaStream | null = null;
     const micId = $<HTMLSelectElement>("mic-device").value;
     if (micId || $<HTMLInputElement>("mic").checked) mic = micStream ?? (await openMic(micId));
-    const webcam = $<HTMLSelectElement>("cam-device").value ? webcamStream : null;
+    // a camera chosen in the list is recorded; when its preview stream is not open (still opening after
+    // the last take, or the device refused) it is opened here, and a failure is reported in the bundle
+    // instead of the recording silently having no camera (Windows v0.1.2 "no webcam track")
+    const camSel = $<HTMLSelectElement>("cam-device");
+    const camId = camSel.value;
+    const camLabel = camId ? camSel.selectedOptions[0]?.textContent ?? camId : null;
+    let webcamError: string | null = null;
+    if (camId && !webcamStream) {
+      try {
+        webcamStream = await openCamera(camId);
+      } catch (e) {
+        webcamError = `camera "${camLabel}" could not be opened: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`;
+      }
+    }
+    const webcam = camId ? webcamStream : null;
     if (mic) streams.push(mic);
     if (webcam) streams.push(webcam);
     const sysTracks = video.getAudioTracks();
@@ -328,6 +342,7 @@ async function start(sourceId?: string): Promise<void> {
       sourceId: src.id, sourceName: src.name, kind: src.kind, displayId: src.displayId, capture, fps: FPS, videoMime: vMime, videoStart, clock,
       mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null, cursor: cursorInfo,
       webcam: webcamRec ? { mime: webcamRec.mimeType, start: webcamStart } : null,
+      webcamDevice: camLabel, webcamError,
       system: systemRec ? { mime: systemRec.mimeType, start: systemStart } : null,
       crop: mode === "region" && region ? { x: Math.round(region.x * capture.width), y: Math.round(region.y * capture.height), w: Math.round(region.w * capture.width), h: Math.round(region.h * capture.height) } : null,
     });
@@ -503,6 +518,41 @@ async function listDevices(): Promise<void> {
   }
 }
 
+function openCamera(camId: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+}
+
+/**
+ * The camera / mic chosen last, kept across recorder windows: main replaces the recorder window after
+ * every recording (memory), and the new one used to start with "No camera", so the next take silently
+ * had no webcam.
+ */
+const DEVICE_KEYS = { "cam-device": "lens.recorder.camDevice", "mic-device": "lens.recorder.micDevice" } as const;
+function rememberDevice(id: keyof typeof DEVICE_KEYS): void {
+  try {
+    localStorage.setItem(DEVICE_KEYS[id], $<HTMLSelectElement>(id).value);
+  } catch {
+    // storage unavailable: the choice just is not remembered
+  }
+}
+function restoreDevices(): boolean {
+  let changed = false;
+  for (const id of Object.keys(DEVICE_KEYS) as Array<keyof typeof DEVICE_KEYS>) {
+    let v: string | null = null;
+    try {
+      v = localStorage.getItem(DEVICE_KEYS[id]);
+    } catch {
+      v = null;
+    }
+    const sel = $<HTMLSelectElement>(id);
+    if (v && sel.value !== v && [...sel.options].some((o) => o.value === v)) {
+      sel.value = v;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /** Open / close the selected mic (level meter) and camera (preview) when the choice changes. */
 async function applyDevices(): Promise<void> {
   if (state !== "idle") return;
@@ -527,7 +577,7 @@ async function applyDevices(): Promise<void> {
   pv.hidden = !camId;
   if (camId) {
     try {
-      webcamStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+      webcamStream = await openCamera(camId);
       pv.srcObject = webcamStream;
       await pv.play().catch(() => undefined);
     } catch (e) {
@@ -670,8 +720,8 @@ document.querySelectorAll<HTMLButtonElement>(".mode").forEach(
       }
     }),
 );
-$("mic-device").onchange = () => void applyDevices();
-$("cam-device").onchange = () => void applyDevices();
+$("mic-device").onchange = () => (rememberDevice("mic-device"), void applyDevices());
+$("cam-device").onchange = () => (rememberDevice("cam-device"), void applyDevices());
 $("teleprompter").onclick = () => void lens.teleprompter();
 navigator.mediaDevices.addEventListener?.("devicechange", () => void listDevices());
 $("tab-screen").onclick = () => ((tab = "screen"), renderSources());
@@ -691,6 +741,7 @@ void (async () => {
     $("sys-audio-note").textContent = "System audio recording works on Windows.";
   }
   await listDevices();
+  if (restoreDevices()) await applyDevices();
 })();
 
 // ---- auto-update banner (main/updater.ts)
@@ -749,7 +800,7 @@ void lens.updateState().then((u) => {
   importCancel: () => lens.importCancel(),
   importLog: () => [...importLog],
   setRegion: (r: typeof region) => ((region = r), setMode("region")),
-  devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
+  devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream, cam: $<HTMLSelectElement>("cam-device").value, mic: $<HTMLSelectElement>("mic-device").value }),
   settings: () => ({ FPS, BPP, COUNTDOWN }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,
     zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update }),

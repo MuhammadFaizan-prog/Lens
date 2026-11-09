@@ -227,6 +227,8 @@ export class EditorStore {
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
       if (def) this.notify(`New project: default preset ${def.name} applied`);
+      // a camera the recorder could not save is said out loud, not only in the Webcam tab
+      else if (bundle.cameraWarning && !bundle.camera) this.notify(`No camera in this recording: ${bundle.cameraWarning}`);
       // a new recording with the mic on: transcribe it on-device right away (Windows #5)
       if (bundle.autoTranscribe && !bundle.transcript) void this.transcribe(true);
     } catch (e) {

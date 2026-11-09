@@ -30,6 +30,7 @@
  * (generated on first use by scripts/make_sample.py; apps/editor/sample-takes, the multi-take sample, and
  * apps/editor/sample-privacy, the privacy-redaction sample, too).
  */
+import { cameraWarningOf } from "../src/state/webcamPanel";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -566,6 +567,8 @@ async function loadBundle(dir: string) {
       && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
     screen: { ...probeVideoCached(path.join(dir, "screen.mp4")), frames: screenFrames },
     camera: hasCam ? { ...probeVideoCached(path.join(dir, "cam.mp4")), frames: camFrames } : null,
+    // the recorder's reason a selected camera is missing (conversion failed / nothing recorded), for the Webcam tab
+    cameraWarning: cameraWarningOf(readJson(path.join(dir, "recording.json")) as Parameters<typeof cameraWarningOf>[0]),
   };
 }
 
