@@ -24,7 +24,7 @@ symlinked to `~/.cache/ms-playwright/ffmpeg-<rev>/ffmpeg-linux` works.
 
 ### Running the e2e on a small machine
 
-The suite is 18 tests (parity 1, editor 14, demo 1, takes 2) and runs with `workers: 1`, `fullyParallel:
+The suite is 19 tests (parity 1, editor 14, demo 1, takes 2, privacy 1) and runs with `workers: 1`, `fullyParallel:
 false`, one reused server (`reuseExistingServer`). On the 2-core sandbox with ~1 GB free, a default
 headless Chromium (~900 MB over 8 processes) plus the export's compositor (~430 MB: Python 180, x264
 110, two decoders) got the Playwright worker OOM-killed, so by default (`LENS_E2E_LOWMEM=0` turns it
@@ -43,6 +43,7 @@ npx playwright test e2e/editor.spec.ts -g "export renders"
 npx playwright test e2e/demo.spec.ts
 npx playwright test e2e/takes.spec.ts -g "swap take"     # multi-take, on apps/editor/sample-takes
 npx playwright test e2e/takes.spec.ts -g "mark retake"
+npx playwright test e2e/privacy.spec.ts                 # privacy scan + review, on apps/editor/sample-privacy
 ```
 
 Don't run pytest at the same time.
@@ -72,6 +73,13 @@ rejected hatched and struck through); clicking a rejected take keeps it, ▶ pla
 take from a trial plan without touching history. The transcript strikes through rejected-take words
 and offers take chips, Mark retake, a Takes toggle and Keep last / Keep best. The multi-take sample
 is `apps/editor/sample-takes` (`make_sample.py --takes`, generated on first open).
+
+Privacy (`docs/Privacy.md`): the left column switches between **Transcript** and **Privacy**. The
+Privacy panel runs the on-device scan (`POST /api/privacy/scan` → `redact/lens-redact`, cached per
+screen.mp4 in `.lens-cache/privacy/`), lists the finds by type with thumbnails, and accepts or
+dismisses them (one or all; blur or pixelate). Accepted finds are tracked masks (hatched blocks in
+the Masks lane). Export asks first while finds are pending. Sample: `apps/editor/sample-privacy`.
+Source frames are now fetched from the bundle opened with `?dir=` (before, always the default one).
 
 Deleting transcript words adds cuts (`cutsForDeletedWords`) and, since this change, words inside
 any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every filler not already

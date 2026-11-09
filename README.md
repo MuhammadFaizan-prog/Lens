@@ -21,6 +21,9 @@ See `docs/Rules.md`.
   runs transcription → plan → render in one go.
 - `transcribe/` on-device speech-to-text (`lens-transcribe`): faster-whisper base.en (MIT) on the
   CPU, word timings aligned to measured pauses, filler and pause detection. See `docs/STT.md`.
+- `redact/` on-device privacy scan (`lens-redact`): Tesseract OCR on sampled frames, classifiers for
+  emails, phones, cards, API keys, JWTs, tokens, IPs and notification banners, frame-by-frame box
+  tracking into timed masks. See `docs/Privacy.md`.
 - `research/harness/` measurement harness: recovers padding, corner radius, shadow, zoom spring
   curves, lead/hold, cursor smoothing, loudness from any export; blind A/B pair builder.
 - `research/bars/` reference exports from the products we match (not committed if licensed).
@@ -57,6 +60,11 @@ python3 research/harness/demo_p1.py      # out/demo-p1.mp4 + contact sheet, ever
 transcribe/lens-transcribe mic.wav -o transcript.json [--offset-ms 400]
 python3 compositor/pipeline.py --meta meta.json --events events.jsonl --project project.json \
   --screen screen.mp4 --out final.mp4   # transcribes when captions / edits.cleanup need words
+
+# privacy: find sensitive text, then hide everything found (or review it in the editor's Privacy panel)
+redact/lens-redact screen.mp4 --events events.jsonl -o privacy.json --thumbs thumbs/
+node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
+  --privacy-scan privacy.json --accept-privacy --project-out redacted.project.json --out plan.json
 ```
 Audio, crop, masks, overrides and caption style live in `project.json`, for example:
 ```json
@@ -94,5 +102,8 @@ plan in the browser at parity with the reference compositor (SSIM-tested), with 
 inspector, transcript editing, Calm/Default/Punchy zoom presets with a zoom budget, and export.
 Multi-take: retakes are found in the transcript and the last (or best) take is kept, with an Alt
 takes lane to swap or A/B-preview takes (`edits.takes`, see `docs/Takes.md`).
+Privacy redaction: an on-device scan finds emails, phone and card numbers, API keys, tokens, JWTs,
+IPs and notification banners, follows them through scrolls and zooms, and offers them for review in
+the editor's Privacy panel; accepted ones become tracked blur masks (`privacy`, see `docs/Privacy.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

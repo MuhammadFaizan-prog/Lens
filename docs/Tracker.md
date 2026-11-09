@@ -29,6 +29,7 @@
 | Engine: zoom budget (max zooms/min, min hold, merge) + Calm / Default / Punchy presets | done | vitest; e2e (preset + budget re-plan the camera) |
 | Captions follow transcript cuts: words inside any cut are left out of captions | done | vitest (`zoombudget.test.ts` "captions follow transcript cuts"); `p1.test.ts` caption-highlight case rewritten, see below |
 | Multi-take with automatic best take (demand #1): retakes found in the transcript (fuzzy prefix alignment of word sequences + restart cues: phrases, long pause, filler, stutter, low confidence), groups of 2+ takes, keep last or best (completeness, fillers, pauses, confidence), rejected takes as reversible plan cuts that video, audio and captions follow; per-group choice, mark retake, not-a-retake; `edits.takes`; editor Alt takes lane, struck-through alt-take words, one-click swap, A/B preview, all undoable. See `docs/Takes.md` | done | vitest `takes.test.ts` (17): HELD_OUT word precision 0.957 / recall 1.000, group precision 0.933 / recall 1.000 (bounds 0.95 / 0.90 / 0.90 / 0.90), DEV 1.0 on all four, 0 groups on ~180 words of normal narration. pytest `test_takes.py`: espeak fumbles -> lens-transcribe -> render -> re-transcribe: WER 9.5% (2/21, bound 10%), fumble-only word gone, frames = plan, video 10466.7 / audio 10474.7 ms vs plan 10467.0 (bound 1 frame), sync median 20 ms / p90 41 ms (bounds 60 / 150), captions on 20/20 matched words. Playwright `takes.spec.ts` (2): swap changes kept take, transcript, plan and drawn pixels; A/B preview adds no undo step and ends by itself; undo restores take, frames, source time and pixels; mark retake + toggle undo |
+| Automatic privacy redaction (demand #3): on-device OCR (Tesseract) on sampled frames + scene changes, classifiers (email, phone, Luhn + IIN cards, API-key prefixes, JWT, high-entropy tokens, IPv4), notification banners in corners; frame-by-frame NCC tracking with backward fill, scroll prediction, piece matching and coasting; tracks merged / bridged into review items; `privacy.detections` (pending / accepted / dismissed), accepted items as tracked masks (`keys`, `privacyId`); `lens-redact` CLI, `lens-plan --privacy-scan --accept-privacy`; editor Privacy panel (scan, grouped list with thumbnails, accept / dismiss one or all, blur / pixelate, undo), Masks lane, export warning. See `docs/Privacy.md` | done (first version) | pytest `test_privacy.py`: fresh (unseen) session instance recall 1.000 (13/13), frame recall 0.991, 0 false positives (bounds ≥ 0.95 / ≥ 0.95 / ≤ 1 per min); dev 1.000 / 1.000 / 0; heldout first run frame recall 0.942 (failed, two bugs fixed, then 1.000); export with all accepted, 1.6x zoom: 6041 secret regions OCR'd, 0 leaked frames, control read 431/447 (0.96, bound 0.70); scan 32-46 s per minute of 720p30 video. Engine vitest `privacy.test.ts` (9), editor vitest (2), Playwright `privacy.spec.ts` (1) |
 | Tauri app shell | not started | |
 | GPU renderer (wgpu) | not started | |
 
@@ -137,3 +138,39 @@ Multi-take, what is not done: no "Record another take" button (no native recorde
 are found within one recording; no real-voice testing; restarts that rephrase rather than repeat
 are not found (Mark retake covers them); no hallway test of time to a clean cut; cursor and zoom
 continuity across a take cut uses the ordinary cut path only (no snap/loop-to-start smoothing yet).
+
+Privacy redaction (demand #3), 2026-11-09. Bounds were written into `tests/test_privacy.py` before
+the first held-out measurement; none was changed.
+1. Three synthetic sessions (`privacy_synth.py`): dev (scanner constants set while looking at it),
+   heldout (written at the same time) and fresh (written after the held-out run had been used).
+   First held-out run: instance recall 1.000, frame recall **0.942 (under the 0.95 bound)**, 0 FP.
+   Two bugs, both found on the held-out set, were fixed: (a) the merge step joined a token on a
+   moving card with a still text line it passed over (they overlapped on one frame), so the card's
+   token lost its own track; merges now need the tracks to move together (offset spread ≤ 4 px);
+   (b) lines entering a scroll view's top edge during a fast scroll were 1-2 px outside the mask
+   while the tracker coasted; coasted boxes now grow 2 px per side per frame. After: heldout 1.000 /
+   1.000 / 0 (optimistic, because the fixes came from it). The fresh session was then measured once
+   with nothing changed after: 1.000 / 0.991 / 0 FP. Its misses are one key (`sk-proj-…`) during the
+   fastest scroll (26.4-28.8 s): the mask is a few px behind the text on 60 of 535 visible frames.
+2. Before the held-out run I checked that the held-out secret strings pass the classifiers (a
+   classifier-only check, no scan); no classifier rule changed after it.
+3. `test_scan_file_holds_no_secret_text` failed on the first full run: email previews kept the whole
+   domain (`m•••@example.org`), so 8+ characters of the secret were in project data. Previews now keep
+   the first letter of the user and of the domain and the TLD (`m•••@e•••.org`). The test is unchanged.
+4. Editor bug found by the privacy e2e: the preview loaded source frames from the server's default
+   bundle, not the one opened with `?dir=` (the FrameStore query was empty; the takes sample shares the
+   default sample's media, so no earlier test could see it). Frames now come from the opened bundle.
+5. The leak check OCRs each secret's visible region (+4 px, 2x, polarity-normalised) in the rendered
+   export on every frame; a leak is a run of min(6, len) characters of the secret. Notification
+   banners are checked by their body text.
+
+6. Runs on this machine with the final code: npm build + test green (engine 98, editor 20); pytest
+   100 collected, full run exit 0 (privacy file 55 of them, also rerun alone after a stderr-only
+   change); e2e one invocation per spec, 19/19 in one pass (parity 1 with SSIM mean 0.98948 / min
+   0.98311, editor 13 + export 1, demo 1, takes 2, privacy 1), no OOM kills this time.
+
+Privacy redaction, what is not done: synthetic screens only (no real apps, HiDPI or other OS font
+rendering); text revealed or typed while visible is only re-found at the next OCR sample; no
+user-supplied words (customer names); no hand-drawn tracked box; notification detection needs a
+bordered corner banner; English OCR only; no funnel metric for the review step; long recordings and
+scan speed on other machines not measured; overlapping hidden items share one Masks lane.

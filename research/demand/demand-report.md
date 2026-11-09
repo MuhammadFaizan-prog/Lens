@@ -133,6 +133,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Build a synthetic corpus with planted secrets (20 recordings, 200 secrets). Measure recall (target ≥98%) and false positives per minute. Track one funnel metric: the share of exports that run the review step.
 
+**Status (2026-11-09): built, first version.** On-device OCR (Tesseract) + classifiers for emails, phones, Luhn-valid cards, API keys, JWTs, high-entropy tokens, IPs and corner notification banners; boxes tracked frame by frame through scrolls, moving cards and partial cover; review list with thumbnails, accept / dismiss one or all, blur / pixelate, undo; accepted items are tracked masks that follow zooms; export warns while items are pending (see `docs/Privacy.md`). Measured on a synthetic session written after tuning (60 s, 13 planted items): instance recall 1.000, frame recall 0.991, 0 false positives per minute; rendered export with all items accepted: 0 of 6041 secret regions readable by OCR. Smaller than the proposed corpus (3 sessions, 38 planted items, not 20 recordings / 200 secrets). Not done: user-supplied words (customer names), real-app recordings, the review-step funnel metric.
+
 ---
 
 ## 4. Text, arrows, callouts and auto step labels, non-destructive — 240 · M
@@ -580,7 +582,7 @@ Pricing and business-model findings are in their own section after #29.
 
 1. **Multi-take + auto best-take** (M): the most-voted ask in the category (535 + 468 + 216 votes); nobody picks takes for you. Lens's transcript makes it feasible. *Built 2026-11-09 (docs/Takes.md); record-another-take button still needs native capture.*
 2. **Calm auto-zoom** (S–M): motion sickness and "constantly zooming" complaints in 4 communities. A zoom budget and comfort mode use Lens's existing spring camera.
-3. **Auto-redaction** (M): a clean browser profile is a manual step today; detect tokens, emails and notifications on-device.
+3. **Auto-redaction** (M): a clean browser profile is a manual step today; detect tokens, emails and notifications on-device. *Built 2026-11-09 (docs/Privacy.md); user-supplied words and real-app testing still to do.*
 4. **Callouts + auto step labels** (M): 249 + 223 + 482 Screen Studio votes; Screen Studio still lacks arrows and text.
 5. **Demo-as-code** (L): teams stop making tutorials after UI redesigns; a scripted re-render reuses Lens's engine.
 6. **MCP/CLI** (M): a fast-rising 2026 ask; Lens already has a CLI and plan model.

@@ -11,3 +11,5 @@
 4. Engine defaults change only with a recorded reason (measurement or explicit design choice).
 5. Privacy: keystrokes are stored only as shortcut combos with modifiers; plain typing is stored as
    timing, never characters.
+6. Privacy scans store only redacted previews of what they find (`sk-proj-•••J0pD`), never the found
+   text itself; review thumbnails stay in the bundle's local cache.

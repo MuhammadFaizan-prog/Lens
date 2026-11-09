@@ -282,6 +282,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | CAM-04, CAM-05, CAM-06 | Webcam mirror, crop, size multiplier while zoomed | `layout.ts`, `camera.ts`, `render.py` |
 | AI-05, AI-06 | SRT import and export | `transcript.ts` parseSrt / toSrt |
 | TXT-01 (basic) | Shortcut overlays for modifier combos with Mac glyphs, repeat merging, 1200 ms display | `events.ts` shortcutOverlays, `render.py` |
+| AI-13 (text), (demand #3) | Automatic privacy redaction: on-device OCR + classifiers (emails, phones, Luhn cards, API keys, JWTs, tokens, IPs) and corner notification banners, tracked frame by frame (scroll, moving cards, partial cover), review list (accept / dismiss, blur / pixelate), accepted items as tracked masks that follow zooms; export warns while items are pending. Screen Studio's version is unique to it; FocuSee has manual masks only | `redact/lens_redact`, `privacy.ts`, `masks.ts` keyedRect, editor PrivacyPanel, `docs/Privacy.md` |
 | (demand #1) | Multi-take with automatic best take: retakes found in the transcript, keep last / best take, rejected takes as reversible cuts (video, audio, captions follow), per-group swap, mark retake; editor Alt takes lane with A/B preview and undo. Neither product has it (Screen Studio: planned) | `takes.ts` resolveTakes, `plan.ts`, editor Timeline / TranscriptPanel, `docs/Takes.md` |
 | EXP-01, EXP-02, EXP-03 (basic) | H.264 MP4 via ffmpeg, CRF 18, fps 24/30/60 | `render.py`, `project.ts` |
 
@@ -325,7 +326,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | CUR-09/10/11/12 | Rotate with motion, stop before end, shake removal, cursor-type smoothing | P2 | |
 | ZM-11 | 3D Motion | P2 | Unique to FocuSee |
 | ZM-12 | AI upscaling of zoomed text | P3 | Unique to Screen Studio |
-| AI-13/14 | Auto-hide sensitive data / faces | P2 | Unique to Screen Studio; strong privacy value |
+| AI-14 | Auto-hide faces | P2 | Sensitive text (AI-13) is implemented (demand #3, `docs/Privacy.md`); faces are not |
 | TXT-02/03/06/07 | Text, shapes, magnifier/callout, watermark | P2 | FocuSee only |
 | EXP-05 | ProRes export | P3 | |
 | EXP-09/11/12 | Batch export, estimates, quick-share widget | P3 | |
