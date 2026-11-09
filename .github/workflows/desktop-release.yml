@@ -1,0 +1,54 @@
+# Builds the Windows installer for an existing GitHub Release and uploads its three assets
+# (installer, blockmap, latest.yml). Same build as docs/Releasing.md (Linux, system NSIS, no wine);
+# exists because the Hark sandbox cannot upload release assets. Run it from the Actions tab or the
+# API with the release tag (the release must already exist: scripts/release.mjs --no-upload creates it).
+name: desktop-release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.1.0 (the release must exist)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  windows-installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: System packages (NSIS, DejaVu fonts)
+        run: sudo apt-get update -q && sudo apt-get install -y -q nsis fonts-dejavu-core
+      - name: Version matches the tag
+        run: |
+          v=$(node -p "require('./apps/desktop/package.json').version")
+          test "v$v" = "${{ inputs.tag }}" || { echo "apps/desktop is $v, tag is ${{ inputs.tag }}"; exit 1; }
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+      - name: Build editor + installer
+        env:
+          USE_SYSTEM_MAKENSIS: "1"
+          LENS_NO_WINE: "1"
+        run: |
+          npm run build
+          npm run dist:win -w @lens/desktop
+      - name: Check the package
+        run: |
+          ls -la out/desktop
+          sudo apt-get install -y -q 7zip
+          7z l -tNsis out/desktop/Lens-Setup-*.exe | grep -E "Uninstall Lens.exe|app-64.7z"
+          7z l out/desktop/Lens-Setup-*.exe | grep -E "resources/ffmpeg/ffmpeg.exe|prebuilds/win32-x64/uiohook-napi.node|resources/app.asar$"
+          sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${{ inputs.tag }}; v=${v#v}
+          gh release upload "${{ inputs.tag }}" --repo "${{ github.repository }}" --clobber \
+            out/desktop/latest.yml "out/desktop/Lens-Setup-$v.exe" "out/desktop/Lens-Setup-$v.exe.blockmap"

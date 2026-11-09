@@ -139,7 +139,7 @@ const builder = path.join(REPO, "node_modules", ".bin", "electron-builder");
 // without wine (non-x64 Linux, or no wine installed) run electron-builder through eb-nowine.cjs, which
 // extracts the NSIS uninstaller instead of running the helper installer under wine
 const hasWine = (() => { try { execFileSync("wine", ["--version"], { stdio: "ignore" }); return process.arch === "x64"; } catch { return false; } })();
-const ebCmd = process.platform !== "win32" && !hasWine ? [process.execPath, [path.join(HERE, "eb-nowine.cjs")]] : [builder, []];
+const ebCmd = process.platform !== "win32" && (!hasWine || process.env.LENS_NO_WINE === "1") ? [process.execPath, [path.join(HERE, "eb-nowine.cjs")]] : [builder, []];
 execFileSync(ebCmd[0], [...ebCmd[1], "--win", "--x64", "--config", path.join(CACHE, "electron-builder.json"), "--publish", "never"], {
   cwd: STAGE,
   stdio: "inherit",

@@ -3,7 +3,9 @@
 // uploads latest.yml, Lens-Setup-<version>.exe and its .blockmap: the three files electron-updater
 // reads. Auth: curl runs through the shell's GitHub credential (Hark: credentials provider github;
 // elsewhere set GITHUB_TOKEN and it is sent as a bearer token).
-// Usage: node scripts/release.mjs [--notes notes.md] [--draft]
+// Usage: node scripts/release.mjs [--notes notes.md] [--draft] [--no-upload]
+// --no-upload: create the release only; the desktop-release workflow builds and uploads the assets
+// (Hark's sandbox cannot upload to uploads.github.com: every upload answers 400 through its gateway).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -46,6 +48,11 @@ const rel = curl("POST", `https://api.github.com/repos/${OWNER}/${REPO}/releases
 })]);
 if (rel.status !== 201) throw new Error(`create release failed (${rel.status}): ${JSON.stringify(rel.json)}`);
 console.log(`created ${rel.json.html_url} at ${sha}`);
+if (args.includes("--no-upload")) {
+  // assets uploaded by the desktop-release workflow (.github/workflows/desktop-release.yml)
+  console.log(`not uploading; run the desktop-release workflow with tag ${tag}`);
+  process.exit(0);
+}
 for (const f of files) {
   const name = path.basename(f);
   const up = curl("POST", `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${rel.json.id}/assets?name=${encodeURIComponent(name)}`, ["-H", "content-type: application/octet-stream", "-T", f] /* -T streams the file; --data-binary @f would load it all into memory */);
