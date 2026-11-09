@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeIcons } from "./make-icon.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -25,5 +26,7 @@ await build({
 });
 await build({ ...common, entryPoints: [path.join(ROOT, "src/preload.ts")], outfile: path.join(DIST, "preload.cjs"), platform: "node", format: "cjs", external: ["electron"] });
 await build({ ...common, entryPoints: [path.join(ROOT, "src/renderer/recorder.ts")], outfile: path.join(DIST, "renderer/recorder.js"), platform: "browser", format: "iife" });
+// app icon (window, tray; the .ico also goes into Lens.exe): dist/icons/lens.ico + lens-<n>.png
+writeIcons(path.join(DIST, "icons"));
 for (const f of ["recorder.html", "recorder.css"]) fs.copyFileSync(path.join(ROOT, "src/renderer", f), path.join(DIST, "renderer", f));
 console.log("built", path.relative(process.cwd(), DIST));

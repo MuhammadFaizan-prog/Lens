@@ -66,7 +66,8 @@ if (fs.existsSync("/usr/share/doc/fonts-dejavu-core/copyright")) fs.copyFileSync
 fs.cpSync(path.join(REPO, "apps", "editor", "dist"), path.join(res, "editor"), { recursive: true, filter: (f) => !f.endsWith(".map") });
 if (fs.existsSync(path.join(REPO, "assets", "fonts"))) fs.cpSync(path.join(REPO, "assets", "fonts"), path.join(res, "lens", "assets", "fonts"), { recursive: true });
 
-// installer and uninstaller share one icon: NSIS patches the uninstaller icon into the exe header
+// one icon (scripts/make-icon.mjs, 16/24/32/48/64/256) for the installer, the uninstaller and Lens.exe.
+// Installer and uninstaller must share it: NSIS patches the uninstaller icon into the exe header
 // when it writes the uninstaller, and the no-wine path (eb-nowine.cjs) reads the uninstaller out
 // without that patch, so the two must be identical for the uninstaller's CRC to hold
 const icon = path.join(CACHE, "lens.ico");
@@ -84,13 +85,16 @@ const config = {
     { from: path.join(res, "editor"), to: "editor" },
     ...(fs.existsSync(path.join(res, "lens")) ? [{ from: path.join(res, "lens"), to: "lens" }] : []),
   ],
+  afterPack: path.join(HERE, "edit-exe.cjs"),
   npmRebuild: false,
   nodeGypRebuild: false,
   electronVersion: JSON.parse(fs.readFileSync(path.join(REPO, "node_modules", "electron", "package.json"), "utf8")).version,
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
-    // unsigned: no signing, and no rcedit (needs wine); publisherName is deliberately not set so
-    // electron-updater does not demand an Authenticode signature on updates
+    icon,
+    // unsigned: no signing, and no rcedit (needs wine on Linux): Lens.exe's icon and version info are
+    // written by the afterPack hook (scripts/edit-exe.cjs, pure JS) instead. publisherName is
+    // deliberately not set so electron-updater does not demand an Authenticode signature on updates
     signAndEditExecutable: false,
     artifactName: "Lens-Setup-${version}.${ext}",
   },
@@ -143,7 +147,7 @@ const ebCmd = process.platform !== "win32" && (!hasWine || process.env.LENS_NO_W
 execFileSync(ebCmd[0], [...ebCmd[1], "--win", "--x64", "--config", path.join(CACHE, "electron-builder.json"), "--publish", "never"], {
   cwd: STAGE,
   stdio: "inherit",
-  env: { ...process.env, ELECTRON_BUILDER_CACHE: path.join(CACHE, "electron-builder"), electron_config_cache: path.join(CACHE, "electron"), ...(nsisDir ? { ELECTRON_BUILDER_NSIS_DIR: nsisDir } : {}) },
+  env: { ...process.env, LENS_ICON: icon, ELECTRON_BUILDER_CACHE: path.join(CACHE, "electron-builder"), electron_config_cache: path.join(CACHE, "electron"), ...(nsisDir ? { ELECTRON_BUILDER_NSIS_DIR: nsisDir } : {}) },
 });
 for (const f of fs.readdirSync(OUT)) {
   const st = fs.statSync(path.join(OUT, f));

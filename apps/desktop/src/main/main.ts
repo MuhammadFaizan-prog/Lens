@@ -12,6 +12,7 @@ import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
 
+const APP_ID = "io.github.muhammadfaizanprog.lens"; // = electron-builder appId (scripts/dist-win.mjs)
 export const HOTKEY = process.env.LENS_HOTKEY || "CommandOrControl+Shift+R";
 
 if (process.env.LENS_LOWMEM === "1") {
@@ -20,6 +21,9 @@ if (process.env.LENS_LOWMEM === "1") {
   app.commandLine.appendSwitch("renderer-process-limit", "2");
 }
 if (process.env.LENS_USER_DATA) app.setPath("userData", process.env.LENS_USER_DATA);
+// Windows groups taskbar buttons and picks their icon by AppUserModelID; without it the windows group
+// under electron.exe. Must equal the appId the installer writes on the Start-menu shortcut.
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
 let recorderWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -78,31 +82,25 @@ function loadHook(): void {
   }
 }
 
-function trayIcon(recording: boolean): Electron.NativeImage {
-  // 16x16 drawn in code: a ring, filled red while recording (no third-party art)
-  const size = 16;
-  const buf = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++) {
-      const d = Math.hypot(x - 7.5, y - 7.5);
-      const i = (y * size + x) * 4;
-      const ring = d <= 7.5 && d >= 5.5;
-      const dot = d < 4.5;
-      const on = ring || dot;
-      const [r, g, b] = recording ? [235, 50, 60] : dot ? [90, 200, 255] : [230, 230, 235];
-      buf[i] = b;
-      buf[i + 1] = g;
-      buf[i + 2] = r;
-      buf[i + 3] = on ? 255 : 0;
-    }
-  return nativeImage.createFromBitmap(buf, { width: size, height: size });
+// The Lens icon (scripts/make-icon.mjs, built into dist/icons): the same art as the installer and
+// Lens.exe. Windows gets the multi-size .ico (it picks 16 / 24 / 32 px for the title bar, taskbar
+// and tray by DPI); elsewhere a PNG.
+const appIconPath = path.join(__dirname, "icons", process.platform === "win32" ? "lens.ico" : "lens-256.png");
+let appIconImage: Electron.NativeImage | null = null;
+function appIcon(): Electron.NativeImage {
+  appIconImage ??= nativeImage.createFromPath(appIconPath);
+  return appIconImage;
+}
+
+function trayIcon(): Electron.NativeImage {
+  if (process.platform === "win32") return appIcon();
+  return nativeImage.createFromPath(path.join(__dirname, "icons", "lens-32.png")).resize({ width: 16, height: 16, quality: "best" });
 }
 
 function updateTray(): void {
   if (!tray) return;
   const recording = !!rec;
-  tray.setImage(trayIcon(recording));
-  tray.setToolTip(recording ? "Lens: recording (Ctrl+Shift+R to stop)" : "Lens: ready (Ctrl+Shift+R to record)");
+    tray.setToolTip(recording ? "Lens: recording (Ctrl+Shift+R to stop)" : "Lens: ready (Ctrl+Shift+R to record)");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: recording ? "Stop recording" : "Start recording", accelerator: HOTKEY, click: () => toggle() },
@@ -132,6 +130,7 @@ function createRecorder(): void {
     y: process.env.LENS_E2E ? 0 : undefined,
     resizable: true,
     title: "Lens Recorder",
+    icon: appIcon(),
     backgroundColor: "#0f1115",
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), backgroundThrottling: false, contextIsolation: true, sandbox: false },
@@ -163,6 +162,7 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
     width: 1440,
     height: 900,
     title: `Lens — ${path.basename(dir)}`,
+    icon: appIcon(),
     backgroundColor: "#0f1115",
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true },
@@ -235,7 +235,7 @@ app.whenReady().then(async () => {
   loadHook();
   registerIpc();
   createRecorder();
-  tray = new Tray(trayIcon(false));
+  tray = new Tray(trayIcon());
   tray.on("click", () => showRecorder());
   updateTray();
   if (!globalShortcut.register(HOTKEY, toggle)) console.error(`[lens] could not register ${HOTKEY}`);

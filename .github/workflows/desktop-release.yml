@@ -1,7 +1,8 @@
 # Builds the Windows installer for an existing GitHub Release and uploads its three assets
 # (installer, blockmap, latest.yml). Same build as docs/Releasing.md (Linux, system NSIS, no wine);
-# exists because the Hark sandbox cannot upload release assets. Run it from the Actions tab or the
-# API with the release tag (the release must already exist: scripts/release.mjs --no-upload creates it).
+# exists because the Hark sandbox cannot upload release assets. Lens.exe's icon and version info are
+# written by scripts/edit-exe.cjs (resedit, pure JS, no wine) and checked below with icoutils.
+# Run it from the Actions tab or the API with the release tag (the release must already exist: scripts/release.mjs --no-upload creates it).
 name: desktop-release
 on:
   workflow_dispatch:
@@ -52,6 +53,26 @@ jobs:
             grep -F " $f" "$RUNNER_TEMP/app.txt" || { echo "missing $f"; exit 1; }
           done
           sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
+      - name: Check Lens.exe carries the Lens icon and version info
+        # Lens.exe from the installer payload: its icon group (RT_GROUP_ICON) must decode to the same
+        # images as the generated lens.ico (16/24/32/48/64/256), and its version strings must say Lens
+        run: |
+          sudo apt-get install -y -q icoutils
+          d="$RUNNER_TEMP/exe"; mkdir -p "$d/gen" "$d/exe" "$d/want" "$d/got"
+          7z e -y -o"$d" "$RUNNER_TEMP/app-64.7z" Lens.exe
+          wrestool -x -t14 "$d/Lens.exe" -o "$d/exe/lens.ico"
+          node apps/desktop/scripts/make-icon.mjs "$d/gen"
+          icotool -l "$d/exe/lens.ico"
+          icotool -x -o "$d/want" "$d/gen/lens.ico"
+          icotool -x -o "$d/got" "$d/exe/lens.ico"
+          (cd "$d/want" && ls) > "$d/want.txt"; (cd "$d/got" && ls) > "$d/got.txt"
+          diff "$d/want.txt" "$d/got.txt"
+          test "$(wc -l < "$d/want.txt")" -eq 6
+          for f in $(cat "$d/want.txt"); do cmp "$d/want/$f" "$d/got/$f"; done
+          echo "Lens.exe icon: 6 images, decoded pixels identical to lens.ico"
+          wrestool --raw -x -t16 "$d/Lens.exe" | iconv -f UTF-16LE -t UTF-8 -c | tr -c '[:print:]' ' ' | tee "$d/ver.txt" | grep -o 'ProductName *Lens'
+          v=${{ inputs.tag }}; grep -q "FileVersion *${v#v}" "$d/ver.txt"
+          ! grep -q 'Electron' "$d/ver.txt"
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}

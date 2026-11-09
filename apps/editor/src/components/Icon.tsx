@@ -30,19 +30,17 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
   );
 }
 
-/** The Lens mark: an aperture of three offset rings (original). */
+/**
+ * The Lens mark: a red record dot with a white ring on a dark rounded square. Same art as the desktop
+ * app icon (apps/desktop/scripts/make-icon.mjs, ART: corner 0.22, ring 0.36, dot 0.30 of the side);
+ * keep the two in step. Also the favicon in index.html.
+ */
 export function LensMark({ size = 22 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <defs>
-        <linearGradient id="lm" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#5eead4" />
-          <stop offset="1" stopColor="#60a5fa" />
-        </linearGradient>
-      </defs>
-      <circle cx="16" cy="16" r="13" fill="none" stroke="url(#lm)" strokeWidth="3" />
-      <circle cx="16" cy="16" r="6.5" fill="url(#lm)" />
-      <circle cx="13.5" cy="13.5" r="2" fill="#0b0d10" opacity="0.55" />
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" data-testid="lens-mark">
+      <rect width="32" height="32" rx="7.04" fill="#1e222a" />
+      <circle cx="16" cy="16" r="11.52" fill="#f0f0f0" />
+      <circle cx="16" cy="16" r="9.6" fill="#e83c3c" />
     </svg>
   );
 }
