@@ -59,12 +59,17 @@ for (const sz of SIZES) {
     }
     await shot(page, `layout-${sz.name}-scrolled${PACKAGED ? "-app" : ""}`);
     // a selected Step badge: its card's last control scrolls into view and takes a click (it was cut off, wheel did nothing)
+    // created with the Step badge tool (a hand-written annotation without its style is rejected by the
+    // engine and the store rolls the edit back), then given a label so the card shows its text row
+    await page.getByTestId("tool-badge").click();
+    const pv = (await page.getByTestId("preview").boundingBox())!;
+    await page.mouse.click(pv.x + pv.width * 0.3, pv.y + pv.height * 0.3);
     await page.evaluate(() => {
       const st = (window as any).__lens.store;
-      st.edit("Add badge", (p: any) => ({ ...p, annotations: [...p.annotations, { id: "layout-badge", kind: "badge", anchor: "screen", startMs: 500, endMs: 2500, at: { x: 200, y: 200 }, size: 18, number: null, text: "Open the settings",
-        in: { kind: "pop", ms: 200 }, out: { kind: "fade", ms: 200 } }] }));
-      const i = st.get().project.annotations.findIndex((a: any) => a.id === "layout-badge");
-      st.select({ track: "annotation", index: i });
+      const anns = st.get().project.annotations;
+      const b = anns[anns.length - 1];
+      st.updateAnnotation(b.id, (a: any) => ({ ...a, text: "Open the settings" }), "edit", "Badge label");
+      st.select({ track: "annotation", index: anns.length - 1 });
     });
     const card = page.getByTestId("ann-card");
     await expect(card).toBeVisible();
