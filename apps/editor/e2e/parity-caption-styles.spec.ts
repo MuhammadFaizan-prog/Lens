@@ -19,7 +19,8 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
-const FRAMES = [24, 48, 75, 110, 150, 190, 230, 262];
+// every frame inside a spoken word (words at 0.4-3.3 s, 5.2-7.55 s, 7.9-9.4 s at 30 fps), so each one carries a caption
+const FRAMES = [24, 48, 75, 165, 190, 210, 245, 262];
 
 const LOOKS: Record<string, Record<string, unknown>> = {
   A: { font: "Poppins", weight: "regular", uppercase: true, stroke: { enabled: true, color: "#000000", width: 0.1 }, highlightStyle: "box", background: { enabled: false, color: "#000000", opacity: 0.66 } },
