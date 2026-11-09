@@ -40,7 +40,8 @@ export function fontSet(): FontFaceSet {
 
 const fonts = new Map<string, Promise<boolean>>();
 
-function loadFont(f: FontFiles): Promise<boolean> {
+/** Register a font family as "Lens <family>" (both weights); resolves false when a file did not load. */
+export function loadFont(f: FontFiles): Promise<boolean> {
   const key = `${f.family}|${f.regular}|${f.bold}`;
   let p = fonts.get(key);
   if (!p) {
@@ -58,6 +59,20 @@ function loadFont(f: FontFiles): Promise<boolean> {
     fonts.set(key, p);
   }
   return p;
+}
+
+/**
+ * Families of `plan` that are not usable: listed in plan.fonts but a file failed to load, or named by
+ * the caption style without any files (an unknown family). The export refuses to start on any of
+ * these instead of silently drawing the fallback font (the preview shows them as a warning).
+ */
+export async function missingPlanFonts(plan: RenderPlan): Promise<string[]> {
+  const fs = (plan.fonts ?? []).filter((f) => f.family !== DEFAULT_FONT_FAMILY);
+  const ok = await Promise.all(fs.map(loadFont));
+  const bad = fs.filter((_, i) => !ok[i]).map((f) => f.family);
+  const cap = (plan.style.captions as { font?: string }).font;
+  if (cap && cap !== DEFAULT_FONT_FAMILY && !fs.some((f) => f.family === cap)) bad.push(cap);
+  return [...new Set(bad)];
 }
 
 const images = new Map<string, Promise<ImageBitmap | null>>();

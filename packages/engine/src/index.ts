@@ -25,4 +25,5 @@ export * from "./translation.js";
 export * from "./demo.js";
 export * from "./demoExport.js";
 export * from "./captionsManual.js";
+export * from "./captionStyles.js";
 export * from "./backdropArt.js";

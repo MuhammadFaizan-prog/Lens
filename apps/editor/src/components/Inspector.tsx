@@ -8,6 +8,7 @@ import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
+import { CaptionStyleControls } from "./CaptionStyleControls";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -252,20 +253,23 @@ function CameraTab({ p }: { p: ProjectConfig }) {
 function CaptionsTab({ p }: { p: ProjectConfig }) {
   const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
   const cs = p.captions.style;
-  const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style) } } }));
+  const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style), preset: undefined } } }));
   return (
     <>
     <Section title="Captions" aside={!hasWords ? <span className="stat">no transcript</span> : undefined}>
       <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
       <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
-      <Slider label="Size" value={cs.fontSize} min={24} max={84} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
-      <Segmented label="Position" value={cs.position === "custom" ? "bottom" : cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
+      <CaptionStyleControls p={p} />
+      <Slider label="Size" value={cs.fontSize} min={24} max={96} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
+      <Segmented label="Position" testId="caption-position" value={cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }, { value: "custom", label: "Custom", hint: "Drag the caption on the preview, or set its height below" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
+      {cs.position === "custom" && <Slider label="Height" value={cs.y} min={0.05} max={0.95} step={0.01} format={pct} testId="caption-y" onChange={(v) => t("Caption height", () => ({ y: v }))} />}
       <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
       <Slider label="Chars / line" value={cs.maxCharsPerLine} min={0} max={80} step={1} format={(v) => (v ? String(v) : "off")} testId="caption-chars" onChange={(v) => t("Characters per line", () => ({ maxCharsPerLine: v }))} />
       <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))}
         onReset={() => store.edit("Highlight follows theme", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, highlightColor: "@highlight" } } }))} />
-      <ColorInput label="Text" value={cs.textColor} onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
-      <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
+      <ColorInput label="Text" value={cs.textColor} testId="caption-text-color" onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
+      <Toggle label="Backing pill" value={cs.background.enabled} testId="caption-box" onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
+      {cs.background.enabled && <ColorInput label="Pill colour" value={cs.background.color} testId="caption-box-color" onChange={(v) => t("Pill colour", (c) => ({ background: { ...c.background, color: v } }))} />}
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
     </Section>
     <ManualCaptions p={p} />

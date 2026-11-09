@@ -76,7 +76,7 @@ export function BrandPanel() {
           <button className="btn small" onClick={() => fontInput.current?.click()}>
             <Icon name="plus" /> Add font files…
           </button>
-          <p className="note">Inter and JetBrains Mono ship with Lens (SIL Open Font License). Pick a regular and a bold file for your own font; you are responsible for its licence.</p>
+          <p className="note">The listed fonts ship with Lens (SIL Open Font License). Pick a regular and a bold file for your own font; you are responsible for its licence.</p>
         </Section>
         <Section title="Logo">
           <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden data-testid="brand-logo-input" onChange={(e) => { const f = e.target.files?.[0]; if (f) void store.uploadLogo(f); e.target.value = ""; }} />

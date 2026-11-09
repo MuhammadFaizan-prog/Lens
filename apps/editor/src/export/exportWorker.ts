@@ -6,7 +6,7 @@
  */
 import type { RenderPlan } from "@lens/engine";
 import { CAPTION_FONT, PlanRenderer } from "../render/renderer";
-import { ensurePlanAssets, fontSet, setAssetBundle } from "../render/assets";
+import { ensurePlanAssets, fontSet, missingPlanFonts, setAssetBundle } from "../render/assets";
 import { FrameStore } from "../media/frames";
 
 export interface StartMsg {
@@ -46,6 +46,9 @@ async function run(m: StartMsg): Promise<void> {
     setAssetBundle(query);
     await loadCaptionFonts();
     await ensurePlanAssets(plan);
+    // a caption / theme font that did not load would silently draw the fallback face: refuse instead
+    const missing = await missingPlanFonts(plan);
+    if (missing.length) throw new Error(`font${missing.length > 1 ? "s" : ""} not available for the export: ${missing.join(", ")}`);
     const renderer = new PlanRenderer();
     const canvas = new OffscreenCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d")!;

@@ -282,7 +282,25 @@ export interface CaptionStyle {
   maxCharsPerLine: number;
   /** Font family, or "@font" / absent: the theme font. */
   font?: string;
+  /*
+   * Caption styling (Windows request "diff diff fonts for the captions"). Every field below is
+   * optional and absent in projects saved before it: absent = the look captions always had (bold,
+   * as typed, no outline, highlighted word recoloured), so old project.json files render unchanged.
+   */
+  /** Font weight; absent = "bold". */
+  weight?: CaptionWeight;
+  /** Draw the caption in capitals (display only: SRT / VTT keep the words as spoken). */
+  uppercase?: boolean;
+  /** Outline around every glyph; width is a fraction of the font size (0.02..0.25). Absent = none. */
+  stroke?: { enabled: boolean; color: string; width: number };
+  /** How the spoken word is marked: "color" (absent) recolours it, "box" puts it on a highlight-coloured box. */
+  highlightStyle?: CaptionHighlightStyle;
+  /** Last one-click style applied (CAPTION_PRESETS), for the picker; cleared by nothing, purely informative. */
+  preset?: string;
 }
+
+export type CaptionWeight = "regular" | "bold";
+export type CaptionHighlightStyle = "color" | "box";
 
 export function defaultProject(): ProjectConfig {
   return {
@@ -487,6 +505,15 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));
   if (!isColorValue(p.captions.style.highlightColor) || !isColorValue(p.captions.style.textColor)) errs.push("caption colours must be #rrggbb or a theme slot (@highlight)");
+  {
+    const cs = p.captions.style;
+    if (cs.weight !== undefined && cs.weight !== "regular" && cs.weight !== "bold") errs.push('captions.style.weight must be "regular" or "bold"');
+    if (cs.highlightStyle !== undefined && cs.highlightStyle !== "color" && cs.highlightStyle !== "box") errs.push('captions.style.highlightStyle must be "color" or "box"');
+    if (cs.uppercase !== undefined && typeof cs.uppercase !== "boolean") errs.push("captions.style.uppercase must be a boolean");
+    if (cs.stroke !== undefined && (typeof cs.stroke !== "object" || cs.stroke === null || !isColorValue(cs.stroke.color) || !(cs.stroke.width >= 0 && cs.stroke.width <= 0.25)))
+      errs.push("captions.style.stroke must be { enabled, color #rrggbb, width 0..0.25 }");
+    if (cs.font !== undefined && (typeof cs.font !== "string" || !cs.font)) errs.push("captions.style.font must be a font family name");
+  }
   if (!["solid", "gradient", "image", "hidden"].includes(p.background.kind)) errs.push("background.kind must be solid, gradient, image or hidden");
   const st = p.background.stops;
   if (st !== undefined && !(Array.isArray(st) && st.length === p.background.colors.length && st.every((v) => Number.isFinite(v) && v >= 0 && v <= 1)))

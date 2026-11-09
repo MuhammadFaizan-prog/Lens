@@ -661,3 +661,18 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .tl-label .lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
 .tl-label .mini-add, .tl-label .lane-toggle, .tl-label .dot, .tl-label .lane-count { flex: none; }
 .tl-label .lane-count + .mini-add { margin-left: 4px; }
+
+/* ---------------------------------------------------------------- caption styles + fonts */
+.caption-presets, .caption-fonts { display: block; }
+.caption-presets .ctl-label, .caption-fonts .ctl-label { display: block; margin-bottom: 6px; }
+.cap-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.cap-preset { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-3); color: var(--text-2); cursor: pointer; }
+.cap-preset:hover { border-color: var(--line-2); color: var(--text); }
+.cap-preset.on { border-color: rgba(94, 234, 212, 0.6); color: var(--accent); }
+.cap-preset-swatch { display: grid; place-items: center; height: 34px; border-radius: 6px; font-size: 18px; line-height: 1; }
+.cap-preset-name { font-size: 11px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cap-font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; max-height: 196px; overflow-y: auto; padding-right: 2px; }
+.cap-font { padding: 6px 8px; text-align: left; font-size: 15px; line-height: 1.2; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-3); color: var(--text-2); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cap-font:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
+.cap-font.on { color: var(--accent); border-color: rgba(94, 234, 212, 0.6); background: rgba(94, 234, 212, 0.08); }
+.cap-font:disabled { opacity: 0.45; cursor: not-allowed; }
