@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
-import { deleteSelection, Timeline } from "./components/Timeline";
+import { addZoomAtPlayhead, deleteSelection, Timeline } from "./components/Timeline";
+import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./components/CanvasOverlay";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { StepsPanel } from "./components/StepsPanel";
@@ -16,6 +17,8 @@ import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
 import { store, useEditor } from "./state/store";
 import { ABOUT_NOTICES } from "./about";
+import { Splitter } from "./components/Splitter";
+import { ui, useUi } from "./state/uiLayout";
 
 function TopBar() {
   const name = useEditor((s) => s.bundle?.name ?? "");
@@ -57,16 +60,16 @@ function TopBar() {
         <PresetsMenu />
         <input ref={file} type="file" accept=".json,application/json" hidden data-testid="open-input" onChange={(e) => onFile(e.target.files?.[0])} />
         <button className="btn ghost" data-testid="open" onClick={() => file.current?.click()}>
-          <Icon name="open" /> Open
+          <Icon name="open" /> <span className="btn-label">Open</span>
         </button>
         <button className="btn ghost" data-testid="save" onClick={() => store.save()}>
-          <Icon name="save" /> Save
+          <Icon name="save" /> <span className="btn-label">Save</span>
         </button>
         <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo or step guide" onClick={() => store.openExportDialog("demo")}>
           Export…
         </button>
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
-          <Icon name="export" /> Export MP4
+          <Icon name="export" /> <span className="btn-label">Export</span> MP4
         </button>
         <AboutButton />
       </div>
@@ -166,10 +169,10 @@ function ExportSheet() {
   const dir = new URLSearchParams(location.search).get("dir");
   const fileUrl = `/api/export/${ex.id}/file${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`;
   return (
-    <div className="sheet-backdrop" onClick={() => store.closeExport()}>
+    <div className="sheet-backdrop" onClick={() => ex.state !== "running" && ex.state !== "starting" && store.closeExport()}>
       <div className="sheet" role="dialog" aria-label="Export" data-testid="export-sheet" onClick={(e) => e.stopPropagation()}>
         <header>
-          <h2>{ex.state === "done" ? "Export ready" : ex.state === "error" ? "Export failed" : "Exporting"}</h2>
+          <h2>{ex.state === "done" ? "Export ready" : ex.state === "error" ? (ex.error === "Export cancelled" ? "Export cancelled" : "Export failed") : "Exporting"}</h2>
           {ex.state !== "running" && (
             <button className="icon-btn" aria-label="Close" onClick={() => store.closeExport()}>
               <Icon name="close" />
@@ -192,6 +195,11 @@ function ExportSheet() {
           </>
         )}
         {ex.state === "error" && <pre className="error" data-testid="export-error">{ex.error}</pre>}
+        {(ex.state === "running" || ex.state === "starting") && (
+          <div className="sheet-actions">
+            <button className="btn" data-testid="export-cancel" onClick={() => void store.cancelExport()}>Cancel export</button>
+          </div>
+        )}
         {ex.state === "done" && (
           <div className="export-done">
             <video src={fileUrl} controls muted className="export-video" data-testid="export-video" />
@@ -270,12 +278,25 @@ function useKeys() {
           store.shuttle(1);
           break;
         case "ArrowLeft":
-          e.preventDefault();
-          store.step(e.shiftKey ? -10 : -1);
-          break;
         case "ArrowRight":
+        case "ArrowUp":
+        case "ArrowDown": {
           e.preventDefault();
-          store.step(e.shiftKey ? 10 : 1);
+          const n = e.shiftKey ? 10 : 1;
+          // a canvas object picked on the preview: nudge it (output px); else step frames
+          if (canvasHasFocus()) {
+            const dx = k === "ArrowLeft" ? -n : k === "ArrowRight" ? n : 0;
+            const dy = k === "ArrowUp" ? -n : k === "ArrowDown" ? n : 0;
+            if (nudgeSelected(dx, dy)) break;
+          }
+          if (k === "ArrowLeft") store.step(-n);
+          else if (k === "ArrowRight") store.step(n);
+          break;
+        }
+        case "z":
+        case "Z":
+          e.preventDefault();
+          addZoomAtPlayhead();
           break;
         case "Home":
           store.step(-1e9);
@@ -287,11 +308,20 @@ function useKeys() {
         case "Backspace": {
           e.preventDefault();
           if (deleteSelection()) break;
+          if (removeCanvasSelection()) break;
           const sel = store.get().selectedWords;
           if (sel.length) store.deleteWords(sel);
           break;
         }
+        case "f":
+        case "F":
+          e.preventDefault();
+          ui.toggleFullscreen();
+          break;
         case "Escape":
+          if (ui.get().fullscreen) ui.setFullscreen(false);
+          store.setZoomPlacing(false);
+          store.selectCanvas(null);
           store.select(null);
           store.selectWords([]);
           store.setTool("select");
@@ -334,6 +364,7 @@ function useKeys() {
 export function App() {
   const status = useEditor((s) => s.status);
   const error = useEditor((s) => s.error);
+  const L = useUi((s) => s);
   useKeys();
   useEffect(() => {
     const q = new URLSearchParams(location.search);
@@ -345,18 +376,26 @@ export function App() {
       });
   }, []);
   return (
-    <div className="app" data-status={status}>
+    <div
+      className={`app ${L.fullscreen ? "preview-fs" : ""} ${L.leftOpen ? "" : "left-closed"} ${L.rightOpen ? "" : "right-closed"}`}
+      data-status={status}
+      data-fullscreen={L.fullscreen ? "1" : "0"}
+      style={{ ["--left-w" as string]: `${L.leftOpen ? L.leftW : 0}px`, ["--right-w" as string]: `${L.rightOpen ? L.rightW : 0}px`, ["--tl-h" as string]: `${L.tlH}px` }}
+    >
       <TopBar />
       {status === "error" && <div className="banner error">Could not open the recording: {error}</div>}
       <main className="workspace">
-        <LeftPanel />
-        <section className="center">
+        {L.leftOpen ? <LeftPanel /> : <div className="panel-stub" />}
+        <Splitter kind="left" />
+        <section className="center" data-testid="stage">
           <AnnotationToolbar />
           <Preview />
           <Transport />
         </section>
-        <Inspector />
+        <Splitter kind="right" />
+        {L.rightOpen ? <Inspector /> : <div className="panel-stub" />}
       </main>
+      <Splitter kind="timeline" />
       <Timeline />
       <ExportSheet />
       <ExportDialog />

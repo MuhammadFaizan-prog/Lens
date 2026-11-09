@@ -492,6 +492,9 @@ export function parseFfmpegVideoInfo(text: string): { width: number; height: num
 function exportProject(bundle: string, raw: unknown) {
   const p = resolveProject(raw);
   p.audio.tracks = p.audio.tracks.map((t) => ({ ...t, path: path.isAbsolute(t.path) ? t.path : path.join(bundle, t.path) }));
+  // an uploaded backdrop lives in the bundle (Windows bug #20); built-in art ("builtin:<id>") is drawn
+  const ip = p.background.imagePath;
+  if (ip && !ip.startsWith("builtin:") && !path.isAbsolute(ip)) p.background.imagePath = path.join(bundle, ip);
   return p;
 }
 
@@ -662,9 +665,22 @@ export function apiMiddleware() {
         const job = startExportBrowser(bundle, body.project);
         return sendJson(res, { id: job.id, total: job.total });
       }
-      if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish)$/.exec(url.pathname)) && req.method === "POST") {
+      if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish|cancel)$/.exec(url.pathname)) && req.method === "POST") {
         const job = jobs.get(m[1]!);
         if (!job || !("ff" in job)) return sendJson(res, { error: "no such export" }, 404);
+        if (m[2] === "cancel") {
+          // Windows bug #11: long jobs can be cancelled; ffmpeg is stopped and the partial file left behind
+          if (job.state === "running") {
+            job.state = "error";
+            job.error = "cancelled";
+            try {
+              job.ff.kill("SIGKILL");
+            } catch {
+              // already gone
+            }
+          }
+          return sendJson(res, { ok: true });
+        }
         if (m[2] === "finish") {
           finishBrowserExport(job);
           return sendJson(res, { ok: true });

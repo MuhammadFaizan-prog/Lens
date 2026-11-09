@@ -25,6 +25,11 @@ export interface BrandLogo {
   opacity: number;
   /** Safe margin from the frame edges, fraction of the output's short side. */
   margin: number;
+  /**
+   * Free position (on-canvas drag): the logo's centre as fractions of the output width / height.
+   * Absent = the corner. Clamped so the logo stays inside the frame.
+   */
+  position?: { x: number; y: number } | null;
 }
 
 export interface BrandCard {
@@ -109,8 +114,12 @@ export function watermarkRect(logo: BrandLogo, W: number, H: number): WatermarkP
   const m = Math.round(logo.margin * Math.min(W, H));
   const w = Math.max(2, Math.min(W - 2 * m, Math.round(logo.size * W)));
   const h = Math.max(2, Math.min(H - 2 * m, Math.round(w / Math.max(0.05, logo.aspect))));
-  const x = logo.corner.endsWith("left") ? m : W - m - w;
-  const y = logo.corner.startsWith("top") ? m : H - m - h;
+  let x = logo.corner.endsWith("left") ? m : W - m - w;
+  let y = logo.corner.startsWith("top") ? m : H - m - h;
+  if (logo.position && Number.isFinite(logo.position.x) && Number.isFinite(logo.position.y)) {
+    x = Math.round(Math.min(W - w, Math.max(0, logo.position.x * W - w / 2)));
+    y = Math.round(Math.min(H - h, Math.max(0, logo.position.y * H - h / 2)));
+  }
   return { path: logo.path, x, y, w, h, opacity: Math.round(logo.opacity * 10000) / 10000 };
 }
 

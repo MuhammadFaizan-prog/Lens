@@ -15,7 +15,8 @@ import { hasArabicScript, type PlanFrame, type RenderPlan } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
-import { fontCss, imageAt } from "./assets";
+import { fontCss, imageAspect, imageAt } from "./assets";
+import { backdropById, drawBackdrop, gradientStops } from "./backdrops";
 
 export { makeCanvas };
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
@@ -218,23 +219,60 @@ export class PlanRenderer {
     const c = makeCanvas(W, H);
     const g = ctx2d(c);
     const colors = bg.colors.length ? bg.colors : ["#202020"];
-    if (bg.kind === "gradient" && colors.length >= 2) {
-      const ang = ((bg.angle ?? 135) * Math.PI) / 180;
-      const dx = Math.sin(ang);
-      const dy = -Math.cos(ang);
-      const span = Math.abs((W / 2) * dx) + Math.abs((H / 2) * dy);
-      // render.py: u = (proj / span + 1) / 2 with proj measured from the centre along (dx, dy)
-      const gr = g.createLinearGradient(W / 2 - dx * span, H / 2 - dy * span, W / 2 + dx * span, H / 2 + dy * span);
-      colors.forEach((col, i) => gr.addColorStop(i / (colors.length - 1), col));
-      g.fillStyle = gr;
+    let complete = true;
+    if (bg.kind === "hidden") {
+      // no backdrop (Windows bug #20): black behind a recording that fills the frame
+      g.fillStyle = "#000000";
+      g.fillRect(0, 0, W, H);
+    } else if (bg.kind === "image" && bg.imagePath) {
+      const blur = bg.blur || 0;
+      if (blur > 0) g.filter = `blur(${blur}px)`;
+      const builtin = backdropById(bg.imagePath);
+      if (builtin) {
+        // drawn larger than the frame when blurred so the edges stay solid
+        const m = Math.ceil(blur * 3);
+        g.save();
+        g.translate(-m, -m);
+        drawBackdrop(g, builtin, W + 2 * m, H + 2 * m);
+        g.restore();
+      } else {
+        g.fillStyle = colors[0]!;
+        g.fillRect(-4 * blur, -4 * blur, W + 8 * blur, H + 8 * blur);
+        const ar = imageAspect(bg.imagePath);
+        if (ar) {
+          const cover = (bg as { fit?: string }).fit !== "contain";
+          let w = W;
+          let h = W / ar;
+          if (cover ? h < H : h > H) {
+            h = H;
+            w = H * ar;
+          }
+          const m = cover ? Math.ceil(blur * 3) : 0;
+          const im = imageAt(bg.imagePath, Math.round(w + 2 * m), Math.round(h + 2 * m));
+          if (im) g.drawImage(im as CanvasImageSource, Math.round((W - w) / 2 - m), Math.round((H - h) / 2 - m));
+          else complete = false;
+        } else complete = false;
+      }
     } else {
-      g.fillStyle = colors[0]!;
+      if (bg.kind === "gradient" && colors.length >= 2) {
+        const ang = ((bg.angle ?? 135) * Math.PI) / 180;
+        const dx = Math.sin(ang);
+        const dy = -Math.cos(ang);
+        const span = Math.abs((W / 2) * dx) + Math.abs((H / 2) * dy);
+        // render.py: u = (proj / span + 1) / 2 with proj measured from the centre along (dx, dy)
+        const gr = g.createLinearGradient(W / 2 - dx * span, H / 2 - dy * span, W / 2 + dx * span, H / 2 + dy * span);
+        for (const [at, col] of gradientStops(colors, bg.stops)) gr.addColorStop(at, col);
+        g.fillStyle = gr;
+      } else {
+        g.fillStyle = colors[0]!;
+      }
+      if (bg.blur > 0) g.filter = `blur(${bg.blur}px)`;
+      g.fillRect(-4 * (bg.blur || 0), -4 * (bg.blur || 0), W + 8 * (bg.blur || 0), H + 8 * (bg.blur || 0));
     }
-    if (bg.blur > 0) g.filter = `blur(${bg.blur}px)`;
-    g.fillRect(-4 * (bg.blur || 0), -4 * (bg.blur || 0), W + 8 * (bg.blur || 0), H + 8 * (bg.blur || 0));
     g.filter = "none";
     this.bg = c;
-    this.bgKey = key;
+    // an uploaded image still loading: draw it again next frame
+    this.bgKey = complete ? key : "";
     return c;
   }
 
@@ -656,4 +694,36 @@ function pixelateInto(eg: Canvas2D, vg: Canvas2D, _map: ViewMap, rx0: number, ry
     }
   }
   eg.putImageData(out, gx0 - bx0, gy0 - by0);
+}
+
+/**
+ * The caption box drawn on frame f (output px: x, y, w, h including the pill padding), measured the way
+ * drawCaption lays it out (main font only). Used to pick and drag the caption on the preview.
+ */
+export function captionBox(g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, f: PlanFrame): [number, number, number, number] | null {
+  const cap = f.caption;
+  if (!cap || !cap.words.length) return null;
+  const { width: W, height: H } = plan.output;
+  const cs = plan.style.captions;
+  const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
+  g.save();
+  g.font = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
+  const space = g.measureText(" ").width;
+  let i = 0;
+  let bw = 0;
+  for (const n of cap.lines) {
+    let w = 0;
+    for (let j = 0; j < n; j++) w += g.measureText(cap.words[i + j]!).width;
+    bw = Math.max(bw, w + space * Math.max(0, n - 1));
+    i += n;
+  }
+  const fm = g.measureText("Hg");
+  g.restore();
+  const lh = Math.trunc((Math.ceil(fm.fontBoundingBoxAscent) + Math.ceil(fm.fontBoundingBoxDescent)) * 1.12);
+  const blockH = lh * cap.lines.length;
+  const pos = cs.position ?? "bottom";
+  const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
+  const padx = size * 0.55;
+  const pady = size * 0.28;
+  return [(W - bw) / 2 - padx, top - pady, bw + 2 * padx, blockH + 2 * pady];
 }

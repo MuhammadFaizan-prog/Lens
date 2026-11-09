@@ -33,6 +33,11 @@ export function fontUrl(ref: string): string {
   return `/api/font/file${dirQuery}${sep}ref=${encodeURIComponent(ref)}`;
 }
 
+/** The page's FontFaceSet, or the worker's (exports render in a worker, Windows bug #11). */
+export function fontSet(): FontFaceSet {
+  return ((globalThis as unknown as { fonts?: FontFaceSet }).fonts ?? document.fonts) as FontFaceSet;
+}
+
 const fonts = new Map<string, Promise<boolean>>();
 
 function loadFont(f: FontFiles): Promise<boolean> {
@@ -43,8 +48,8 @@ function loadFont(f: FontFiles): Promise<boolean> {
       try {
         const name = `Lens ${f.family}`;
         const [r, b] = await Promise.all([new FontFace(name, `url(${fontUrl(f.regular)})`, { weight: "normal" }).load(), new FontFace(name, `url(${fontUrl(f.bold)})`, { weight: "bold" }).load()]);
-        document.fonts.add(r);
-        document.fonts.add(b);
+        fontSet().add(r);
+        fontSet().add(b);
         return true;
       } catch {
         return false;
@@ -79,6 +84,8 @@ function loadImage(path: string): Promise<ImageBitmap | null> {
 export function planImages(plan: RenderPlan): string[] {
   const out = new Set<string>();
   if (plan.watermark) out.add(plan.watermark.path);
+  const bg = plan.style.background;
+  if (bg.kind === "image" && bg.imagePath && !bg.imagePath.startsWith("builtin:")) out.add(bg.imagePath);
   for (const f of plan.frames) if (f.slide) for (const o of f.slide.ops) if (o.op === "image") out.add(o.path);
   return [...out];
 }
@@ -186,4 +193,14 @@ export function imageAt(path: string, w: number, h: number): AnyCanvas | null {
   }
   scaled.set(key, out);
   return out;
+}
+
+/** Width / height of a loaded image, or null while it loads (starts loading it). */
+export function imageAspect(path: string): number | null {
+  const bm = ready.get(`${dirQuery}|${path}`);
+  if (!bm) {
+    void loadImage(path);
+    return null;
+  }
+  return bm.width / Math.max(1, bm.height);
 }

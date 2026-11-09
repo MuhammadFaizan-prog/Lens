@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
-import { deleteSelection } from "./Timeline";
+import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
+import { BackgroundPicker } from "./BackgroundPicker";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -57,7 +58,20 @@ function SelectionCard() {
     const z = project.zoom.segments[sel.index];
     if (!z) return null;
     range = z;
-    body = <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />;
+    const meta = store.get().bundle?.meta;
+    body = (
+      <>
+        <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />
+        <Segmented
+          label="Target"
+          value={z.focus === "follow" ? "follow" : "fixed"}
+          testId="sel-zoom-mode"
+          options={[{ value: "follow", label: "Follow cursor" }, { value: "fixed", label: "Fixed point" }]}
+          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", sel.index, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
+        />
+        <p className="note">{z.focus === "follow" ? "Follows the cursor. Drag the rectangle on the preview to pin it to a point." : `Fixed on ${Math.round(z.focus.x)}, ${Math.round(z.focus.y)} px. Drag the rectangle to move it, its corners to change the zoom.`}</p>
+      </>
+    );
   } else if (sel.track === "speed") {
     const s = project.edits.speed[sel.index];
     if (!s) return null;
@@ -91,6 +105,27 @@ function SelectionCard() {
         )}
       </>
     );
+  } else if (sel.track === "caption") {
+    const c = (project.captions.cues ?? [])[sel.index];
+    if (!c) return null;
+    range = c;
+    const playSrc = store.get().plan?.frames[store.get().frame]?.src;
+    body = (
+      <>
+        <textarea className="cue-text" data-testid="sel-cue-text" defaultValue={c.text} key={c.id + c.text} rows={2}
+          onKeyDown={(e) => e.stopPropagation()}
+          onBlur={(e) => { const t = e.target.value.replace(/\s+/g, " ").trim(); if (t !== c.text) store.updateCue(c.id, { text: t }); }} />
+        <div className="cue-actions">
+          <button className="chip-btn" data-testid="sel-cue-split" title="Split at the playhead" onClick={() => store.splitCueAt(c.id, playSrc)}>Split</button>
+          <button className="chip-btn" data-testid="sel-cue-merge" title="Merge with the next caption" onClick={() => store.mergeCueWithNext(c.id)}>Merge next</button>
+        </div>
+      </>
+    );
+  } else if (sel.track === "volume") {
+    const o = project.overrides.filter((x) => x.volume !== undefined)[sel.index];
+    if (!o) return null;
+    range = o;
+    body = <Slider label="Volume" value={o.volume ?? 1} min={0} max={2} step={0.05} format={pct} testId="sel-volume" onChange={(v) => tweak("Segment volume", { volume: v })} />;
   } else {
     const c = project.edits.cuts[sel.index];
     if (!c) return null;
@@ -100,7 +135,7 @@ function SelectionCard() {
     <div className="selection-card" data-testid="selection-card">
       <div className="sel-head">
         <span className={`dot dot-${sel.track}`} />
-        <b>{sel.track === "cut" ? "Cut" : sel.track === "zoom" ? "Zoom block" : sel.track === "speed" ? "Speed range" : "Mask"}</b>
+        <b>{({ cut: "Cut", zoom: "Zoom block", speed: "Speed range", mask: "Mask", caption: "Caption", volume: "Volume segment" } as Record<string, string>)[sel.track] ?? sel.track}</b>
         {range && (
           <span className="sel-time">
             {timecode(range.startMs, fps)} – {timecode(range.endMs, fps)}
@@ -124,28 +159,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
   const themeCss = pal.background.colors.length > 1 ? `linear-gradient(135deg, ${pal.background.colors.join(", ")})` : pal.background.colors[0];
   return (
     <>
-      <Section title="Backdrop">
-        <div className="backdrops" data-testid="backdrops">
-          <button className={`backdrop ${p.background.inherit ? "on" : ""}`} title={p.brand.enabled ? "Brand backdrop" : "Theme backdrop (from the preset)"} aria-label="Backdrop Theme" data-testid="backdrop-theme" style={{ background: themeCss }}
-            onClick={() => store.edit("Theme backdrop", (q) => ({ ...q, background: { ...q.background, inherit: true } }))}>
-            <span>{p.brand.enabled ? "Brand" : "Theme"}</span>
-          </button>
-          {BACKDROPS.map((b) => {
-            const on = !p.background.inherit && b.kind === p.background.kind && b.colors.join() === p.background.colors.join();
-            const css = b.kind === "solid" ? b.colors[0] : `linear-gradient(135deg, ${b.colors.join(", ")})`;
-            return (
-              <button key={b.name} className={`backdrop ${on ? "on" : ""} ${b.name === "Paper" ? "light" : ""}`} title={b.name} aria-label={`Backdrop ${b.name}`} style={{ background: css }} onClick={() => store.edit(`Backdrop ${b.name}`, (q) => ({ ...q, background: { ...q.background, kind: b.kind, colors: [...b.colors], inherit: false } }))}>
-                <span>{b.name}</span>
-              </button>
-            );
-          })}
-        </div>
-        {bgNow.kind === "gradient" && <Slider label="Angle" value={bgNow.angle} min={0} max={360} step={5} format={(v) => `${v}°`} onChange={(v) => t("Backdrop angle", (q) => ({ ...q, background: { ...own(q), angle: v } }))} />}
-        <ColorInput label={bgNow.kind === "gradient" ? "From" : "Colour"} value={bgNow.colors[0] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [v, ...b.colors.slice(1)] } }; })} />
-        {bgNow.kind === "gradient" && (
-          <ColorInput label="To" value={bgNow.colors[bgNow.colors.length - 1] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [...b.colors.slice(0, -1), v] } }; })} />
-        )}
-      </Section>
+      <BackgroundPicker p={p} />
       <Section title="Frame">
         <Slider label="Padding" value={p.frame.padding} min={0} max={0.25} step={0.005} format={pct} testId="padding" onChange={(v) => t("Padding", (q) => ({ ...q, frame: { ...q.frame, padding: v } }))} />
         <Slider label="Radius" value={p.frame.radius} min={0} max={60} step={1} format={px} testId="radius" onChange={(v) => t("Corner radius", (q) => ({ ...q, frame: { ...q.frame, radius: v } }))} />
@@ -155,6 +169,9 @@ function LookTab({ p }: { p: ProjectConfig }) {
       </Section>
       <Section title="Output">
         <Segmented label="Aspect" value={p.output.aspect} testId="aspect" options={["16:9", "1:1", "4:5", "9:16"].map((a) => ({ value: a, label: a }))} onChange={(v) => store.edit(`Aspect ${v}`, (q) => ({ ...q, output: { ...q.output, aspect: v } }))} />
+        <Segmented label="Screen" value={p.output.fit ?? "fit"} testId="output-fit" options={[{ value: "fit", label: "Fit" }, { value: "fill", label: "Fill & follow" }]}
+          onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
+        {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
       </Section>
     </>
   );
@@ -237,6 +254,7 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
   const cs = p.captions.style;
   const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style) } } }));
   return (
+    <>
     <Section title="Captions" aside={!hasWords ? <span className="stat">no transcript</span> : undefined}>
       <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
       <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
@@ -250,7 +268,50 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
       <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
     </Section>
+    <ManualCaptions p={p} />
+    </>
   );
+}
+
+/** Hand-written captions (Windows bug #15): add at the playhead, edit, retime, split, merge, import / export. */
+function ManualCaptions({ p }: { p: ProjectConfig }) {
+  const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  const sel = useEditor((s) => s.selection);
+  const cues = p.captions.cues ?? [];
+  const file = useRef<HTMLInputElement>(null);
+  const playSrc = () => store.get().plan?.frames[store.get().frame]?.src ?? 0;
+  return (
+    <Section title="Your captions" aside={<span className="stat">{cues.length}</span>}>
+      <div className="cue-actions">
+        <button className="btn" data-testid="cue-add" onClick={() => createBlock("caption", playSrc())}>+ Caption at playhead</button>
+        <input ref={file} type="file" accept=".srt,.vtt,text/vtt" hidden data-testid="cue-import-input" onChange={async (e) => { const f = e.target.files?.[0]; if (f) store.importSubtitles(await f.text(), cues.length === 0 || confirmReplace()); if (file.current) file.current.value = ""; }} />
+        <button className="btn ghost" data-testid="cue-import" onClick={() => file.current?.click()}>Import SRT / VTT</button>
+      </div>
+      {cues.length === 0 && <p className="note">Works without a transcript: add a caption, type its text, drag its edges on the Captions lane to time it.</p>}
+      <ol className="cue-list" data-testid="cue-list">
+        {cues.map((c, i) => (
+          <li key={c.id} className={sel?.track === "caption" && sel.index === i ? "on" : ""} data-testid={`cue-row-${i}`}>
+            <button className="cue-time" title="Select and jump" onClick={() => { store.select({ track: "caption", index: i }); store.seekSource(c.startMs); }}>
+              {timecode(c.startMs, fps)}
+            </button>
+            <input className="cue-input" data-testid={`cue-text-${i}`} defaultValue={c.text} key={c.id + c.text}
+              onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={(e) => { const t = e.target.value.replace(/\s+/g, " ").trim(); if (t !== c.text) store.updateCue(c.id, { text: t }); }} />
+            <button className="mini-reset" title="Delete caption" aria-label="Delete caption" onClick={() => store.deleteCue(c.id)}>×</button>
+          </li>
+        ))}
+      </ol>
+    </Section>
+  );
+}
+
+function confirmReplace(): boolean {
+  // Electron has no window.confirm in some builds: default to appending when it is missing
+  try {
+    return typeof window.confirm === "function" ? window.confirm("Replace your captions with the imported ones? (Cancel appends)") : false;
+  } catch {
+    return false;
+  }
 }
 
 function download(name: string, text: string): void {

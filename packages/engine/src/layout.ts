@@ -41,11 +41,17 @@ export function layoutFor(
   cfg: ProjectConfig,
 ): FrameLayout {
   const short = Math.min(out.width, out.height);
-  const pad = cfg.frame.padding * short;
+  // a hidden backdrop has nothing to show around the recording: it fills the frame
+  const pad = cfg.background.kind === "hidden" ? 0 : cfg.frame.padding * short;
   const area: Rect = { x: pad, y: pad, w: out.width - 2 * pad, h: out.height - 2 * pad };
   const camSize = cfg.camera.size * short;
   const margin = Math.max(pad * 0.5, short * 0.03);
   const corner = (size: number): Rect => {
+    const pos = cfg.camera.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+      // free position (on-canvas drag): centre in output fractions, kept inside the frame
+      return { x: Math.min(out.width - size, Math.max(0, pos.x * out.width - size / 2)), y: Math.min(out.height - size, Math.max(0, pos.y * out.height - size / 2)), w: size, h: size };
+    }
     const right = cfg.camera.corner.endsWith("right");
     const bottom = cfg.camera.corner.startsWith("bottom");
     return {
@@ -148,12 +154,34 @@ export function overlayAvoidRect(layout: FrameLayout): Rect | null {
  * Scale the webcam rect about its anchored corner (CAM-05). Only corner overlays shrink; split and
  * fullscreen layouts own their slot and are left alone.
  */
-export function scaleCameraRect(layout: FrameLayout, factor: number, corner: ProjectConfig["camera"]["corner"]): FrameLayout {
+export function scaleCameraRect(layout: FrameLayout, factor: number, corner: ProjectConfig["camera"]["corner"], freeCamera = false): FrameLayout {
   if (!layout.camera || factor === 1 || (layout.kind !== "camera-overlay" && layout.kind !== "camera-cutout")) return layout;
   const c = layout.camera;
   const w = c.w * factor;
   const h = c.h * factor;
-  const x = corner.endsWith("right") ? c.x + c.w - w : c.x;
-  const y = corner.startsWith("bottom") ? c.y + c.h - h : c.y;
+  const free = layout.kind === "camera-overlay" || layout.kind === "camera-cutout" ? freeCamera : false;
+  const x = free ? c.x + (c.w - w) / 2 : corner.endsWith("right") ? c.x + c.w - w : c.x;
+  const y = free ? c.y + (c.h - h) / 2 : corner.startsWith("bottom") ? c.y + c.h - h : c.y;
   return { ...layout, camera: { x, y, w, h } };
+}
+
+/**
+ * Fill mode (output.fit = "fill", Windows bug #8): the screen rect that covers the whole output at the
+ * source aspect, panned so source x `focusX` (in the current camera viewport [x0, x0 + vw]) sits at the
+ * output centre, clamped so no background shows. Vertical pan likewise for outputs wider than the source.
+ */
+export function fillScreenRect(out: { width: number; height: number }, sourceAspect: number, view: { x0: number; vw: number; y0: number; vh: number }, focus: { x: number; y: number }): Rect {
+  const W = out.width;
+  const H = out.height;
+  let w = H * sourceAspect;
+  let h = H;
+  if (w < W) {
+    w = W;
+    h = W / sourceAspect;
+  }
+  const kx = w / view.vw;
+  const ky = h / view.vh;
+  const x = Math.min(0, Math.max(W - w, W / 2 - (focus.x - view.x0) * kx));
+  const y = Math.min(0, Math.max(H - h, H / 2 - (focus.y - view.y0) * ky));
+  return { x, y, w, h };
 }

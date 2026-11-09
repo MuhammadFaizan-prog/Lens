@@ -12,7 +12,8 @@ import { defaultAnnotationStyle, defaultAnimations, normalizeAnnotation, textPre
 import { layoutText } from "../render/annotations";
 import { makeCanvas } from "../render/canvas";
 import { store, useEditor } from "../state/store";
-import { newId } from "../state/timelineOps";
+import { newId, updateBlock } from "../state/timelineOps";
+import { pickCanvasObject, zoomEditFrame } from "./CanvasOverlay";
 
 type Handle = "nw" | "ne" | "sw" | "se" | "from" | "to" | "curve" | "tip";
 
@@ -164,7 +165,9 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<Drag | null>(null);
   const [, bump] = useState(0);
-  const f = plan?.frames[frame];
+  const zoomSel = useEditor((s) => (s.selection?.track === "zoom" ? s.project.zoom.segments[s.selection.index] ?? null : null));
+  const f0 = plan?.frames[frame];
+  const f = plan && f0 && zoomSel ? zoomEditFrame(plan, f0) : f0;
   const W = plan?.output.width ?? 1280;
   const H = plan?.output.height ?? 720;
   const sel = selection?.track === "annotation" ? project.annotations[selection.index] ?? null : null;
@@ -233,7 +236,8 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
       const d = drag.current;
       const s = store.get();
       const pl = s.plan;
-      const fr = pl?.frames[s.frame];
+      const fr0 = pl?.frames[s.frame];
+      const fr = pl && fr0 && s.selection?.track === "zoom" ? zoomEditFrame(pl, fr0) : fr0;
       if (!d || !pl || !fr) return;
       const p = toOut(e);
       if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < 2) return;
@@ -271,6 +275,15 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
     e.preventDefault();
     const p = toOut(e);
     if (editing) store.startTextEdit(null);
+    // a just-added zoom (Z / Zoom "+"): this click aims it at a fixed point
+    const st = store.get();
+    if (st.zoomPlacing && st.selection?.track === "zoom") {
+      const q = spaceOf(plan, f, "screen").fromOut(p);
+      const idx = st.selection.index;
+      store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
+      store.setZoomPlacing(false);
+      return;
+    }
     if (tool !== "select") {
       store.pause();
       const sp = spaceOf(plan, f, anchor);
@@ -283,7 +296,11 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
     }
     const h = hit(p);
     if (!h) {
-      store.select(null);
+      // not an annotation: a mask, the logo, the webcam, the caption or a zoom target?
+      if (!pickCanvasObject(p)) {
+        store.select(null);
+        store.selectCanvas(null);
+      }
       return;
     }
     store.selectAnnotation(h.id);

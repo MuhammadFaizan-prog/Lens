@@ -28,6 +28,10 @@ export interface PresetSections {
   look?: {
     /** Output aspect ratio, e.g. "9:16". */
     aspect?: string;
+    /** "fill": crop in and follow the action when the output aspect differs from the screen's. */
+    fit?: "fit" | "fill";
+    /** An image or hidden backdrop (Windows bug #20); solid / gradient backdrops live in the palette. */
+    backdrop?: { kind: "image" | "hidden"; imagePath?: string; fit?: "cover" | "contain"; blur?: number };
     /** Theme palette: primary, accent, caption highlight, backdrop, font. */
     palette?: Partial<Palette>;
     background?: { blur?: number };
@@ -104,8 +108,17 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
     const palette = clone(L.palette ?? {});
     const bg = palette.background ?? BUILTIN_PALETTE.background;
     p.output = { ...p.output, aspect: L.aspect ?? d.output.aspect };
+    if (L.fit) p.output.fit = L.fit;
+    else delete p.output.fit;
     p.background = { ...p.background, kind: bg.kind, colors: [...bg.colors], angle: bg.angle, blur: L.background?.blur ?? 0, inherit: true };
     delete p.background.imagePath;
+    delete p.background.fit;
+    delete p.background.stops; // the palette's gradient is evenly spaced
+    if (L.backdrop) {
+      p.background = { ...p.background, kind: L.backdrop.kind, inherit: false, blur: L.backdrop.blur ?? p.background.blur };
+      if (L.backdrop.imagePath) p.background.imagePath = L.backdrop.imagePath;
+      if (L.backdrop.fit) p.background.fit = L.backdrop.fit;
+    }
     p.frame = merge(d.frame, L.frame);
     p.motionBlur = merge(d.motionBlur, L.motionBlur);
     p.theme = { ...p.theme, palette };
@@ -118,12 +131,16 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
   if (want.has("webcam") && s.webcam) {
     const w = merge(pickWebcam(d.camera), s.webcam);
     p.camera = { ...p.camera, ...w };
+    delete p.camera.position; // the preset places the webcam
   }
   if (want.has("captions") && s.captions) {
     const c = merge(d.captions, s.captions);
     // colours come from the palette so the brand kit can still override them
     if (!isColorToken(c.style.highlightColor)) c.style.highlightColor = "@highlight";
-    p.captions = c;
+    // hand-written cues and word corrections are content, not style: they stay
+    delete c.cues;
+    delete c.wordEdits;
+    p.captions = { ...c, ...(p.captions.cues ? { cues: p.captions.cues } : {}), ...(p.captions.wordEdits ? { wordEdits: p.captions.wordEdits } : {}) };
   }
   if (want.has("audio") && s.audio) {
     p.audio = { ...p.audio, noiseReduction: merge(d.audio.noiseReduction, s.audio.noiseReduction), loudness: merge(d.audio.loudness, s.audio.loudness) };
@@ -192,11 +209,15 @@ export function presetFromProject(project: ProjectConfig, name: string, opts: { 
     description: opts.description ?? "",
     revision: opts.revision ?? 1,
     sections: {
-      look: { aspect: p.output.aspect, palette, background: { blur: p.background.blur }, frame: p.frame, motionBlur: p.motionBlur },
+      look: { aspect: p.output.aspect, ...(p.output.fit === "fill" ? { fit: "fill" as const } : {}),
+        ...(p.background.kind === "image" || p.background.kind === "hidden"
+          ? { backdrop: { kind: p.background.kind, ...(p.background.imagePath ? { imagePath: p.background.imagePath } : {}), ...(p.background.fit ? { fit: p.background.fit } : {}), blur: p.background.blur } }
+          : {}),
+        palette, background: { blur: p.background.blur }, frame: p.frame, motionBlur: p.motionBlur },
       zoom,
       cursor: p.cursor,
       webcam: pickWebcam(p.camera),
-      captions: { ...p.captions, style },
+      captions: (({ cues: _c, wordEdits: _w, ...rest }) => ({ ...rest, style }))(p.captions),
       audio: { noiseReduction: p.audio.noiseReduction, loudness: p.audio.loudness },
       annotations: { styles: clone(p.theme.annotationStyles) },
     },
@@ -260,6 +281,7 @@ export function validatePreset(raw: unknown): { preset: Preset | null; errors: s
   const look = sec.look as PresetSections["look"];
   if (look?.palette && isObj(look.palette)) errs.push(...validatePalette(look.palette, "sections.look.palette"));
   if (look?.aspect !== undefined && !/^\d+:\d+$/.test(String(look.aspect))) errs.push("sections.look.aspect must look like 16:9");
+  if (look?.fit !== undefined && look.fit !== "fit" && look.fit !== "fill") errs.push("sections.look.fit must be fit or fill");
   const cap = sec.captions as PresetSections["captions"];
   const hc = cap?.style?.highlightColor;
   if (hc !== undefined && !isColorToken(hc)) errs.push("sections.captions.style.highlightColor must be a theme slot (put the colour in look.palette.highlight)");
@@ -293,7 +315,7 @@ function templates(): Record<PresetSection, Template> {
   const { segments: _s, ...zoom } = d.zoom;
   void _s;
   return {
-    look: { aspect: "", palette: { primary: "", accent: "", highlight: "", background: { kind: "", colors: [], angle: 0 }, font: "" }, background: { blur: 0 }, frame: d.frame, motionBlur: d.motionBlur },
+    look: { aspect: "", fit: "", backdrop: { kind: "", imagePath: "", fit: "", blur: 0 }, palette: { primary: "", accent: "", highlight: "", background: { kind: "", colors: [], angle: 0 }, font: "" }, background: { blur: 0 }, frame: d.frame, motionBlur: d.motionBlur },
     zoom,
     cursor: d.cursor,
     webcam: pickWebcam(d.camera),
@@ -425,6 +447,7 @@ export function builtinPresets(): Preset[] {
     mk("social-vertical", "Social Vertical 9:16", "Vertical 9:16, punchy zooms, large three-word captions in the upper-lower third. For Reels, Shorts and TikTok.", {
       look: {
         aspect: "9:16",
+        fit: "fill",
         palette: { primary: "#ff3d7f", accent: "#ffe14d", highlight: "#ffe14d", background: { kind: "gradient", colors: ["#13002c", "#5b0f7a", "#ff3d7f"], angle: 160 }, font: "Inter" },
         frame: { padding: 0.05, radius: 22, shadow: { opacity: 0.5, blur: 56, offsetY: 20, angle: 90 } },
         motionBlur: { enabled: true, strength: 0.4 },

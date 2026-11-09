@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { captionBlocks, captionWords } from "@lens/engine";
+import { applyWordEdits, captionBlocks, captionWords, mergeCaptionCues } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import {
   addBlock,
@@ -19,9 +19,9 @@ import {
 import { Icon } from "./Icon";
 import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 
-const LABEL_W = 112;
+const LABEL_W = 132;
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
 const SLIDE_ROW_H = 18;
 const COLLAPSED_H = 30;
@@ -30,6 +30,7 @@ const COLLAPSED_H = 30;
 function annLabel(a: { stepId?: string; text?: string; kind: string }): string {
   return `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`;
 }
+const ADDABLE = ["zoom", "cut", "speed", "mask", "annotation", "caption", "audio"];
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
@@ -112,13 +113,14 @@ export function Timeline() {
     const words = bundle?.transcript?.words ?? [];
     const cl = project.edits.cleanup;
     const cuts = plan?.cuts ?? [];
-    const kept = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !cuts.some((c) => (w.startMs + w.endMs) / 2 >= c.startMs && (w.startMs + w.endMs) / 2 < c.endMs));
-    return captionBlocks(kept, project.captions.maxWordsPerBlock, project.captions.maxBlockMs);
-  }, [bundle, plan?.cuts, project.edits.cleanup, project.captions.maxWordsPerBlock, project.captions.maxBlockMs]);
+    const kept = captionWords(applyWordEdits(words, project.captions.wordEdits), cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !cuts.some((c) => (w.startMs + w.endMs) / 2 >= c.startMs && (w.startMs + w.endMs) / 2 < c.endMs));
+    // transcript blocks that a hand-written cue replaces are not shown (the cue is, as an editable block)
+    return mergeCaptionCues(captionBlocks(kept, project.captions.maxWordsPerBlock, project.captions.maxBlockMs), project.captions.cues).filter((b) => !b.manual);
+  }, [bundle, plan?.cuts, project.edits.cleanup, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, project.captions.cues, project.captions.wordEdits]);
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "mask", "annotation"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         t.push(b.startMs, b.endMs);
@@ -181,24 +183,7 @@ export function Timeline() {
     window.addEventListener("pointerup", up);
   };
 
-  const create = (track: TrackKind, t: number) => {
-    const p = store.get().project;
-    const r = track === "annotation"
-      ? { startMs: Math.max(0, Math.min(t, duration - 500)), endMs: Math.min(duration, Math.max(t, 0) + DEFAULT_LEN.annotation) }
-      : createRange(blocksOf(p, track), t, DEFAULT_LEN[track], duration, MIN_BLOCK_MS[track]);
-    if (!r) {
-      store.notify("No room for a block there");
-      return;
-    }
-    const range = { startMs: Math.round(r.startMs), endMs: Math.round(r.endMs) };
-    let index = -1;
-    store.edit(`Add ${track}`, (q) => {
-      const out = addBlock(q, track, range, bundle?.meta.width, bundle?.meta.height);
-      index = out.index;
-      return track === "cut" ? normalizeCuts(out.project) : out.project;
-    });
-    if (track !== "cut") store.select({ track, index });
-  };
+  const create = (track: TrackKind, t: number) => createBlock(track, t);
 
   const scrubLane = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -325,14 +310,20 @@ export function Timeline() {
                 </button>
               ) : null}
               <span className={`dot dot-${t.kind}`} />
-              {t.label}
+              <span className="lane-name" title={t.label}>{t.label}</span>
               {t.kind === "annotation" && project.annotations.length > 0 && (
                 <span className="lane-count" data-testid="ann-lane-rows" title={annExpanded ? `${annPack.rowCount} row${annPack.rowCount > 1 ? "s" : ""}` : `${project.annotations.length} items, collapsed`}>
                   {annExpanded ? annPack.rowCount : project.annotations.length}
                 </span>
               )}
-              {["zoom", "cut", "speed", "mask", "annotation"].includes(t.kind) && (
-                <button className="mini-add" title={`Add ${t.label.toLowerCase()} at playhead`} aria-label={`Add ${t.kind}`} data-testid={`add-${t.kind}`} onClick={() => create(t.kind as TrackKind, playSrc)}>
+              {ADDABLE.includes(t.kind) && (
+                <button
+                  className="mini-add"
+                  title={t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
+                  aria-label={`Add ${t.kind}`}
+                  data-testid={`add-${t.kind}`}
+                  onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
+                >
                   <Icon name="plus" size={12} />
                 </button>
               )}
@@ -440,13 +431,19 @@ export function Timeline() {
                 </div>
               ))}
             </div>
-            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} onPointerDown={scrubLane}>
+            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} data-testid="lane-caption" onPointerDown={scrubLane} onDoubleClick={(e) => create("caption", msOf(laneX(e.clientX)))}>
+              {(project.captions.cues ?? []).map((c, i) => block("caption", i, c, c.text || "(empty)", "manual", `block-caption-${c.id}`))}
               {captionBlockList.map((b, i) => (
                 <div
                   key={`cap-${i}`}
-                  className="block block-caption"
+                  className="block block-caption auto-cap"
+                  data-testid={`caption-auto-${i}`}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    store.cueFromBlock(b.startMs, b.endMs, b.text);
+                  }}
                   style={{ left: xOf(b.startMs), width: Math.max(4, xOf(b.endMs) - xOf(b.startMs)) }}
-                  title={b.text}
+                  title={`${b.text} · double-click to edit as a caption`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     store.seekSource(b.startMs);
@@ -456,7 +453,8 @@ export function Timeline() {
                 </div>
               ))}
             </div>
-            <div className="lane lane-audio" onPointerDown={scrubLane}>
+            <div className="lane lane-audio" data-testid="lane-audio" onPointerDown={scrubLane} onDoubleClick={(e) => create("volume", msOf(laneX(e.clientX)))}>
+              {project.overrides.filter((o) => o.volume !== undefined).map((o, i) => block("volume", i, o, `vol ${Math.round((o.volume ?? 1) * 100)}%`, "", `block-volume-${i}`))}
               <Waveform peaks={peaks} peakMs={store.audio.peakMs} width={innerW} pps={pps} offsetMs={project.audio.tracks[0]?.offsetMs ?? 0} muted={project.audio.tracks[0]?.muted ?? false} />
             </div>
             {guide !== null && <div className="snap-guide" style={{ left: xOf(guide) }} />}
@@ -493,6 +491,64 @@ function Waveform({ peaks, peakMs, width, pps, offsetMs, muted }: { peaks: Float
     }
   }, [peaks, peakMs, w, pps, offsetMs, muted]);
   return <canvas ref={ref} width={w} height={h} className="waveform" data-testid="waveform" />;
+}
+
+/**
+ * Add a block to a track at source time t (lane "+", double-click, Z, the Captions tab). When t sits
+ * inside an existing block of a track whose blocks may not overlap, the new block goes right after it.
+ * Errors are shown, never swallowed (a failing "+" used to look like it did nothing).
+ */
+export function createBlock(track: TrackKind, t: number): number {
+  const s = store.get();
+  const bundle = s.bundle;
+  const duration = bundle?.meta.durationMs ?? 1;
+  try {
+    const p = s.project;
+    let r: Range | null = null;
+    if (track === "annotation") r = { startMs: Math.max(0, Math.min(t, duration - 500)), endMs: Math.min(duration, Math.max(t, 0) + DEFAULT_LEN.annotation) };
+    else {
+      const blocks = blocksOf(p, track);
+      let at = t;
+      // the playhead never stops inside a cut (output time skips it), it lands on the cut's end:
+      // a new cut there would merge into it, so it starts just after
+      if (track === "cut") for (const b of blocks) if (at >= b.endMs - 50 && at < b.endMs + 100) at = b.endMs + 100;
+      for (let k = 0; k < 50 && !r; k++) {
+        r = createRange(blocks, at, DEFAULT_LEN[track], duration, MIN_BLOCK_MS[track]);
+        const inside = blocks.find((b) => at >= b.startMs && at < b.endMs);
+        // after the block the playhead is in (a cut keeps a small gap, or it would merge into that cut)
+        if (!r && inside) at = inside.endMs + (track === "cut" ? 100 : 0);
+        else break;
+      }
+    }
+    if (!r) {
+      store.notify("No room for a block there");
+      return -1;
+    }
+    const range = { startMs: Math.round(r.startMs), endMs: Math.round(r.endMs) };
+    let index = -1;
+    store.edit(`Add ${track}`, (q) => {
+      const out = addBlock(q, track, range, bundle?.meta.width, bundle?.meta.height);
+      index = out.index;
+      return track === "cut" ? normalizeCuts(out.project) : out.project;
+    });
+    if (track !== "cut") store.select({ track, index });
+    return index;
+  } catch (e) {
+    store.notify(`Could not add ${track}: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(e);
+    return -1;
+  }
+}
+
+/** Z / Zoom lane "+": a manual zoom at the playhead; the next click on the preview aims it (fixed point). */
+export function addZoomAtPlayhead(): void {
+  const s = store.get();
+  const t = s.plan?.frames[s.frame]?.src ?? 0;
+  const i = createBlock("zoom", t);
+  if (i >= 0) {
+    store.setZoomPlacing(true);
+    store.notify("Zoom added: click the preview to aim it (Esc to keep following the cursor)");
+  }
 }
 
 export function deleteSelection(): boolean {

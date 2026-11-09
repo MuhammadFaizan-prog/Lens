@@ -55,7 +55,7 @@ export function applyTheme(p: ProjectConfig, durationMs: number, out?: { width: 
     return f;
   };
   const background = p.background.inherit
-    ? { ...p.background, kind: pal.background.kind, colors: [...pal.background.colors], angle: pal.background.angle }
+    ? (({ stops: _s, ...b }) => ({ ...b, kind: pal.background.kind, colors: [...pal.background.colors], angle: pal.background.angle }))(p.background)
     : p.background;
   const cs = p.captions.style;
   const captions = {

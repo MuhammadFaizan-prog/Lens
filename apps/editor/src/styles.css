@@ -563,3 +563,101 @@ select {
 /* desktop update banner in the header (Windows #21) */
 .update-banner { display: flex; align-items: center; gap: 10px; margin: 0 auto; padding: 4px 6px 4px 12px; border-radius: 8px; background: #17305f; color: #dfe8ff; font-size: 12px; white-space: nowrap; }
 .update-banner .btn { padding: 3px 10px; font-size: 12px; }
+/* ---------------------------------------------------------------- responsive layout (Windows bugs #2/#3/#11) */
+.app { grid-template-rows: 52px minmax(0, 1fr) 5px var(--tl-h, 260px); }
+.workspace { grid-template-columns: var(--left-w, 272px) 5px minmax(0, 1fr) 5px var(--right-w, 332px); }
+.panel-stub { min-width: 0; background: var(--panel); }
+.splitter { background: var(--line); position: relative; z-index: 4; touch-action: none; }
+.splitter:hover, body.resizing .splitter:hover { background: var(--accent-2); }
+.splitter-left, .splitter-right { cursor: col-resize; }
+.splitter-timeline { cursor: row-resize; }
+body.resizing, body.resizing * { cursor: grabbing !important; user-select: none; }
+.left-col, .inspector { min-width: 0; overflow: hidden; }
+.preview { margin: 10px 14px 6px; }
+.preview.zoom-100 { overflow: auto; place-items: start; }
+.transport { padding: 2px 16px 8px; }
+.ann-toolbar { padding: 6px 14px 0; }
+.timeline-body { overflow-y: auto; overflow-x: hidden; align-items: flex-start; }
+.timeline-body::-webkit-scrollbar { width: 9px; }
+.timeline-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 5px; }
+.tl-labels { position: sticky; left: 0; }
+.tl-scroll { overflow-y: hidden; min-height: 0; }
+.tl-inner { min-height: 0; }
+.fs-btn { margin-left: 2px; }
+/* preview fullscreen (F): the stage covers the window, chrome hidden */
+.app.preview-fs .center { position: fixed; inset: 0; z-index: 60; background: #000; }
+.app.preview-fs .ann-toolbar { display: none; }
+.app.preview-fs .preview { margin: 0; }
+.app.preview-fs .preview-canvas { border-radius: 0; box-shadow: none; }
+@media (max-width: 1360px) {
+  .kbd-hint, .frame-count { display: none; }
+  .tl-sub { display: none; }
+  .ann-toolbar .segmented.pin button { padding: 3px 6px; }
+}
+@media (max-height: 760px) {
+  .topbar { height: 52px; }
+  .transport-row { height: 34px; }
+  .play-btn { width: 32px; height: 32px; }
+  .timeline-toolbar { height: 34px; padding: 3px 10px; }
+}
+.top-actions { min-width: 0; flex-wrap: nowrap; }
+@media (max-width: 1360px) { .top-actions .btn-label { display: none; } .top-actions .btn { padding: 0 9px; } }
+.preview-zoom { width: auto; }
+.preview-zoom button { padding: 3px 8px; font-size: 11.5px; flex: none; }
+.cue-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.cue-text { width: 100%; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 4px 7px; font: inherit; user-select: text; resize: vertical; margin-top: 6px; }
+.cue-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.cue-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.cue-list li.on .cue-input { border-color: var(--caption); }
+.cue-time { background: none; border: none; color: var(--muted); font: 11px var(--mono); cursor: pointer; padding: 0; }
+.cue-input { min-width: 0; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 3px 6px; font: inherit; font-size: 12px; user-select: text; }
+.block-caption.manual { background: var(--caption); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35); }
+.block-caption.auto-cap { opacity: 0.75; }
+.block-volume { background: var(--audio); top: 3px; height: 18px; opacity: 0.9; }
+.word-input { background: var(--panel-3); border: 1px solid var(--accent-2); border-radius: 4px; color: var(--text); font: inherit; padding: 0 3px; user-select: text; }
+.word-edited { text-decoration: underline dotted; }
+/* on-canvas overlays (Windows bugs #12 / #14) */
+.canvas-overlay { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.canvas-overlay .co-outline { fill: none; stroke: rgba(255, 255, 255, 0.35); stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; stroke-width: 1; }
+.canvas-overlay .co-outline.co-mask { stroke: var(--mask); }
+.canvas-overlay .co-body { fill: rgba(94, 234, 212, 0.06); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; cursor: move; }
+.canvas-overlay .co-zoom .co-body { fill: rgba(110, 168, 255, 0.08); stroke: var(--zoom); stroke-dasharray: 8 5; }
+.canvas-overlay .co-handle { fill: #fff; stroke: #0b0d10; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
+.canvas-overlay .h-nw, .canvas-overlay .h-se { cursor: nwse-resize; } .canvas-overlay .h-ne, .canvas-overlay .h-sw { cursor: nesw-resize; }
+.canvas-overlay .co-centre { fill: var(--zoom); }
+.canvas-overlay .co-label { fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 3px; font-weight: 650; }
+.canvas-overlay .co-guide { stroke: #ff3d7f; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.app.preview-fs .canvas-overlay .co-outline { display: none; }
+.inspector .tabs { flex-wrap: wrap; row-gap: 0; }
+.inspector .tabs button { flex: 1 0 auto; padding-left: 6px; padding-right: 6px; }
+/* shrinking the window must shrink the timeline: flex / grid items default to min-width: auto, which
+   kept the lanes at their old content width (the page stayed 1440 px wide after a resize to 1280) */
+.app > *, .timeline, .timeline-body, .tl-scroll, .topbar, .top-actions { min-width: 0; }
+/* backdrop picker (Windows bug #20) */
+.bg-tabs { display: flex; gap: 2px; background: var(--panel-3); border-radius: 8px; padding: 2px; margin-bottom: 8px; }
+.bg-tabs button { flex: 1; border: 0; background: none; color: var(--text-2); border-radius: 6px; padding: 4px 0; cursor: pointer; font-size: 12px; }
+.bg-tabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line-2); }
+.bg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.bg-swatch { height: 38px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; padding: 0; overflow: hidden; }
+.bg-swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+.bg-thumb-canvas { width: 100%; height: 100%; display: block; }
+.bg-palette { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-bottom: 8px; }
+.bg-dot { aspect-ratio: 1; border-radius: 50%; border: 1px solid rgba(255,255,255,0.12); cursor: pointer; padding: 0; }
+.bg-dot.on { box-shadow: 0 0 0 2px var(--accent); }
+.bg-custom, .bg-stops { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.bg-stop { display: inline-flex; align-items: center; gap: 2px; }
+.bg-stops { flex-direction: column; align-items: stretch; }
+.bg-stop-bar { position: relative; height: 16px; border-radius: 8px; border: 1px solid var(--line-2); margin: 6px 7px 4px; touch-action: none; }
+.bg-stop-handle { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5); cursor: ew-resize; }
+.bg-stop-rows { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.bg-stop-pos { width: 46px; }
+.bg-custom input[type="color"], .bg-stop input[type="color"] { width: 34px; height: 26px; border: 1px solid var(--line-2); border-radius: 6px; background: none; padding: 0; cursor: pointer; }
+.bg-upload { margin: 0 0 6px; }
+/* Windows bug #13: the Annotations label (toggle + name + row count) was wider than the label column,
+   so its "+" sat over the lanes and the lane took the click: "+" did nothing. The name now truncates and
+   every "+" stays inside the column, which sits above the lanes. */
+.tl-labels { position: relative; z-index: 3; overflow: hidden; }
+.tl-label { overflow: hidden; }
+.tl-label .lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.tl-label .mini-add, .tl-label .lane-toggle, .tl-label .dot, .tl-label .lane-count { flex: none; }
+.tl-label .lane-count + .mini-add { margin-left: 4px; }
