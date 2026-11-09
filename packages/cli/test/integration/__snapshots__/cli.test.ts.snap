@@ -1,0 +1,456 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`get / set > set validates through the engine and is idempotent 1`] = `
+{
+  "after": "number",
+  "before": "number",
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": "number",
+      "op": "string",
+      "path": "string",
+      "value": "number",
+    },
+  ],
+  "pointer": "string",
+  "project": "string",
+}
+`;
+
+exports[`plan / frame / export > export mp4 matches the plan; srt / vtt; render alias; bad format 1`] = `
+{
+  "bytes": "number",
+  "durationMs": "number",
+  "format": "string",
+  "fps": "number",
+  "frames": "number",
+  "height": "number",
+  "out": "string",
+  "project": "string",
+  "renderMs": "number",
+  "width": "number",
+}
+`;
+
+exports[`plan / frame / export > frame renders a PNG; out-of-range frame fails 1`] = `
+{
+  "bytes": "number",
+  "frame": "number",
+  "height": "number",
+  "out": "string",
+  "project": "string",
+  "sha256": "string",
+  "timeMs": "number",
+  "width": "number",
+}
+`;
+
+exports[`plan / frame / export > plan is deterministic 1`] = `
+{
+  "cleanupCuts": "number",
+  "cuts": "number",
+  "output": {
+    "durationMs": "number",
+    "fps": "number",
+    "frames": "number",
+    "height": "number",
+    "width": "number",
+  },
+  "plan": "string",
+  "project": "string",
+  "sha256": "string",
+  "subtitles": "number",
+  "takeGroups": "number",
+  "zoomSegments": "number",
+}
+`;
+
+exports[`presets / brand > brand set colours + logo (copied into the project); bad colour fails 1`] = `
+{
+  "brand": {
+    "accent": "string",
+    "enabled": "boolean",
+    "font": "string",
+    "logo": "string",
+    "name": "string",
+    "primary": "string",
+  },
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": "boolean",
+      "op": "string",
+      "path": "string",
+      "value": "boolean",
+    },
+  ],
+  "project": "string",
+}
+`;
+
+exports[`presets / brand > preset list / apply (idempotent); unknown preset and section fail 1`] = `
+{
+  "presets": [
+    {
+      "description": "string",
+      "id": "string",
+      "name": "string",
+      "slug": "string",
+    },
+  ],
+  "sections": [
+    "string",
+  ],
+}
+`;
+
+exports[`privacy / steps > privacy scan finds the sample's secrets, accept all, idempotent; unknown id fails 1`] = `
+{
+  "cached": "boolean",
+  "changed": "boolean",
+  "counts": {
+    "accepted": "number",
+    "dismissed": "number",
+    "pending": "number",
+    "total": "number",
+  },
+  "detections": "number",
+  "diff": [
+    {
+      "old": [],
+      "op": "string",
+      "path": "string",
+      "value": [
+        {
+          "confidence": "number",
+          "firstMs": "number",
+          "id": "string",
+          "preview": "string",
+          "state": "string",
+          "thumb": "string",
+          "tracks": [
+            {
+              "endMs": "number",
+              "keys": [
+                {
+                  "rect": {
+                    "h": "number",
+                    "w": "number",
+                    "x": "number",
+                    "y": "number",
+                  },
+                  "tMs": "number",
+                },
+              ],
+              "startMs": "number",
+            },
+          ],
+          "type": "string",
+        },
+      ],
+    },
+  ],
+  "project": "string",
+}
+`;
+
+exports[`privacy / steps > steps generate drafts labels from clicks; accept makes badges; unknown id fails 1`] = `
+{
+  "cached": "boolean",
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": [],
+      "op": "string",
+      "path": "string",
+      "value": [
+        {
+          "clickMs": "number",
+          "confidence": "number",
+          "id": "string",
+          "label": "string",
+          "state": "string",
+          "target": "string",
+          "verb": "string",
+          "x": "number",
+          "y": "number",
+        },
+      ],
+    },
+  ],
+  "drafts": [
+    {
+      "clickMs": "number",
+      "id": "string",
+      "label": "string",
+      "state": "string",
+    },
+  ],
+  "project": "string",
+}
+`;
+
+exports[`project > new: copies a bundle, idempotent; conflict and missing inputs fail 1`] = `
+{
+  "created": "boolean",
+  "files": [
+    "string",
+  ],
+  "id": "string",
+  "project": "string",
+}
+`;
+
+exports[`project > open / info 1`] = `
+{
+  "files": [
+    "string",
+  ],
+  "hasCamera": "boolean",
+  "hasTranscript": "boolean",
+  "id": "string",
+  "project": "string",
+  "source": {
+    "durationMs": "number",
+    "fps": "number",
+    "height": "number",
+    "width": "number",
+  },
+}
+`;
+
+exports[`project > open / info 2`] = `
+{
+  "annotations": "number",
+  "brand": {
+    "accent": "string",
+    "enabled": "boolean",
+    "name": "string",
+    "primary": "string",
+  },
+  "captions": {
+    "cues": "number",
+    "enabled": "boolean",
+    "language": "null",
+    "languages": [],
+  },
+  "edits": {
+    "cuts": "number",
+    "plannedCuts": "number",
+    "speed": "number",
+  },
+  "id": "string",
+  "output": {
+    "durationMs": "number",
+    "fps": "number",
+    "frames": "number",
+    "height": "number",
+    "width": "number",
+  },
+  "privacy": {
+    "accepted": "number",
+    "dismissed": "number",
+    "pending": "number",
+    "total": "number",
+  },
+  "project": "string",
+  "slides": "number",
+  "source": {
+    "durationMs": "number",
+    "fps": "number",
+    "height": "number",
+    "width": "number",
+  },
+  "steps": {
+    "accepted": "number",
+    "drafts": "number",
+    "pending": "number",
+  },
+  "takes": {
+    "enabled": "boolean",
+    "groups": "number",
+    "strategy": "string",
+  },
+  "transcript": {
+    "language": "string",
+    "words": "number",
+  },
+  "zoom": {
+    "auto": "boolean",
+    "manualSegments": "number",
+    "planned": [
+      {
+        "auto": "boolean",
+        "endMs": "number",
+        "id": "string",
+        "scale": "number",
+        "startMs": "number",
+      },
+    ],
+    "preset": "string",
+  },
+}
+`;
+
+exports[`takes > list / set (idempotent) / bad strategy / unknown group 1`] = `
+{
+  "enabled": "boolean",
+  "groups": [],
+  "project": "string",
+  "strategy": "string",
+}
+`;
+
+exports[`transcribe / translate > transcribe espeak speech; skip when present; no audio track fails 1`] = `
+{
+  "project": "string",
+  "skipped": "boolean",
+  "transcript": "string",
+  "words": "number",
+}
+`;
+
+exports[`transcribe / translate > translate to Spanish and select it; no transcript / bad language fail 1`] = `
+{
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": "null",
+      "op": "string",
+      "path": "string",
+      "value": "string",
+    },
+  ],
+  "languages": [
+    "string",
+  ],
+  "project": "string",
+  "selected": "string",
+}
+`;
+
+exports[`zoom / cut / annotate > annotate add: same item twice is one item 1`] = `
+{
+  "annotation": {
+    "endMs": "number",
+    "id": "string",
+    "kind": "string",
+    "startMs": "number",
+  },
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": [],
+      "op": "string",
+      "path": "string",
+      "value": [
+        {
+          "anchor": "string",
+          "endMs": "number",
+          "id": "string",
+          "in": {
+            "kind": "string",
+            "ms": "number",
+          },
+          "kind": "string",
+          "out": {
+            "kind": "string",
+            "ms": "number",
+          },
+          "rect": {
+            "h": "number",
+            "w": "number",
+            "x": "number",
+            "y": "number",
+          },
+          "startMs": "number",
+          "style": {
+            "bold": "boolean",
+            "color": "string",
+            "fill": "string",
+            "fillOpacity": "number",
+            "fontSize": "number",
+            "opacity": "number",
+            "radius": "number",
+            "shadow": {
+              "blur": "number",
+              "enabled": "boolean",
+              "offsetY": "number",
+              "opacity": "number",
+            },
+            "strokeWidth": "number",
+            "textColor": "string",
+          },
+          "text": "string",
+        },
+      ],
+    },
+  ],
+  "project": "string",
+}
+`;
+
+exports[`zoom / cut / annotate > cut add: idempotent, start < end 1`] = `
+{
+  "changed": "boolean",
+  "cut": {
+    "endMs": "number",
+    "startMs": "number",
+  },
+  "diff": [
+    {
+      "old": [],
+      "op": "string",
+      "path": "string",
+      "value": [
+        {
+          "endMs": "number",
+          "startMs": "number",
+        },
+      ],
+    },
+  ],
+  "project": "string",
+}
+`;
+
+exports[`zoom / cut / annotate > zoom add: idempotent, range checked 1`] = `
+{
+  "changed": "boolean",
+  "diff": [
+    {
+      "old": [],
+      "op": "string",
+      "path": "string",
+      "value": [
+        {
+          "auto": "boolean",
+          "endMs": "number",
+          "focus": {
+            "x": "number",
+            "y": "number",
+          },
+          "id": "string",
+          "scale": "number",
+          "startMs": "number",
+          "style": "string",
+        },
+      ],
+    },
+  ],
+  "project": "string",
+  "zoom": {
+    "auto": "boolean",
+    "endMs": "number",
+    "focus": {
+      "x": "number",
+      "y": "number",
+    },
+    "id": "string",
+    "scale": "number",
+    "startMs": "number",
+    "style": "string",
+  },
+}
+`;
