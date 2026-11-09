@@ -31,6 +31,9 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci --no-audit --no-fund
+      - name: Make bundled tools executable
+        # npm ci can leave 7zip-bin / app-builder-bin without the exec bit (EACCES on the first run)
+        run: chmod +x node_modules/7zip-bin/linux/x64/7za node_modules/app-builder-bin/linux/x64/app-builder
       - name: Build editor + installer
         env:
           USE_SYSTEM_MAKENSIS: "1"
