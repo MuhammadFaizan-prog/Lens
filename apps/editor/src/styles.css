@@ -574,6 +574,12 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .preview.zoom-100 { overflow: auto; place-items: start; }
 .transport { padding: 2px 16px 8px; }
 .ann-toolbar { padding: 6px 14px 0; }
+.timeline-body { overflow-y: auto; overflow-x: hidden; align-items: flex-start; }
+.timeline-body::-webkit-scrollbar { width: 9px; }
+.timeline-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 5px; }
+.tl-labels { position: sticky; left: 0; }
+.tl-scroll { overflow-y: hidden; min-height: 0; }
+.tl-inner { min-height: 0; }
 .fs-btn { margin-left: 2px; }
 /* preview fullscreen (F): the stage covers the window, chrome hidden */
 .app.preview-fs .center { position: fixed; inset: 0; z-index: 60; background: #000; }
@@ -582,3 +588,6 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .app.preview-fs .preview-canvas { border-radius: 0; box-shadow: none; }
 .preview-zoom { width: auto; }
 .preview-zoom button { padding: 3px 8px; font-size: 11.5px; flex: none; }
+/* shrinking the window must shrink the timeline: flex / grid items default to min-width: auto, which
+   kept the lanes at their old content width (the page stayed 1440 px wide after a resize to 1280) */
+.app > *, .timeline, .timeline-body, .tl-scroll, .topbar, .top-actions { min-width: 0; }
