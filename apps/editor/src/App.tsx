@@ -259,6 +259,16 @@ function useKeys() {
         return;
       }
       if (mod) return;
+      // Alt+Arrow with a 3D block selected (also from its sliders): turn the selected keyframe 5
+      // degrees: Up/Down about X, Left/Right about Y, Alt+Shift+Left/Right about Z
+      if (e.altKey && k.startsWith("Arrow")) {
+        const sign = k === "ArrowRight" || k === "ArrowUp" ? 1 : -1;
+        const axis = k === "ArrowUp" || k === "ArrowDown" ? "rx" : e.shiftKey ? "rz" : "ry";
+        if (store.nudgeMotion3d(axis, 5 * sign)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (el?.tagName === "INPUT") return; // sliders keep arrow keys
       switch (k) {
         case " ":
