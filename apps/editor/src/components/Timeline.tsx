@@ -352,7 +352,7 @@ export function Timeline() {
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
             </div>
             <div className="lane" data-testid="lane-mask" onPointerDown={scrubLane} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
-              {project.masks.map((m, i) => block("mask", i, m, m.kind))}
+              {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}
             </div>
             <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} onPointerDown={scrubLane}>
               {captionBlockList.map((b, i) => (

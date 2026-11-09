@@ -183,3 +183,16 @@ describe("history", () => {
     expect(h.size.past).toBe(3);
   });
 });
+
+describe("tracked (privacy) masks on the timeline", () => {
+  const keys = [{ tMs: 1000, rect: { x: 10, y: 50, w: 80, h: 20 } }, { tMs: 1033.33, rect: { x: 10, y: 40, w: 80, h: 20 } }];
+  const p = resolveProject({ masks: [{ id: "pd1-1", kind: "blur", rect: keys[0]!.rect, keys, startMs: 1000, endMs: 3000, feather: 2, fadeMs: 0, privacyId: "pd1" }] });
+  it("moving a tracked mask carries its keys", () => {
+    const q = updateBlock(p, "mask", 0, { startMs: 1500, endMs: 3500 });
+    expect(q.masks[0]!.keys!.map((k) => k.tMs)).toEqual([1500, 1533.33]);
+  });
+  it("resizing keeps the keys in place", () => {
+    const q = updateBlock(p, "mask", 0, { startMs: 1000, endMs: 2000 });
+    expect(q.masks[0]!.keys!.map((k) => k.tMs)).toEqual([1000, 1033.33]);
+  });
+});

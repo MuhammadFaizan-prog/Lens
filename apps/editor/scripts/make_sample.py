@@ -3,6 +3,7 @@
 
   python3 apps/editor/scripts/make_sample.py [--out apps/editor/sample] [--force]
   python3 apps/editor/scripts/make_sample.py --takes [--out apps/editor/sample-takes]
+  python3 apps/editor/scripts/make_sample.py --privacy [--out apps/editor/sample-privacy]
 
 Writes a Lens bundle the editor opens by default:
   screen.mp4  cursorless fake-app recording (1280x720 @ 30 fps, 10 s) + meta.json + events.jsonl
@@ -100,6 +101,23 @@ def make_takes(out: Path, force: bool) -> int:
     return 0
 
 
+def make_privacy(out: Path, force: bool) -> int:
+    """A 15 s fake console with planted fake secrets that scroll and move (privacy_synth, dev variant)."""
+    if (out / "project.json").exists() and (out / "screen.mp4").exists() and not force:
+        print(f"sample exists: {out}")
+        return 0
+    from lensharness.privacy_synth import generate  # noqa: E402
+    out.mkdir(parents=True, exist_ok=True)
+    generate(out, duration_ms=15000, fps=30, variant="dev")
+    (out / "gt.json").unlink(missing_ok=True)  # test ground truth is not part of a bundle
+    p = {"version": 1, "output": {"aspect": "16:9", "resolution": 720, "fps": 30},
+         "background": {"kind": "gradient", "colors": ["#0f2027", "#2c5364", "#7ab8a6"], "angle": 135, "blur": 0},
+         "zoom": {"auto": False}, "cursor": {"visible": True}}
+    (out / "project.json").write_text(json.dumps(p, indent=2))
+    print(f"privacy sample written: {out}")
+    return 0
+
+
 def project() -> dict:
     sx = W / 1920
     return {
@@ -127,7 +145,11 @@ def main() -> int:
     ap.add_argument("--out", default=str(ROOT / "apps" / "editor" / "sample"))
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--takes", action="store_true", help="write the multi-take sample (default --out apps/editor/sample-takes)")
+    ap.add_argument("--privacy", action="store_true", help="write the privacy-redaction sample (default --out apps/editor/sample-privacy)")
     a = ap.parse_args()
+    if a.privacy:
+        out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-privacy"
+        return make_privacy(out, a.force)
     if a.takes:
         out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-takes"
         return make_takes(out, a.force)

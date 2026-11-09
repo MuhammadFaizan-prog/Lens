@@ -9,10 +9,14 @@
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
  *   GET  /api/export/:id/file        the exported MP4
+ *   POST /api/privacy/scan[?force=1] start redact/lens-redact on screen.mp4 -> { id } (cached per screen.mp4)
+ *   GET  /api/privacy/scan/:id       { state, stage, done, total, error, result }
+ *   GET  /api/privacy/thumb/:name    a review thumbnail (.lens-cache/privacy/)
  *
  * A bundle is a folder with screen.mp4, meta.json, events.jsonl and optionally cam.mp4,
  * transcript.json, project.json and audio files. Default: $LENS_BUNDLE or apps/editor/sample
- * (generated on first use by scripts/make_sample.py; apps/editor/sample-takes, the multi-take sample, too).
+ * (generated on first use by scripts/make_sample.py; apps/editor/sample-takes, the multi-take sample, and
+ * apps/editor/sample-privacy, the privacy-redaction sample, too).
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -41,6 +45,68 @@ interface ExportJob {
 }
 
 const jobs = new Map<string, ExportJob>();
+
+interface ScanJob {
+  id: string;
+  state: "running" | "done" | "error";
+  stage: string;
+  done: number;
+  total: number;
+  error?: string;
+  result?: unknown;
+  startedAt: number;
+  finishedAt?: number;
+}
+
+const scans = new Map<string, ScanJob>();
+
+/** Run the on-device privacy scan; the result is cached next to the frames, keyed by screen.mp4's mtime. */
+function startScan(bundle: string, force: boolean): ScanJob {
+  const id = "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const dir = path.join(bundle, ".lens-cache", "privacy");
+  const out = path.join(dir, "scan.json");
+  const stamp = path.join(dir, ".stamp");
+  const video = path.join(bundle, "screen.mp4");
+  const mtime = String(fs.statSync(video).mtimeMs);
+  const job: ScanJob = { id, state: "running", stage: "start", done: 0, total: 0, startedAt: Date.now() };
+  scans.set(id, job);
+  if (!force && fs.existsSync(out) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === mtime) {
+    job.result = JSON.parse(fs.readFileSync(out, "utf8"));
+    job.state = "done";
+    job.stage = "cached";
+    job.finishedAt = Date.now();
+    return job;
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const args = [path.join(ROOT, "redact", "lens-redact"), video, "-o", out, "--thumbs", dir, "--progress"];
+  const ev = path.join(bundle, "events.jsonl");
+  if (fs.existsSync(ev)) args.push("--events", ev);
+  const py = spawn("python3", args, { cwd: ROOT });
+  let err = "";
+  py.stderr.on("data", (d: Buffer) => {
+    for (const line of d.toString().split("\n")) {
+      const m = /^progress (\w+) (\d+) (\d+)/.exec(line);
+      if (m) {
+        job.stage = m[1]!;
+        job.done = Number(m[2]);
+        job.total = Number(m[3]);
+      } else if (line.trim()) err += line + "\n";
+    }
+  });
+  py.on("close", (code) => {
+    job.finishedAt = Date.now();
+    if (code === 0 && fs.existsSync(out)) {
+      job.result = JSON.parse(fs.readFileSync(out, "utf8"));
+      fs.writeFileSync(stamp, mtime);
+      job.state = "done";
+    } else {
+      job.state = "error";
+      job.error = err.trim().split("\n").slice(-4).join("\n") || `lens-redact exited ${code}`;
+    }
+  });
+  return job;
+}
 const extracting = new Map<string, Promise<number>>();
 
 export function defaultBundle(): string {
@@ -50,8 +116,9 @@ export function defaultBundle(): string {
 function ensureSample(dir: string): void {
   if (fs.existsSync(path.join(dir, "screen.mp4"))) return;
   const takes = path.resolve(dir) === path.resolve(EDITOR, "sample-takes");
-  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes) throw new Error(`no screen.mp4 in ${dir}`);
-  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : [])], { encoding: "utf8" });
+  const privacy = path.resolve(dir) === path.resolve(EDITOR, "sample-privacy");
+  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes && !privacy) throw new Error(`no screen.mp4 in ${dir}`);
+  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : []), ...(privacy ? ["--privacy"] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`make_sample failed: ${r.stderr}`);
 }
 
@@ -230,6 +297,23 @@ export function apiMiddleware() {
         }
         return sendJson(res, { id: job.id, state: job.state, done: job.done, total: job.total, error: job.error, out: job.out,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if (url.pathname === "/api/privacy/scan" && req.method === "POST") {
+        const job = startScan(bundle, url.searchParams.get("force") === "1");
+        return sendJson(res, { id: job.id, state: job.state });
+      }
+      if ((m = /^\/api\/privacy\/scan\/([a-z0-9]+)$/.exec(url.pathname))) {
+        const job = scans.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such scan" }, 404);
+        return sendJson(res, { id: job.id, state: job.state, stage: job.stage, done: job.done, total: job.total, error: job.error,
+          result: job.state === "done" ? job.result : undefined, seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if ((m = /^\/api\/privacy\/thumb\/([A-Za-z0-9_.-]+\.jpg)$/.exec(url.pathname))) {
+        const file = path.join(bundle, ".lens-cache", "privacy", path.basename(m[1]!));
+        if (!fs.existsSync(file)) return sendJson(res, { error: "not found" }, 404);
+        res.setHeader("content-type", "image/jpeg");
+        res.setHeader("cache-control", "no-store");
+        return fs.createReadStream(file).pipe(res);
       }
       return sendJson(res, { error: "unknown endpoint" }, 404);
     } catch (e) {

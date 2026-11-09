@@ -112,7 +112,19 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
     case "speed":
       return { ...p, edits: { ...p.edits, speed: p.edits.speed.map((s, j) => (j === i ? { ...s, ...patch } : s)) } };
     case "mask":
-      return { ...p, masks: p.masks.map((m, j) => (j === i ? { ...m, ...patch } : m)) };
+      return {
+        ...p,
+        masks: p.masks.map((m, j) => {
+          if (j !== i) return m;
+          // moving a tracked mask in time carries its keys along (a resize keeps them where they are)
+          const q = patch as Partial<typeof m>;
+          if (m.keys && q.startMs !== undefined && q.endMs !== undefined && Math.abs(q.endMs - q.startMs - (m.endMs - m.startMs)) < 0.5) {
+            const d = q.startMs - m.startMs;
+            if (d) return { ...m, ...patch, keys: m.keys.map((k) => ({ ...k, tMs: k.tMs + d })) };
+          }
+          return { ...m, ...patch };
+        }),
+      };
   }
 }
 

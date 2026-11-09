@@ -4,8 +4,8 @@
  * through useEditor(selector) so the preview can redraw at 60 fps without re-rendering React.
  */
 import { useSyncExternalStore } from "react";
-import { applyZoomPreset, cutsForDeletedWords, isFiller, resolveProject, withTakeChoice } from "@lens/engine";
-import type { ProjectConfig, RenderPlan, TakeSettings, TakeStrategy, ZoomPresetName } from "@lens/engine";
+import { applyPrivacyScan, applyZoomPreset, cutsForDeletedWords, isFiller, privacyCounts, resolveProject, reviewPrivacy, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
+import type { PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, TakeSettings, TakeStrategy, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { History } from "./history";
@@ -20,6 +20,16 @@ export interface Selection {
 export interface ExportState {
   id: string;
   state: "starting" | "running" | "done" | "error";
+  done: number;
+  total: number;
+  error?: string;
+  seconds?: number;
+}
+
+export interface PrivacyScanState {
+  id: string;
+  state: "starting" | "running" | "done" | "error";
+  stage: string;
   done: number;
   total: number;
   error?: string;
@@ -55,6 +65,12 @@ export interface EditorState {
    * plays from the take's start; anything else ends it and restores the project's own plan.
    */
   audition: { group: number; take: number; endFrame: number } | null;
+  /** The on-device privacy scan in progress (or its last outcome). */
+  privacyScan: PrivacyScanState | null;
+  /** Export asked while privacy detections are unreviewed: the sheet asks first. */
+  exportWarning: { pending: number } | null;
+  /** Which panel the left column shows. */
+  leftPanel: "transcript" | "privacy";
 }
 
 type Listener = () => void;
@@ -83,6 +99,9 @@ export class EditorStore {
     dirty: false,
     revision: 0,
     audition: null,
+    privacyScan: null,
+    exportWarning: null,
+    leftPanel: "transcript",
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -121,8 +140,10 @@ export class EditorStore {
       const bundle = await fetchBundle(dir);
       // Tests on small machines lower the decoded-bitmap LRU (window.__lensMaxBitmaps, set before load).
       const maxBitmaps = Number((globalThis as { __lensMaxBitmaps?: number }).__lensMaxBitmaps) || 24;
-      this.screen = new FrameStore("screen", bundle.screen.frames, bundle.screen.fps, "", maxBitmaps);
-      this.cam = bundle.camera ? new FrameStore("cam", bundle.camera.frames, bundle.camera.fps, "", maxBitmaps) : null;
+      // frames come from the opened bundle (?dir=...), not the server's default one
+      const q = this.dirQuery();
+      this.screen = new FrameStore("screen", bundle.screen.frames, bundle.screen.fps, q, maxBitmaps);
+      this.cam = bundle.camera ? new FrameStore("cam", bundle.camera.frames, bundle.camera.fps, q, maxBitmaps) : null;
       this.history.reset(bundle.project);
       this.set({ bundle, status: "ready", error: null, frame: 0, selection: null, selectedWords: [], savedAt: null, dirty: false });
       this.rebuild(bundle.project);
@@ -369,6 +390,66 @@ export class EditorStore {
     this.rebuild(this.history.doc);
   }
 
+  // ------------------------------------------------------------------ privacy (demand #3)
+
+  setLeftPanel(leftPanel: EditorState["leftPanel"]): void {
+    this.set({ leftPanel });
+  }
+
+  /** Run the on-device scan (dev server: redact/lens-redact) and put its detections in the project (one undo step). */
+  async scanPrivacy(force = false): Promise<void> {
+    if (this.s.privacyScan && ["starting", "running"].includes(this.s.privacyScan.state)) return;
+    this.set({ privacyScan: { id: "", state: "starting", stage: "start", done: 0, total: 0 } });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/privacy/scan${q}${force ? `${q ? "&" : "?"}force=1` : ""}`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) {
+      this.set({ privacyScan: { id: "", state: "error", stage: "", done: 0, total: 0, error: j.error } });
+      return;
+    }
+    const id = j.id as string;
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        const st = await (await fetch(`/api/privacy/scan/${id}${q}`)).json();
+        this.set({ privacyScan: { id, state: st.state, stage: st.stage, done: st.done, total: st.total, error: st.error, seconds: st.seconds } });
+        if (st.state === "running") {
+          setTimeout(poll, 300);
+          return;
+        }
+        if (st.state === "done") {
+          const res = st.result as { detections: PrivacyDetection[] };
+          const n = res.detections.length;
+          this.edit(`Scan for sensitive info`, (p) => applyPrivacyScan(p, res, new Date().toISOString()));
+          this.notify(n ? `Found ${n} sensitive item${n > 1 ? "s" : ""} to review` : "Nothing sensitive found");
+        }
+        resolve();
+      };
+      setTimeout(poll, 150);
+    });
+  }
+
+  /** Accept / dismiss / un-review detections (ids null = all of them); one undo step. */
+  reviewPrivacy(ids: string[] | null, state: PrivacyState): void {
+    const dets = this.history.doc.privacy.detections.filter((d) => !ids || ids.includes(d.id));
+    if (!dets.length) return;
+    const verb = state === "accepted" ? "Hide" : state === "dismissed" ? "Dismiss" : "Unreview";
+    const what = ids === null ? `all ${dets.length}` : dets.length === 1 ? dets[0]!.preview : `${dets.length} items`;
+    this.edit(`${verb} ${what}`, (p) => reviewPrivacy(p, ids, state));
+  }
+
+  setPrivacyMaskKind(kind: PrivacySettings["maskKind"]): void {
+    this.edit(`Privacy masks: ${kind}`, (p) => setPrivacyMaskKind(p, kind, null));
+  }
+
+  /** Jump to a detection's first appearance. */
+  showDetection(id: string): void {
+    const d = this.s.project.privacy.detections.find((x) => x.id === id);
+    if (!d || !this.s.plan) return;
+    this.pause();
+    const t = d.tracks[0]!;
+    this.seekSource(Math.min(t.endMs - 1, t.startMs + Math.min(400, (t.endMs - t.startMs) / 2)));
+  }
+
   // ------------------------------------------------------------------ transport
 
   seek(frame: number): void {
@@ -490,7 +571,14 @@ export class EditorStore {
     return d ? `?dir=${encodeURIComponent(d)}` : "";
   }
 
-  async exportVideo(): Promise<void> {
+  /** Export; while privacy detections are unreviewed the sheet asks first (force skips the question). */
+  async exportVideo(force = false): Promise<void> {
+    const pending = privacyCounts(this.s.project).pending;
+    if (pending && !force) {
+      this.set({ exportWarning: { pending } });
+      return;
+    }
+    this.set({ exportWarning: null });
     this.set({ exporting: { id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 } });
     const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
     const j = await r.json();
@@ -507,6 +595,10 @@ export class EditorStore {
       else if (s.state === "done") this.notify("Export finished");
     };
     setTimeout(poll, 300);
+  }
+
+  closeExportWarning(review = false): void {
+    this.set({ exportWarning: null, ...(review ? { leftPanel: "privacy" as const } : {}) });
   }
 
   closeExport(): void {

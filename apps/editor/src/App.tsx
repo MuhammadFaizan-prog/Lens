@@ -4,6 +4,8 @@ import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
 import { deleteSelection, Timeline } from "./components/Timeline";
 import { TranscriptPanel } from "./components/TranscriptPanel";
+import { PrivacyPanel } from "./components/PrivacyPanel";
+import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
 import { store, useEditor } from "./state/store";
@@ -56,6 +58,50 @@ function TopBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+function LeftPanel() {
+  const panel = useEditor((s) => s.leftPanel);
+  const pending = useEditor((s) => privacyCounts(s.project).pending);
+  return (
+    <div className="left-col">
+      <nav className="left-tabs" role="tablist">
+        <button role="tab" aria-selected={panel === "transcript"} className={panel === "transcript" ? "on" : ""} data-testid="left-tab-transcript" onClick={() => store.setLeftPanel("transcript")}>
+          Transcript
+        </button>
+        <button role="tab" aria-selected={panel === "privacy"} className={panel === "privacy" ? "on" : ""} data-testid="left-tab-privacy" onClick={() => store.setLeftPanel("privacy")}>
+          <Icon name="shield" size={14} /> Privacy
+          {pending > 0 && <span className="tab-badge" data-testid="pv-pending-badge">{pending}</span>}
+        </button>
+      </nav>
+      {panel === "transcript" ? <TranscriptPanel /> : <PrivacyPanel />}
+    </div>
+  );
+}
+
+function ExportWarning() {
+  const w = useEditor((s) => s.exportWarning);
+  if (!w) return null;
+  return (
+    <div className="sheet-backdrop" onClick={() => store.closeExportWarning()}>
+      <div className="sheet" role="alertdialog" aria-label="Unreviewed sensitive items" data-testid="export-warning" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <h2>Sensitive items not reviewed</h2>
+        </header>
+        <p className="warn-text">
+          {w.pending} item{w.pending > 1 ? "s" : ""} the privacy scan found {w.pending > 1 ? "are" : "is"} still pending. Pending items are <b>not</b> hidden in the export.
+        </p>
+        <div className="sheet-actions">
+          <button className="btn" data-testid="export-warning-review" onClick={() => store.closeExportWarning(true)}>
+            <Icon name="shield" /> Review
+          </button>
+          <button className="btn primary" data-testid="export-warning-anyway" onClick={() => void store.exportVideo(true)}>
+            <Icon name="export" /> Export anyway
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -214,7 +260,7 @@ export function App() {
       <TopBar />
       {status === "error" && <div className="banner error">Could not open the recording: {error}</div>}
       <main className="workspace">
-        <TranscriptPanel />
+        <LeftPanel />
         <section className="center">
           <Preview />
           <Transport />
@@ -223,6 +269,7 @@ export function App() {
       </main>
       <Timeline />
       <ExportSheet />
+      <ExportWarning />
       <Toast />
     </div>
   );

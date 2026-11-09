@@ -70,10 +70,16 @@ function SelectionCard() {
         />
         <Slider label={m.kind === "spotlight" ? "Dim" : m.kind === "blur" ? "Blur" : "Block"} value={strength} min={sr.min} max={sr.max} step={sr.step} format={sr.f} onChange={(v) => tweak("Mask strength", { strength: v })} />
         <Slider label="Feather" value={m.feather} min={0} max={40} step={1} format={px} onChange={(v) => tweak("Mask feather", { feather: v })} />
-        <Slider label="X" value={m.rect.x} min={0} max={(store.get().bundle?.meta.width ?? 1920) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, x: v } })} />
-        <Slider label="Y" value={m.rect.y} min={0} max={(store.get().bundle?.meta.height ?? 1080) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, y: v } })} />
-        <Slider label="Width" value={m.rect.w} min={10} max={store.get().bundle?.meta.width ?? 1920} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, w: v } })} />
-        <Slider label="Height" value={m.rect.h} min={10} max={store.get().bundle?.meta.height ?? 1080} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, h: v } })} />
+        {m.keys?.length ? (
+          <p className="note" data-testid="sel-mask-tracked">Tracked: follows the content ({m.keys.length} keys){m.privacyId ? `, from privacy item ${m.privacyId}` : ""}.</p>
+        ) : (
+          <>
+          <Slider label="X" value={m.rect.x} min={0} max={(store.get().bundle?.meta.width ?? 1920) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, x: v } })} />
+          <Slider label="Y" value={m.rect.y} min={0} max={(store.get().bundle?.meta.height ?? 1080) - 10} step={2} format={px} onChange={(v) => tweak("Mask position", { rect: { ...m.rect, y: v } })} />
+          <Slider label="Width" value={m.rect.w} min={10} max={store.get().bundle?.meta.width ?? 1920} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, w: v } })} />
+          <Slider label="Height" value={m.rect.h} min={10} max={store.get().bundle?.meta.height ?? 1080} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, h: v } })} />
+          </>
+        )}
       </>
     );
   } else {
