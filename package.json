@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @lens/engine && npm run build -w @lens/cli && npm run build -w @lens/editor",
-    "test": "npm test -w @lens/engine && npm test -w @lens/cli && npm test -w @lens/editor",
+    "test": "npm test -w @lens/engine && npm test -w @lens/cli && npm test -w @lens/editor && npm test -w @lens/desktop",
     "typecheck": "npm run typecheck -w @lens/engine && npm run typecheck -w @lens/cli && npm run typecheck -w @lens/editor",
     "e2e": "npm run e2e -w @lens/editor",
     "plan": "node packages/engine/dist/cli.js",

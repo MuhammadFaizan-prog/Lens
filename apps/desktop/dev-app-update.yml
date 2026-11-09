@@ -1,0 +1,6 @@
+# Used only by unpackaged (development / test) runs of the updater; packaged builds carry
+# resources/app-update.yml written by electron-builder from the publish config.
+provider: github
+owner: MuhammadFaizan-prog
+repo: Lens
+updaterCacheDirName: lens-updater

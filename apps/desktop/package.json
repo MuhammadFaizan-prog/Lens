@@ -1,0 +1,28 @@
+{
+  "name": "@lens/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lens desktop recorder (Electron): screen capture, cursor + click log, live auto-zoom preview, bundled editor",
+  "author": "MuhammadFaizan-prog",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "npm run build && electron .",
+    "e2e": "e2e/run.sh record.spec.ts",
+    "dist:win": "node scripts/build.mjs && node scripts/dist-win.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "6.6.2",
+    "uiohook-napi": "1.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "38.8.6",
+    "electron-builder": "26.0.12",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

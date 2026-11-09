@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:; style-src 'self' 'unsafe-inline'" />
+    <title>Lens Recorder</title>
+    <link rel="stylesheet" href="recorder.css" />
+  </head>
+  <body>
+    <div id="update" class="update" data-testid="update" hidden><span id="update-text"></span><button id="update-btn" data-testid="update-btn"></button></div>
+    <header>
+      <h1>Lens</h1>
+      <span id="status" data-testid="status">Ready</span>
+    </header>
+    <section id="pick">
+      <div class="tabs">
+        <button id="tab-screen" class="tab active">Screens</button>
+        <button id="tab-window" class="tab">Windows</button>
+        <button id="refresh" class="tab" title="Refresh">↻</button>
+      </div>
+      <div id="sources" class="sources" data-testid="sources"></div>
+    </section>
+    <section id="live" hidden>
+      <canvas id="preview" width="380" height="214" data-testid="preview"></canvas>
+      <div class="live-meta"><span id="timer">00:00</span><span id="zoominfo">1.00×</span></div>
+    </section>
+    <footer>
+      <label class="mic"><input type="checkbox" id="mic" /> Microphone</label>
+      <button id="go" class="rec" data-testid="go">Start recording</button>
+      <p class="hint">Hotkey <kbd id="hotkey">Ctrl+Shift+R</kbd> starts and stops from anywhere. <span id="hookwarn"></span></p>
+      <p class="hint"><span id="version"></span> · <a href="#" id="check-updates" data-testid="check-updates">Check for updates</a></p>
+    </footer>
+    <video id="v" muted playsinline hidden></video>
+    <script src="recorder.js"></script>
+  </body>
+</html>
