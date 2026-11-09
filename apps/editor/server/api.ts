@@ -34,13 +34,21 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
+import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
-const ROOT = path.resolve(EDITOR, "..", "..");
-const FONT_CANDIDATES = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"];
-const FONT_REGULAR = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/DejaVuSans.ttf"];
+// The desktop app (apps/desktop) runs this middleware from a bundle inside its resources, so the repo
+// root, ffmpeg / ffprobe and the font folder can be set from the environment.
+const ROOT = process.env.LENS_ROOT ? path.resolve(process.env.LENS_ROOT) : path.resolve(EDITOR, "..", "..");
+const FFMPEG = process.env.LENS_FFMPEG || "ffmpeg";
+const FFPROBE = process.env.LENS_FFPROBE || "ffprobe";
+const FONT_DIR = process.env.LENS_FONT_DIR ? [process.env.LENS_FONT_DIR] : [];
+const FONT_CANDIDATES = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans-Bold.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"];
+const FONT_REGULAR = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/DejaVuSans.ttf"];
+/** "browser": export through the editor's Canvas2D renderer + ffmpeg (no Python); default: compositor/render.py. */
+const EXPORT_PATH = process.env.LENS_EXPORT === "browser" ? "browser" : "compositor";
 
 type Next = (err?: unknown) => void;
 
@@ -55,7 +63,7 @@ interface ExportJob {
   finishedAt?: number;
 }
 
-const jobs = new Map<string, ExportJob>();
+const jobs = new Map<string, ExportJob | BrowserExportJob>();
 
 interface ScanJob {
   id: string;
@@ -289,7 +297,7 @@ function extractFrames(bundle: string, track: "screen" | "cam"): Promise<number>
     }
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
-    const ff = spawn("ffmpeg", ["-v", "error", "-y", "-i", video, "-vsync", "0", "-q:v", "2", path.join(dir, "%05d.jpg")]);
+    const ff = spawn(FFMPEG, ["-v", "error", "-y", "-i", video, "-vsync", "0", "-q:v", "2", path.join(dir, "%05d.jpg")]);
     let err = "";
     ff.stderr.on("data", (d: Buffer) => (err += d.toString()));
     ff.on("close", (code) => {
@@ -336,12 +344,6 @@ async function loadBundle(dir: string) {
   const transcript = readJson(path.join(dir, "transcript.json"));
   const hasCam = fs.existsSync(path.join(dir, "cam.mp4"));
   const [screenFrames, camFrames] = await Promise.all([extractFrames(dir, "screen"), hasCam ? extractFrames(dir, "cam") : Promise.resolve(0)]);
-  const probe = (f: string) => {
-    const r = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", f], { encoding: "utf8" });
-    const s = JSON.parse(r.stdout).streams[0];
-    const [n, d] = String(s.r_frame_rate).split("/").map(Number);
-    return { width: s.width as number, height: s.height as number, fps: (n ?? 30) / (d ?? 1) };
-  };
   return {
     dir,
     name: path.basename(dir),
@@ -351,9 +353,31 @@ async function loadBundle(dir: string) {
     events,
     project,
     transcript,
-    screen: { ...probe(path.join(dir, "screen.mp4")), frames: screenFrames },
-    camera: hasCam ? { ...probe(path.join(dir, "cam.mp4")), frames: camFrames } : null,
+    screen: { ...probeVideo(path.join(dir, "screen.mp4")), frames: screenFrames },
+    camera: hasCam ? { ...probeVideo(path.join(dir, "cam.mp4")), frames: camFrames } : null,
   };
+}
+
+/** Width, height and frame rate of a video's first stream: ffprobe, or `ffmpeg -i` when no ffprobe is shipped (desktop build). */
+export function probeVideo(f: string): { width: number; height: number; fps: number } {
+  const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", f], { encoding: "utf8" });
+  if (r.status === 0 && r.stdout) {
+    const s = JSON.parse(r.stdout).streams[0];
+    const [n, d] = String(s.r_frame_rate).split("/").map(Number);
+    return { width: s.width as number, height: s.height as number, fps: (n ?? 30) / (d ?? 1) };
+  }
+  const info = spawnSync(FFMPEG, ["-hide_banner", "-i", f], { encoding: "utf8" }).stderr ?? "";
+  return parseFfmpegVideoInfo(info);
+}
+
+/** Parse "Stream #0:0...: Video: h264 ..., 1280x720 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr" from `ffmpeg -i`. */
+export function parseFfmpegVideoInfo(text: string): { width: number; height: number; fps: number } {
+  const line = text.split(/\r?\n/).find((l) => /Stream #\d+:\d+.*: Video:/.test(l));
+  if (!line) throw new Error("no video stream");
+  const size = / (\d{2,5})x(\d{2,5})[ ,]/.exec(line);
+  const fps = /([\d.]+) fps/.exec(line) ?? /([\d.]+) tbr/.exec(line);
+  if (!size) throw new Error("no video size");
+  return { width: Number(size[1]), height: Number(size[2]), fps: fps ? Number(fps[1]) : 30 };
 }
 
 /** Resolve a project against the bundle: audio paths made absolute so the compositor finds them. */
@@ -400,6 +424,20 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
       job.error = err.trim().split("\n").slice(-4).join("\n") || `render.py exited ${code}`;
     }
   });
+  return job;
+}
+
+/** In-browser export (LENS_EXPORT=browser): the plan is built here, the editor posts the frames. */
+function startExportBrowser(bundle: string, rawProject: unknown): BrowserExportJob {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const meta = JSON.parse(fs.readFileSync(path.join(bundle, "meta.json"), "utf8"));
+  const events = parseEventLog(fs.readFileSync(path.join(bundle, "events.jsonl"), "utf8"));
+  const tj = readJson(path.join(bundle, "transcript.json"));
+  const tr = tj ? parseTranscript(tj) : null;
+  const project = exportProject(bundle, rawProject);
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
+  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id);
+  jobs.set(id, job);
   return job;
 }
 
@@ -509,6 +547,24 @@ export function apiMiddleware() {
         resolveProject(body); // validate before writing
         fs.writeFileSync(path.join(bundle, "project.json"), JSON.stringify(body, null, 2));
         return sendJson(res, { ok: true, path: path.join(bundle, "project.json") });
+      }
+      if (url.pathname === "/api/capabilities" && req.method === "GET") return sendJson(res, { export: EXPORT_PATH });
+      if (url.pathname === "/api/export-browser" && req.method === "POST") {
+        const body = JSON.parse(await readBody(req));
+        const job = startExportBrowser(bundle, body.project);
+        return sendJson(res, { id: job.id, total: job.total });
+      }
+      if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish)$/.exec(url.pathname)) && req.method === "POST") {
+        const job = jobs.get(m[1]!);
+        if (!job || !("ff" in job)) return sendJson(res, { error: "no such export" }, 404);
+        if (m[2] === "finish") {
+          finishBrowserExport(job);
+          return sendJson(res, { ok: true });
+        }
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(c as Buffer);
+        await writeFrame(job, Number(url.searchParams.get("i")), Buffer.concat(chunks));
+        return sendJson(res, { ok: true, done: job.done });
       }
       if (url.pathname === "/api/export" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

@@ -14,6 +14,7 @@ import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords
 import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
+import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
 import { buildPlan, fetchBundle, type Bundle } from "./bundle";
 import { frameForSource, freezeAutoZooms, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
@@ -30,6 +31,8 @@ export interface ExportState {
   total: number;
   error?: string;
   seconds?: number;
+  /** "browser": frames drawn by the editor's renderer (desktop app); "compositor": compositor/render.py. */
+  path?: "browser" | "compositor";
 }
 
 export interface PrivacyScanState {
@@ -943,6 +946,7 @@ export class EditorStore {
       return;
     }
     this.set({ exportWarning: null });
+    if ((await this.exportPath()) === "browser") return this.exportInBrowser();
     this.set({ exporting: { id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 } });
     const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
     const j = await r.json();
@@ -959,6 +963,68 @@ export class EditorStore {
       else if (s.state === "done") this.notify("Export finished");
     };
     setTimeout(poll, 300);
+  }
+
+  private exportPathP: Promise<"browser" | "compositor"> | null = null;
+  /** Which export path the server offers (/api/capabilities; older servers: the compositor). */
+  exportPath(): Promise<"browser" | "compositor"> {
+    if (!this.exportPathP)
+      this.exportPathP = fetch("/api/capabilities")
+        .then((r) => (r.ok ? r.json() : {}))
+        .then((j: { export?: string }) => (j.export === "browser" ? "browser" : "compositor"))
+        .catch(() => "compositor" as const);
+    return this.exportPathP;
+  }
+
+  /**
+   * Export without the Python compositor (desktop app): every plan frame is drawn with the preview's
+   * renderer into an offscreen canvas and posted as a JPEG; the server pipes them into ffmpeg and
+   * mixes the plan's audio (server/browserExport.ts).
+   */
+  private async exportInBrowser(): Promise<void> {
+    const b = this.s.bundle;
+    if (!b || !this.screen) return;
+    const plan = buildPlan(b, this.s.project);
+    const total = plan.frames.length;
+    const t0 = performance.now();
+    const fail = (error: string, id = "", done = 0) => this.set({ exporting: { id, state: "error", done, total, error, path: "browser" } });
+    this.set({ exporting: { id: "", state: "starting", done: 0, total, path: "browser" } });
+    const r = await fetch(`/api/export-browser${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
+    const j = await r.json();
+    if (!r.ok) return fail(j.error);
+    const id = j.id as string;
+    if (j.total !== total) return fail(`plan mismatch: server ${j.total} frames, editor ${total}`, id);
+    await ensurePlanAssets(plan);
+    const renderer = new PlanRenderer();
+    const canvas = makeCanvas(plan.output.width, plan.output.height);
+    const g = canvas.getContext("2d") as CanvasRenderingContext2D;
+    const q = this.dirQuery();
+    const sep = q ? "&" : "?";
+    // own frame stores with a small window, released behind the playhead, so a long export does not
+    // keep every source frame in memory (the preview's stores are left alone)
+    const scrStore = new FrameStore("screen", this.screen.count, this.screen.fps, q, 6);
+    const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6) : null;
+    for (let i = 0; i < total; i++) {
+      const f = plan.frames[i]!;
+      const si = scrStore.indexAt(f.src);
+      const ci = camStore ? camStore.indexAt(f.src) : 0;
+      const [scr, cam] = await Promise.all([scrStore.load(si), camStore ? camStore.load(ci) : Promise.resolve(null)]);
+      renderer.draw(g, plan, i, { screen: scr, cam });
+      scrStore.releaseBelow(si);
+      camStore?.releaseBelow(ci);
+      const blob = "convertToBlob" in canvas ? await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 }) : await new Promise<Blob>((res) => (canvas as HTMLCanvasElement).toBlob((x) => res(x!), "image/jpeg", 0.95));
+      const fr = await fetch(`/api/export-browser/${id}/frame${q}${sep}i=${i}`, { method: "POST", body: blob });
+      if (!fr.ok) return fail((await fr.json()).error ?? `frame ${i} failed`, id, i);
+      if (i % 5 === 0 || i === total - 1) this.set({ exporting: { id, state: "running", done: i + 1, total, path: "browser", seconds: (performance.now() - t0) / 1000 } });
+    }
+    await fetch(`/api/export-browser/${id}/finish${q}`, { method: "POST" });
+    const poll = async () => {
+      const s = await (await fetch(`/api/export/${id}${q}`)).json();
+      if (s.state === "running") return void setTimeout(poll, 300);
+      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser" } });
+      if (s.state === "done") this.notify("Export finished");
+    };
+    setTimeout(poll, 200);
   }
 
   // ------------------------------------------------------------------ interactive demo / step guide (demand #7)

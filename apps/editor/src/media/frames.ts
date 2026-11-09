@@ -68,6 +68,15 @@ export class FrameStore {
     return p;
   }
 
+  /** Forget frames below index `i` (compressed bytes and bitmaps): the export walks forward once. */
+  releaseBelow(i: number): void {
+    for (const k of [...this.blobs.keys()]) if (k < i) this.blobs.delete(k);
+    for (const [k, b] of [...this.bitmaps]) if (k < i) {
+      b.close();
+      this.bitmaps.delete(k);
+    }
+  }
+
   /** Fetch compressed bytes for a range (cheap) and decode the first few. */
   prefetch(indices: number[], decode = 6): void {
     indices.forEach((i, n) => {

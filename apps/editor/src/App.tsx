@@ -186,7 +186,7 @@ function ExportSheet() {
                 {ex.seconds ? ` · ${ex.seconds.toFixed(1)} s` : ""}
               </span>
             </div>
-            <p className="note">Rendered by the reference compositor (compositor/render.py) from the same plan as the preview, with audio mixed.</p>
+            <p className="note">{ex.path === "browser" ? "Rendered in the app by the preview renderer from the same plan, encoded with ffmpeg, with audio mixed." : "Rendered by the reference compositor (compositor/render.py) from the same plan as the preview, with audio mixed."}</p>
           </>
         )}
         {ex.state === "error" && <pre className="error" data-testid="export-error">{ex.error}</pre>}
