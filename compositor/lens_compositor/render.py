@@ -5,8 +5,9 @@ production compositor (wgpu, Rust) must produce the same pixels for the same pla
 compare the two. Order of passes per frame:
 
   background -> shadow -> screen (source crop, camera transform, motion blur)
-  -> masks (spotlight / blur / pixelate) -> click effects -> cursor (with motion blur)
-  -> rounded mask -> webcam (crop, mirror) -> shortcut pill -> caption (styled, word highlight)
+  -> masks (spotlight / blur / pixelate) -> click effects -> screen-anchored annotations
+  -> cursor (with motion blur) -> rounded mask -> webcam (crop, mirror) -> frame-anchored annotations
+  -> shortcut pill -> caption (styled, word highlight) -> text slide
 
 Then audio (see audio.py) is muxed as AAC, or the video is converted to a palette GIF.
 
@@ -28,6 +29,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .annotations import draw_items
 from .audio import build_audio, export_gif, mux_audio
 
 FONT_CANDIDATES = [
@@ -492,6 +494,11 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                     cv2.circle(overlay, (int(rx), int(ry)), int(radius * 1.2), (60, 220, 255), -1, lineType=cv2.LINE_AA)
                 view = view * (1 - alpha) + overlay * alpha
 
+        # Screen-anchored annotations (demand #4): through the camera, under the cursor.
+        scr_ann = [a for a in f.get("annotations", []) if a["space"] == "screen"]
+        if scr_ann:
+            draw_items(view, scr_ann, to_rect, k)
+
         # Cursor (re-rendered from the log, A13/C02).
         if f["cur"] is not None:
             px, py, op, sc, shape = f["cur"]
@@ -552,6 +559,11 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                 if xb > xa and yb > ya:
                     out[ya:yb, xa:xb] = out[ya:yb, xa:xb] * (1 - cm[ya - cyr:yb - cyr, xa - cxr:xb - cxr]) + crop[ya - cyr:yb - cyr, xa - cxr:xb - cxr] * cm[ya - cyr:yb - cyr, xa - cxr:xb - cxr]
 
+        # Frame-anchored annotations: fixed overlay above the webcam.
+        frm_ann = [a for a in f.get("annotations", []) if a["space"] == "frame"]
+        if frm_ann:
+            draw_items(out, frm_ann, lambda px, py: (px, py), 1.0)
+
         # Text overlays drawn with PIL for full Unicode (⌘ ⇧ ⌥).
         if f["shortcut"] or f["caption"]:
             pil = Image.fromarray(cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_BGR2RGB)).convert("RGBA")
@@ -569,6 +581,11 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                 draw_caption(d, f["caption"], cap_style, W, H)
             pil = Image.alpha_composite(pil, layer).convert("RGB")
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
+
+        # Text slide: full frame, over everything, cross-faded by its opacity.
+        if f.get("slide"):
+            sl = f["slide"]
+            draw_items(out, [{"ops": sl["ops"], "opacity": sl["opacity"], "shadow": None}], lambda px, py: (px, py), 1.0)
 
         final = np.clip(out, 0, 255).astype(np.uint8)
         if sink:

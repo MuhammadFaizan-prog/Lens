@@ -50,6 +50,10 @@ export function loadCaptionFont(): Promise<void> {
         const f = new FontFace(CAPTION_FONT, "url(/api/font/caption.ttf)", { weight: "bold" });
         await f.load();
         document.fonts.add(f);
+        // regular weight for annotation text that is not bold (DejaVu Sans)
+        const r = new FontFace(CAPTION_FONT, "url(/api/font/caption-regular.ttf)", { weight: "normal" });
+        await r.load();
+        document.fonts.add(r);
       } catch {
         // fall back to the CSS stack; captions still render
       }

@@ -108,6 +108,7 @@ def lay_track(src: np.ndarray, offset_ms: float, pieces: list[dict], sr: int, n_
     off = int(round(offset_ms * sr / 1000))  # recording sample index of the file's first sample
     fade = max(1, int(0.003 * sr))
     prev_src_end = None
+    prev_out_end = None
     for i, pc in enumerate(pieces):
         s0 = int(round(pc["srcStart"] * sr / 1000))
         s1 = int(round(pc["srcEnd"] * sr / 1000))
@@ -115,6 +116,7 @@ def lay_track(src: np.ndarray, offset_ms: float, pieces: list[dict], sr: int, n_
         o1 = min(n_out, int(round(pc["outEnd"] * sr / 1000)))
         if o1 <= o0 or s1 <= s0:
             prev_src_end = pc["srcEnd"]
+            prev_out_end = pc["outEnd"]
             continue
         # recording-clock slice [s0, s1) -> file indices [s0-off, s1-off), silence outside the file
         seg = np.zeros((s1 - s0, CHANNELS), np.float32)
@@ -125,9 +127,10 @@ def lay_track(src: np.ndarray, offset_ms: float, pieces: list[dict], sr: int, n_
         if abs(pc["rate"] - 1) > 1e-6 and np.any(seg):
             seg = _filter_pcm(seg, sr, atempo_chain(pc["rate"]))
         seg = _fit(seg, o1 - o0) * float(pc.get("gain", 1.0))
-        cut_before = prev_src_end is not None and abs(prev_src_end - pc["srcStart"]) > 0.5
+        # a join is a cut when the source jumps or the output has a gap (a text slide sits there)
+        cut_before = prev_src_end is not None and (abs(prev_src_end - pc["srcStart"]) > 0.5 or abs(prev_out_end - pc["outStart"]) > 0.5)
         nxt = pieces[i + 1] if i + 1 < len(pieces) else None
-        cut_after = nxt is not None and abs(nxt["srcStart"] - pc["srcEnd"]) > 0.5
+        cut_after = nxt is not None and (abs(nxt["srcStart"] - pc["srcEnd"]) > 0.5 or abs(nxt["outStart"] - pc["outEnd"]) > 0.5)
         f = min(fade, len(seg) // 2)
         if f > 0 and cut_before:
             seg[:f] *= np.linspace(0, 1, f, dtype=np.float32)[:, None]
@@ -135,6 +138,7 @@ def lay_track(src: np.ndarray, offset_ms: float, pieces: list[dict], sr: int, n_
             seg[-f:] *= np.linspace(1, 0, f, dtype=np.float32)[:, None]
         out[o0:o1] += seg
         prev_src_end = pc["srcEnd"]
+        prev_out_end = pc["outEnd"]
     return out
 
 

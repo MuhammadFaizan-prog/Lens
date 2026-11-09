@@ -2,6 +2,7 @@
 
   lens-redact screen.mp4 [--events events.jsonl] -o privacy.json [--thumbs DIR] [--interval-ms 1000]
               [--no-notifications] [--progress]
+  lens-redact steps screen.mp4 --events events.jsonl -o steps.json   (auto step labels, demand #4)
 
 Writes the scan (version, engine, source, settings, stats, detections). Each detection is a review
 item with a type, a redacted preview (the secret itself is never written), a thumbnail name and one
@@ -18,6 +19,10 @@ from .scan import ScanSettings, scan
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == "steps":
+        from .steps import main as steps_main
+        return steps_main(args[1:])
     ap = argparse.ArgumentParser(prog="lens-redact", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("video")
     ap.add_argument("--events", help="events.jsonl (scroll events widen the tracker's search)")

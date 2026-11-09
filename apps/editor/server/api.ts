@@ -30,6 +30,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
 const ROOT = path.resolve(EDITOR, "..", "..");
 const FONT_CANDIDATES = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"];
+const FONT_REGULAR = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/DejaVuSans.ttf"];
 
 type Next = (err?: unknown) => void;
 
@@ -269,8 +270,8 @@ export function apiMiddleware() {
         res.setHeader("content-type", file.endsWith(".wav") ? "audio/wav" : "application/octet-stream");
         return fs.createReadStream(file).pipe(res);
       }
-      if (url.pathname === "/api/font/caption.ttf") {
-        const f = FONT_CANDIDATES.find((p) => fs.existsSync(p));
+      if (url.pathname === "/api/font/caption.ttf" || url.pathname === "/api/font/caption-regular.ttf") {
+        const f = (url.pathname.endsWith("regular.ttf") ? FONT_REGULAR : FONT_CANDIDATES).find((p) => fs.existsSync(p));
         if (!f) return sendJson(res, { error: "font not installed" }, 404);
         res.setHeader("content-type", "font/ttf");
         return fs.createReadStream(f).pipe(res);

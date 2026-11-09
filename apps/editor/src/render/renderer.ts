@@ -5,7 +5,8 @@
  * so the preview matches the export:
  *
  *   background -> shadow -> screen (crop, camera transform, motion blur) -> masks -> click effects
- *   -> cursor (motion blur) -> rounded mask -> webcam (crop, mirror) -> shortcut pill -> caption
+ *   -> screen-anchored annotations -> cursor (motion blur) -> rounded mask -> webcam (crop, mirror)
+ *   -> frame-anchored annotations -> shortcut pill -> caption -> text slide
  *
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
@@ -13,6 +14,7 @@
 import type { PlanFrame, RenderPlan } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
+import { drawItems } from "./annotations";
 
 export { makeCanvas };
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
@@ -163,6 +165,11 @@ export class PlanRenderer {
       }
     }
 
+    // 5b. screen-anchored annotations (through the camera, under the cursor)
+    const annotations = f.annotations ?? [];
+    const scr = annotations.filter((a) => a.space === "screen");
+    if (scr.length) drawItems(vg, sw, sh, scr, (x, y) => [(x - map.x0) * map.k, (y - map.y0) * map.ky], map.k);
+
     // 6. cursor
     if (f.cur) this.drawCursor(vg, plan, f, prev, map);
 
@@ -177,9 +184,16 @@ export class PlanRenderer {
     // 8. webcam
     if (imgs.cam && f.layout.camera && f.layout.cameraOpacity > 0) this.drawWebcam(g, plan, f, imgs.cam);
 
+    // 8b. frame-anchored annotations
+    const frm = annotations.filter((a) => a.space === "frame");
+    if (frm.length) drawItems(g, W, H, frm, (x, y) => [x, y], 1);
+
     // 9. shortcut pill + caption
     if (f.shortcut) this.drawShortcut(g, f.shortcut, W, H);
     if (f.caption) this.drawCaption(g, plan, f, W, H);
+
+    // 10. text slide over everything
+    if (f.slide) drawItems(g, W, H, [{ ops: f.slide.ops, opacity: f.slide.opacity, shadow: null }], (x, y) => [x, y], 1);
     g.restore();
   }
 
