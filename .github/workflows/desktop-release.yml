@@ -35,6 +35,11 @@ jobs:
       - name: Make bundled tools executable
         # npm ci can leave 7zip-bin / app-builder-bin without the exec bit (EACCES on the first run)
         run: chmod +x node_modules/7zip-bin/linux/x64/7za node_modules/app-builder-bin/linux/x64/app-builder
+      - name: Fetch on-device models (SHA-256 pinned, git-ignored)
+        # RNNoise (export noise reduction), tessdata eng (in-app OCR), Whisper base.en q5_1 + the official
+        # whisper.cpp v1.8.2 Windows CLI zip (in-app speech-to-text), and the MSVC runtime DLLs it links
+        # (MSVCP140 / VCRUNTIME140 / VCRUNTIME140_1 / VCOMP140). dist-win runs it again (a no-op when done).
+        run: node apps/editor/scripts/fetch-models.mjs
       - name: Build editor + installer
         env:
           USE_SYSTEM_MAKENSIS: "1"
@@ -52,6 +57,16 @@ jobs:
           for f in resources/ffmpeg/ffmpeg.exe resources/app.asar.unpacked/node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node resources/app.asar resources/app-update.yml resources/editor/index.html Lens.exe; do
             grep -F " $f" "$RUNNER_TEMP/app.txt" || { echo "missing $f"; exit 1; }
           done
+          # bundled models and the whisper CLI with its DLLs and the MSVC runtime next to it
+          m=resources/lens/assets/models
+          for f in $m/rnnoise/sh.rnnn $m/tessdata/eng.traineddata $m/whisper/ggml-base.en-q5_1.bin \
+                   $m/whisper/win32-x64/whisper-cli.exe $m/whisper/win32-x64/whisper.dll $m/whisper/win32-x64/ggml.dll \
+                   $m/whisper/win32-x64/ggml-base.dll $m/whisper/win32-x64/ggml-cpu.dll \
+                   $m/whisper/win32-x64/msvcp140.dll $m/whisper/win32-x64/vcruntime140.dll $m/whisper/win32-x64/vcruntime140_1.dll \
+                   $m/whisper/win32-x64/vcomp140.dll $m/whisper/win32-x64/VCRUNTIME-NOTICE.txt; do
+            grep -F " $f" "$RUNNER_TEMP/app.txt" || { echo "missing $f"; exit 1; }
+          done
+          if grep -E "$m/whisper/linux-|\.sha256$|\.conda$" "$RUNNER_TEMP/app.txt"; then echo "unexpected files in the payload"; exit 1; fi
           sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
       - name: Check Lens.exe carries the Lens icon and version info
         # Lens.exe from the installer payload: its icon group (RT_GROUP_ICON) must decode to the same

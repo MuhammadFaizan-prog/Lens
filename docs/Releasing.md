@@ -82,6 +82,26 @@ From the repo root, on `main`, with the change committed and the suites green (R
 
 Do not delete a published release that users may already be updating from; publish a newer one.
 
+## Bundled models and the MSVC runtime
+
+`apps/editor/scripts/fetch-models.mjs` downloads the on-device models into `assets/models` (git-ignored, every
+file SHA-256 pinned): RNNoise `sh.rnnn` (export noise reduction), tessdata_fast `eng.traineddata` (in-app OCR),
+Whisper base.en q5_1 and the official whisper.cpp v1.8.2 Windows CLI (`whisper-cli.exe`, `whisper.dll`,
+`ggml*.dll`). `dist-win.mjs` runs it and copies the folder to `resources/lens/assets/models`; the
+desktop-release workflow also runs it as its own step and fails if any of these files is missing from the
+installer payload.
+
+The official whisper.cpp Windows build is MSVC-linked (linker 14.44): it imports `MSVCP140.dll`,
+`VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and (ggml-cpu) `VCOMP140.dll`. Since 0.1.2 those four Microsoft
+Visual C++ 2015-2022 runtime DLLs (14.44.35208 x64, Authenticode-signed by Microsoft) ship next to
+`whisper-cli.exe`, where Windows looks first, so speech-to-text works on machines without the VC++
+Redistributable. They are redistributable under the Visual Studio redistributable licence; they come from
+conda-forge's `vc14_runtime` / `vcomp14` 14.44.35208 packages (the Microsoft files unchanged, the `.conda`
+archives pinned by SHA-256) and `VCRUNTIME-NOTICE.txt` sits beside them. The UCRT (`api-ms-win-crt-*`) is part
+of Windows 10 / 11. If the runtime still fails to load (STATUS_DLL_NOT_FOUND), `server/stt.ts` reports that
+the Visual C++ runtime is missing with the redist download link. Bumping whisper.cpp: check the new build's
+linker version and imports and move the runtime pin to a toolset at least as new.
+
 ## App icon
 
 One drawing, `apps/desktop/scripts/make-icon.mjs` (a red record dot with a white ring on a dark rounded

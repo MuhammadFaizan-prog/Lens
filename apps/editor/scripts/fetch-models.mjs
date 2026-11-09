@@ -29,6 +29,18 @@ export const MODELS = [
   { group: "whisper", file: "whisper/win32-x64/whisper-bin-x64.zip", url: "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.2/whisper-bin-x64.zip",
     sha256: "b1514ebc099765e39fa37eb780b92a140a94c86bb0b3b3d98226b38825979732",
     extract: ["Release/whisper-cli.exe", "Release/whisper.dll", "Release/ggml.dll", "Release/ggml-base.dll", "Release/ggml-cpu.dll"] },
+  // The official whisper.cpp Windows build is MSVC-linked (MSVCP140, VCRUNTIME140, VCRUNTIME140_1, VCOMP140;
+  // linker 14.44). Those four Microsoft Visual C++ 2015-2022 runtime DLLs (14.44.35208, Authenticode-signed by
+  // Microsoft) are shipped next to whisper-cli.exe, where Windows looks first, so speech-to-text works without
+  // the VC++ Redistributable installed. They are redistributable under the Visual Studio redistributable licence
+  // (redist.txt). Source: conda-forge's vc14_runtime / vcomp14 packages, which repackage the Microsoft files
+  // unchanged; the .conda archive is SHA-256 pinned. ~0.9 MB
+  { group: "whisper", file: "whisper/win32-x64/vc14_runtime-14.44.35208-h818238b_42.conda", url: "https://conda.anaconda.org/conda-forge/win-64/vc14_runtime-14.44.35208-h818238b_42.conda",
+    sha256: "cccaf9fe5e2a8d04d5a56a5a77d2392a0ed2a7d1669dabf16fd21e6270a0e9ae", conda: true,
+    extract: ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"] },
+  { group: "whisper", file: "whisper/win32-x64/vcomp14-14.44.35208-h818238b_42.conda", url: "https://conda.anaconda.org/conda-forge/win-64/vcomp14-14.44.35208-h818238b_42.conda",
+    sha256: "fd7aeae7ca092213a1e4ac50cec26e825792a12c642538614a892ab3ec3590d8", conda: true,
+    extract: ["vcomp140.dll"] },
   { group: "whisper", file: "whisper/LICENSE-whisper.cpp.txt", url: "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.2/LICENSE",
     sha256: "e562a2ddfaf8280537795ac5ecd34e3012b6582a147ef69ba6a6a5c08c84757d" },
 ];
@@ -44,6 +56,24 @@ const unzip = (zip, members, to) => {
   }
   for (const m of members) if (!fs.existsSync(path.join(to, path.basename(m)))) throw new Error(`${zip}: ${m} missing after unzip`);
 };
+// a conda package (`conda`): a zip holding pkg-*.tar.zst; the listed top-level members are unpacked next to it
+const unconda = (pkg, members, to) => {
+  const tmp = fs.mkdtempSync(path.join(to, ".conda-"));
+  try {
+    execFileSync("unzip", ["-o", "-q", pkg, "pkg-*.tar.zst", "-d", tmp], { stdio: "inherit" });
+    const zst = fs.readdirSync(tmp).find((f) => f.startsWith("pkg-") && f.endsWith(".tar.zst"));
+    if (!zst) throw new Error(`${pkg}: no pkg-*.tar.zst`);
+    execFileSync("tar", ["--zstd", "-xf", path.join(tmp, zst), "-C", to, ...members], { stdio: "inherit" });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  for (const m of members) if (!fs.existsSync(path.join(to, m))) throw new Error(`${pkg}: ${m} missing after extract`);
+};
+const VCRT_NOTICE = `msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll and vcomp140.dll in this folder are the
+Microsoft Visual C++ 2015-2022 Redistributable runtime files, version 14.44.35208 (x64), (c) Microsoft
+Corporation, Authenticode-signed by Microsoft. They are redistributed unmodified with whisper-cli.exe under the
+Microsoft Visual Studio redistributable code terms (https://learn.microsoft.com/visualstudio/releases/2022/redistribution).
+`;
 for (const m of MODELS) {
   if (only && m.group !== only) continue;
   const out = path.join(dir, m.file);
@@ -57,7 +87,8 @@ for (const m of MODELS) {
   fs.renameSync(out + ".part", out);
   console.log(`fetched ${m.file} (${(fs.statSync(out).size / 1048576).toFixed(1)} MB)`);
   if (m.extract) {
-    unzip(out, m.extract, path.dirname(out));
+    (m.conda ? unconda : unzip)(out, m.extract, path.dirname(out));
+    if (m.conda) fs.writeFileSync(path.join(path.dirname(out), "VCRUNTIME-NOTICE.txt"), VCRT_NOTICE);
     fs.rmSync(out);
     fs.writeFileSync(stamp, m.sha256 + "\n");
   }

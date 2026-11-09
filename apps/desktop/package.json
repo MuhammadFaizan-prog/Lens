@@ -1,6 +1,6 @@
 {
   "name": "@lens/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Lens desktop recorder (Electron): screen capture, cursor + click log, live auto-zoom preview, bundled editor",
   "author": "MuhammadFaizan-prog",
