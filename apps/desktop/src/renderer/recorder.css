@@ -28,3 +28,4 @@ kbd { background: #1b1e26; border: 1px solid #2a2e39; border-radius: 4px; paddin
 .update button { background: #2b5cff; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .update button:disabled { opacity: 0.6; cursor: default; }
 a { color: #8fb0ff; }
+.sources .empty { grid-column: 1 / -1; color: #9aa3b2; font-size: 13px; padding: 16px 4px; text-align: center; }

@@ -72,8 +72,15 @@ function setStatus(text: string, rec = false): void {
   s.classList.toggle("rec", rec);
 }
 
+let sourcesError: string | null = null;
 async function loadSources(): Promise<void> {
-  sources = await lens.sources();
+  try {
+    sources = await lens.sources();
+    sourcesError = null;
+  } catch (e) {
+    sources = [];
+    sourcesError = e instanceof Error ? e.message : String(e);
+  }
   if (!selected || !sources.some((s) => s.id === selected!.id)) selected = sources.find((s) => s.kind === "screen") ?? sources[0] ?? null;
   renderSources();
 }
@@ -96,6 +103,13 @@ function renderSources(): void {
       renderSources();
     };
     box.append(b);
+  }
+  if (!box.childElementCount) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.dataset.testid = "sources-empty";
+    p.textContent = sourcesError ? `Could not list ${tab}s: ${sourcesError}. Press ↻ to retry.` : tab === "screen" ? "No screens found. Press ↻ to retry." : "No windows to record. Open one, then press ↻.";
+    box.append(p);
   }
   $("tab-screen").classList.toggle("active", tab === "screen");
   $("tab-window").classList.toggle("active", tab === "window");

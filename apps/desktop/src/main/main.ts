@@ -112,11 +112,26 @@ function updateTray(): void {
   );
 }
 
+/**
+ * Windows #6: the recorder must come up on launch, on a second launch (Start menu while Lens sits in
+ * the tray), and on a tray click. Restores a minimised window, pulls it back on screen if its saved
+ * position is on a display that is gone, and raises it above other windows.
+ */
 function showRecorder(): void {
   if (!recorderWin) createRecorder();
-  recorderWin!.show();
-  recorderWin!.focus();
+  const w = recorderWin!;
+  if (w.isMinimized()) w.restore();
+  const b = w.getBounds();
+  const onScreen = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x + 40 < a.x + a.width && b.x + b.width - 40 > a.x && b.y >= a.y - 10 && b.y + 40 < a.y + a.height;
+  });
+  if (!onScreen) w.center();
+  w.show();
+  w.moveTop();
+  w.focus();
 }
+let quitting = false;
 
 function toggle(): void {
   recorderWin?.webContents.send("lens:toggle");
@@ -130,6 +145,7 @@ function createRecorder(): void {
     y: process.env.LENS_E2E ? 0 : undefined,
     resizable: true,
     title: "Lens Recorder",
+    show: false,
     icon: appIcon(),
     backgroundColor: "#0f1115",
     autoHideMenuBar: true,
@@ -139,6 +155,12 @@ function createRecorder(): void {
   recorderWin.setContentProtection(true);
   void recorderWin.loadFile(rendererFile("recorder.html"));
   const me = recorderWin;
+  // closing the recorder hides it (Lens keeps running in the tray; the tray / a second launch brings it back)
+  recorderWin.on("close", (e) => {
+    if (quitting || recorderWin !== me) return;
+    e.preventDefault();
+    me.hide();
+  });
   recorderWin.on("closed", () => {
     if (recorderWin === me) recorderWin = null;
   });
@@ -153,7 +175,7 @@ function recycleRecorder(): void {
   old.destroy();
   createRecorder();
   recorderWin!.setBounds(bounds);
-  if (!visible) recorderWin!.hide();
+  if (visible) recorderWin!.once("ready-to-show", () => recorderWin?.show());
 }
 
 async function openEditor(dir: string): Promise<BrowserWindow> {
@@ -258,13 +280,28 @@ function registerIpc(): void {
   ipcMain.handle("lens:update-install", () => updates.install());
 }
 
+// one Lens at a time: a second launch (Start menu / desktop shortcut while Lens is in the tray) shows
+// the running recorder instead of starting a second app (Windows #6)
+const firstInstance = app.requestSingleInstanceLock();
+if (!firstInstance) app.quit();
+app.on("second-instance", () => {
+  if (app.isReady()) showRecorder();
+});
+app.on("before-quit", () => {
+  quitting = true;
+});
+
 app.whenReady().then(async () => {
+  if (!firstInstance) return;
   loadHook();
   installDisplayMediaHandler();
   registerIpc();
   createRecorder();
+  if (!process.argv.includes("--hidden")) recorderWin!.once("ready-to-show", () => showRecorder());
   tray = new Tray(trayIcon());
   tray.on("click", () => showRecorder());
+  tray.on("double-click", () => showRecorder());
+  if (process.env.LENS_E2E) (globalThis as Record<string, unknown>).lensTray = tray;
   updateTray();
   if (!globalShortcut.register(HOTKEY, toggle)) console.error(`[lens] could not register ${HOTKEY}`);
   buildAppMenu();
