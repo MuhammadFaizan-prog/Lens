@@ -133,6 +133,15 @@ export function cleanupCuts(
   }
   if (!select.shortenPauses) return mergeRanges(cuts.filter((c) => c.endMs > c.startMs));
   const pauseCuts: TimeRange[] = [];
+  const keepHalf = opts.keepPauseMs / 2;
+  if (!spoken.length) {
+    // No words (no transcript yet, or nothing recognised): measured silences on the mic are the pauses
+    // (Windows #17), each longer than maxPauseMs shortened to keepPauseMs.
+    for (const p of select.pauses ?? []) {
+      if (p.endMs - p.startMs > opts.maxPauseMs) pauseCuts.push({ startMs: p.startMs + keepHalf, endMs: p.endMs - keepHalf });
+    }
+    return mergeRanges([...cuts, ...pauseCuts].filter((c) => c.endMs > c.startMs));
+  }
   const gaps: Array<[number, number]> = [];
   let prevEnd = 0;
   for (const w of spoken) {
@@ -140,7 +149,6 @@ export function cleanupCuts(
     prevEnd = w.endMs;
   }
   gaps.push([prevEnd, durationMs]);
-  const keepHalf = opts.keepPauseMs / 2;
   for (const [a, b] of gaps) {
     if (b - a <= opts.maxPauseMs) continue;
     const cut = { startMs: a + keepHalf, endMs: b - keepHalf };

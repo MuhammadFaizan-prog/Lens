@@ -9,23 +9,61 @@
   <body>
     <div id="update" class="update" data-testid="update" hidden><span id="update-text"></span><button id="update-btn" data-testid="update-btn"></button></div>
     <header>
-      <h1>Lens</h1>
-      <span id="status" data-testid="status">Ready</span>
-    </header>
-    <section id="pick">
-      <div class="tabs">
-        <button id="tab-screen" class="tab active">Screens</button>
-        <button id="tab-window" class="tab">Windows</button>
-        <button id="refresh" class="tab" title="Refresh">↻</button>
+      <div class="brand">
+        <h1>Lens</h1>
+        <div class="menu">
+          <button id="file-btn" class="tab" data-testid="file-menu" aria-haspopup="true">File ▾</button>
+          <div id="file-menu" class="menu-list" hidden>
+            <button id="menu-history" data-testid="menu-history">History</button>
+            <button id="menu-import" data-testid="menu-import">Import Video to Create Project…</button>
+          </div>
+        </div>
       </div>
-      <div id="sources" class="sources" data-testid="sources"></div>
+      <div class="brand"><span id="status" data-testid="status">Ready</span><button id="gear" class="tab" data-testid="settings" title="Settings">⚙</button></div>
+    </header>
+    <div id="countdown" class="countdown" data-testid="countdown" hidden></div>
+    <section id="history" class="history" data-testid="history" hidden>
+      <div class="tabs"><span class="pick-title">History</span><button id="history-close" class="tab">Back</button></div>
+      <div id="history-list" class="history-list"></div>
     </section>
-    <section id="live" hidden>
-      <canvas id="preview" width="380" height="214" data-testid="preview"></canvas>
-      <div class="live-meta"><span id="timer">00:00</span><span id="zoominfo">1.00×</span></div>
-    </section>
+    <main class="home">
+      <div class="left">
+        <section id="pick">
+          <h2>Choose recording mode</h2>
+          <div class="modes" data-testid="modes">
+            <button class="mode active" data-mode="screen" data-testid="mode-screen"><svg viewBox="0 0 64 40" aria-hidden="true"><rect x="4" y="4" width="56" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="3"/></svg><span>Full Screen</span></button>
+            <button class="mode" data-mode="region" data-testid="mode-region"><svg viewBox="0 0 64 40" aria-hidden="true"><rect x="4" y="4" width="56" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="2" opacity=".4"/><rect x="16" y="11" width="30" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="5 3"/></svg><span>Custom</span></button>
+            <button class="mode" data-mode="window" data-testid="mode-window"><svg viewBox="0 0 64 40" aria-hidden="true"><rect x="10" y="6" width="44" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="3"/><line x1="10" y1="13" x2="54" y2="13" stroke="currentColor" stroke-width="3"/></svg><span>Window</span></button>
+            <button class="mode" data-mode="device" data-testid="mode-device" disabled title="Phone mirroring is not available yet"><svg viewBox="0 0 64 40" aria-hidden="true"><rect x="24" y="3" width="16" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="3"/></svg><span>Device <em>soon</em></span></button>
+          </div>
+          <div class="tabs">
+            <span id="pick-title" class="pick-title">Screens</span>
+            <button id="tab-screen" class="tab active" hidden>Screens</button>
+            <button id="tab-window" class="tab" hidden>Windows</button>
+            <button id="refresh" class="tab" title="Refresh">↻</button>
+          </div>
+          <p id="region-info" class="hint" data-testid="region-info" hidden></p>
+          <div id="sources" class="sources" data-testid="sources"></div>
+        </section>
+        <section id="live" hidden>
+          <canvas id="preview" width="380" height="214" data-testid="preview"></canvas>
+          <div class="live-meta"><span id="timer">00:00</span><span id="zoominfo">1.00×</span></div>
+        </section>
+      </div>
+      <aside class="devices" data-testid="devices">
+        <h2>Devices</h2>
+        <label class="dev">Camera<select id="cam-device" data-testid="cam-device"><option value="">Off</option></select></label>
+        <video id="cam-preview" class="cam-preview" muted playsinline hidden></video>
+        <label class="dev">Microphone<select id="mic-device" data-testid="mic-device"><option value="">Off</option></select></label>
+        <div class="meter" title="Microphone level"><div id="mic-level" data-testid="mic-level"></div></div>
+        <label class="dev">System audio<select id="sys-audio" data-testid="sys-audio"><option value="">Off</option><option value="loopback">Record what plays on this PC</option></select></label>
+        <p id="sys-audio-note" class="hint" hidden></p>
+        <input type="checkbox" id="mic" hidden />
+        <label class="mic" title="Off: Lens asks the capture to leave the OS cursor out and draws its own. Where the capture cannot leave it out (Chromium does not support that yet on Windows), the original cursor is kept and Lens's cursor starts off, so there are never two. On: always keep the system cursor."><input type="checkbox" id="syscursor" data-testid="syscursor" /> Show system cursor</label>
+        <button id="teleprompter" class="tab wide" data-testid="teleprompter" title="A scrolling script only you can see: hidden from the recording">Teleprompter</button>
+      </aside>
+    </main>
     <footer>
-      <label class="mic"><input type="checkbox" id="mic" /> Microphone</label>
       <button id="go" class="rec" data-testid="go">Start recording</button>
       <p class="hint">Hotkey <kbd id="hotkey">Ctrl+Shift+R</kbd> starts and stops from anywhere. <span id="hookwarn"></span></p>
       <p class="hint"><span id="version"></span> · <a href="#" id="check-updates" data-testid="check-updates">Check for updates</a></p>

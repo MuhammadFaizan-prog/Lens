@@ -116,3 +116,88 @@ export function flashAt(f: DecodedFrame, w: number, h: number, scale: number, x:
 export function ffprobeJson(args: string[]): any {
   return JSON.parse(execFileSync("ffprobe", ["-v", "error", "-of", "json", ...args], { encoding: "utf8" }));
 }
+
+/**
+ * The app under test: the packaged build when LENS_PACKAGED_APP points at its executable
+ * (scripts/dist-win.mjs --linux-dir -> out/desktop/linux-<arch>-unpacked/lens), else the dev build.
+ */
+export function appLaunchOptions(extraArgs: string[] = []): { executablePath?: string; args: string[] } {
+  const exe = process.env.LENS_PACKAGED_APP;
+  if (exe) {
+    if (!fs.existsSync(exe)) throw new Error(`LENS_PACKAGED_APP not found: ${exe}`);
+    return { executablePath: exe, args: ["--no-sandbox", ...extraArgs] };
+  }
+  return { args: [DESKTOP, "--no-sandbox", ...extraArgs] };
+}
+export const PACKAGED = !!process.env.LENS_PACKAGED_APP;
+
+/** A small Lens bundle: 640x360 test-pattern screen.mp4, a header-only event log, meta / project. */
+export function makeBundle(dir: string, opts: { seconds: number; mic?: string; project?: Record<string, unknown> }): string {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", `testsrc2=s=640x360:r=30:d=${opts.seconds}`, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", path.join(dir, "screen.mp4")]);
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width: 640, height: 360, fps: 30, durationMs: opts.seconds * 1000, pixelRatio: 1 }));
+  fs.writeFileSync(path.join(dir, "events.jsonl"), `# lens-events v1 ${JSON.stringify({ capture: { width: 640, height: 360 }, source: "screen", platform: "linux", displayId: null })}\n{"t":0,"type":"move","x":320,"y":180}\n`);
+  const tracks = opts.mic ? [{ id: "mic", kind: "mic", path: path.basename(opts.mic), offsetMs: 0, volume: 1, muted: false }] : [];
+  if (opts.mic) fs.copyFileSync(opts.mic, path.join(dir, path.basename(opts.mic)));
+  fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(opts.project ?? {}) }, null, 2));
+  return dir;
+}
+
+/** espeak speech with 2 s pauses plus hiss, rumble and 50 Hz hum (~ -44 dBFS), 48 kHz mono WAV. */
+export function noisySpeechWav(dir: string): { wav: string; spans: Array<[number, number]>; samples: Float32Array } {
+  const SR = 48000;
+  const pcm = (f: string) => {
+    const b = execFileSync("ffmpeg", ["-v", "error", "-i", f, "-f", "f32le", "-ac", "1", "-ar", String(SR), "-"], { maxBuffer: 1 << 27 });
+    return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+  };
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ["The quick brown fox jumps over the lazy dog.", "Open the settings panel and choose a folder.", "Then press record to start the capture."];
+  const speech = lines.map((t, i) => {
+    const f = path.join(dir, `s${i}.wav`);
+    execFileSync("espeak-ng", ["-v", "en-us", "-s", "150", "-w", f, t]);
+    return pcm(f);
+  });
+  const gap = 2 * SR;
+  const total = speech.reduce((n, x) => n + x.length + gap, gap);
+  const clean = new Float32Array(total);
+  const spans: Array<[number, number]> = [];
+  let pos = gap;
+  for (const x of speech) {
+    clean.set(x, pos);
+    spans.push([pos / SR, (pos + x.length) / SR]);
+    pos += x.length + gap;
+  }
+  let peak = 0;
+  for (const v of clean) peak = Math.max(peak, Math.abs(v));
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296) * 2 - 1;
+  let fan = 0;
+  const noisy = new Float32Array(total);
+  for (let i = 0; i < total; i++) {
+    fan = 0.95 * fan + rnd();
+    noisy[i] = (clean[i]! / peak) * 0.5 + 0.007 * rnd() + 0.0015 * fan + 0.002 * Math.sin((2 * Math.PI * 50 * i) / SR);
+  }
+  const raw = path.join(dir, "noisy.f32");
+  fs.writeFileSync(raw, Buffer.from(noisy.buffer));
+  const wav = path.join(dir, "noisy.wav");
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "f32le", "-ar", String(SR), "-ac", "1", "-i", raw, "-c:a", "pcm_s16le", wav]);
+  return { wav, spans, samples: noisy };
+}
+
+/** Mean dB of RMS levels over time ranges (seconds) of mono 48 kHz samples. */
+export function levelDb(s: Float32Array, ranges: Array<[number, number]>, sr = 48000): number {
+  let acc = 0;
+  for (const [a, b] of ranges) {
+    let q = 0;
+    let n = 0;
+    for (let i = Math.round(a * sr); i < Math.round(b * sr) && i < s.length; i++, n++) q += s[i]! * s[i]!;
+    acc += 10 * Math.log10(q / Math.max(1, n) + 1e-24);
+  }
+  return acc / ranges.length;
+}
+
+export function decodeMono(file: string, sr = 48000): Float32Array {
+  const b = execFileSync("ffmpeg", ["-v", "error", "-i", file, "-vn", "-f", "f32le", "-ac", "1", "-ar", String(sr), "-"], { maxBuffer: 1 << 28 });
+  return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+}

@@ -303,6 +303,7 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
   const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
   const srcLang = useEditor((s) => s.bundle?.transcript?.language || "en");
   const run = useEditor((s) => s.translateRun);
+  const unavailable = useEditor((s) => s.bundle?.translateUnavailable ?? null);
   const tr = p.translations;
   const missing = TRANSLATE_LANGUAGES.filter((l) => !tr.tracks.some((t) => t.language === l.code));
   const [pick, setPick] = useState<string>(missing[0]?.code ?? TRANSLATE_LANGUAGES[0]!.code);
@@ -319,7 +320,7 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
       <Select label="Caption language" value={tr.language ?? ""} options={langOptions} testId="caption-language" onChange={(v) => store.setCaptionLanguage(v || null)} />
       <div className="ctl tr-translate">
         <span className="ctl-label">Translate to…</span>
-        <select value={pick} aria-label="Translate to" data-testid="translate-to" onChange={(e) => setPick(e.target.value)} disabled={busy}>
+        <select value={pick} aria-label="Translate to" data-testid="translate-to" onChange={(e) => setPick(e.target.value)} disabled={busy || !!unavailable}>
           {TRANSLATE_LANGUAGES.map((l) => (
             <option key={l.code} value={l.code}>
               {l.name} · {l.english}
@@ -327,10 +328,15 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
             </option>
           ))}
         </select>
-        <button type="button" className="btn primary" data-testid="translate-go" disabled={busy || !hasWords} onClick={() => void store.translateCaptions([pick])}>
+        <button type="button" className="btn primary" data-testid="translate-go" disabled={busy || !hasWords || !!unavailable} title={unavailable ?? undefined} onClick={() => void store.translateCaptions([pick])}>
           {busy ? "Translating…" : "Translate"}
         </button>
       </div>
+      {unavailable && (
+        <p className="hint" data-testid="translate-unavailable">
+          {unavailable}
+        </p>
+      )}
       {run && run.state !== "done" && (
         <div className="pv-progress" data-testid="translate-progress">
           <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)}><div style={{ width: `${pct}%` }} /></div>
@@ -369,6 +375,15 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
 function AudioTab({ p }: { p: ProjectConfig }) {
   const tr = p.audio.tracks[0];
   const cl = p.edits.cleanup;
+  const cleanupCuts = useEditor((s) => s.plan?.cleanupCuts ?? []);
+  const cleanupN = cleanupCuts.length;
+  const cleanupMs = cleanupCuts.reduce((a, c) => a + c.endMs - c.startMs, 0);
+  const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
+  const hasMic = useEditor((s) => !!s.bundle?.hasMic);
+  const hasSilences = useEditor((s) => (s.bundle?.silences?.length ?? 0) > 0);
+  /** Cleanup is on while either switch is on (one undoable edit; the cuts show on the Cuts lane). */
+  const setCleanup = (label: string, sel: { removeFillers: boolean; shortenPauses: boolean }) =>
+    store.edit(label, (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, ...sel, enabled: sel.removeFillers || sel.shortenPauses } } }));
   const setTrack = (label: string, patch: Partial<NonNullable<typeof tr>>, live = false) => {
     const fn = (q: ProjectConfig) => ({ ...q, audio: { ...q.audio, tracks: q.audio.tracks.map((x, i) => (i === 0 ? { ...x, ...patch } : x)) } });
     if (live) store.tweak(label, fn);
@@ -389,10 +404,18 @@ function AudioTab({ p }: { p: ProjectConfig }) {
         <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
       </Section>
       <Section title="Cleanup">
-        <Toggle label="Auto cleanup from transcript" value={cl.enabled} testId="cleanup" onChange={(v) => store.edit("Cleanup", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, enabled: v } } }))} />
-        <Toggle label="Remove fillers" value={cl.removeFillers} onChange={(v) => store.edit("Remove fillers", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, removeFillers: v } } }))} />
-        <Toggle label="Shorten pauses" value={cl.shortenPauses} onChange={(v) => store.edit("Shorten pauses", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, shortenPauses: v } } }))} />
-        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+        {/* Windows #17: the two toggles are the switches (each turns cleanup on); pauses come from the mic's
+            measured silences, so they work with no transcript; fillers need the transcript's words */}
+        <Toggle label="Remove fillers" value={cl.enabled && cl.removeFillers} testId="cleanup-fillers" onChange={(v) => setCleanup("Remove fillers", { removeFillers: v, shortenPauses: cl.enabled && cl.shortenPauses })} />
+        <Toggle label="Shorten pauses" value={cl.enabled && cl.shortenPauses} testId="cleanup-pauses" onChange={(v) => setCleanup("Shorten pauses", { shortenPauses: v, removeFillers: cl.enabled && cl.removeFillers })} />
+        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} testId="cleanup-maxpause" onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+        {cl.enabled && (
+          <p className="note" data-testid="cleanup-summary">
+            {cleanupN} cut{cleanupN === 1 ? "" : "s"} on the Cuts lane{cleanupN ? ` (${(cleanupMs / 1000).toFixed(1)} s removed)` : ""}; Ctrl+Z undoes.
+            {cl.removeFillers && !hasWords && (hasMic ? " Fillers need a transcript: Transcribe it on the Transcript tab." : " Fillers need a transcript.")}
+            {cl.shortenPauses && !hasWords && !hasSilences && " No microphone track to find pauses in."}
+          </p>
+        )}
       </Section>
     </>
   );

@@ -33,11 +33,16 @@ export type UpdateState =
 
 type Updater = import("electron-updater").AppUpdater;
 
+export const FOCUS_RECHECK_MS = 15 * 60 * 1000;
+
 export class UpdateController {
   state: UpdateState = { status: "idle" };
   private updater: Updater | null = null;
   private timer: NodeJS.Timeout | null = null;
   private available: string | null = null;
+  /** When the last check started (focus re-checks are throttled on it). */
+  lastCheckAt = 0;
+  checks = 0;
 
   constructor(private readonly onState: (s: UpdateState) => void) {}
 
@@ -78,8 +83,21 @@ export class UpdateController {
     this.timer = setInterval(() => void this.check(), CHECK_EVERY_MS);
   }
 
+  /**
+   * Windows #21: an app left open since before a release must still notice it. Called when any Lens
+   * window gains focus; checks again if the last check is older than minAgeMs (15 min by default).
+   */
+  checkIfStale(minAgeMs = Number(process.env.LENS_UPDATE_FOCUS_MS ?? FOCUS_RECHECK_MS)): boolean {
+    if (!this.updater || this.state.status === "checking" || this.state.status === "downloading" || this.state.status === "downloaded") return false;
+    if (Date.now() - this.lastCheckAt < minAgeMs) return false;
+    void this.check();
+    return true;
+  }
+
   async check(): Promise<UpdateState> {
     if (!this.updater) return this.state;
+    this.lastCheckAt = Date.now();
+    this.checks++;
     if (this.state.status === "downloading" || this.state.status === "downloaded") return this.state;
     try {
       await this.updater.checkForUpdates();

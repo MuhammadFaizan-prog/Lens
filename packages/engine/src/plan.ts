@@ -114,7 +114,10 @@ export interface PlanInputs {
   events: InputEvent[];
   project: ProjectConfig;
   words?: Word[];
-  /** Measured silences from the transcript (Transcript.pauses); bounds pause cuts when given. */
+  /**
+   * Measured silences (Transcript.pauses, or the mic track's silences when there is no transcript);
+   * bound pause cuts when given, and are the pauses themselves when there are no words.
+   */
   pauses?: TimeRange[];
   /** Build only these output frames (preset thumbnails); plan.frames then holds just them, in this order. */
   onlyFrames?: number[];
@@ -159,7 +162,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   }
   // Transcript cleanup (E03): filler + long-pause cuts from word timings, in source time.
   const cl = project.edits.cleanup;
-  const autoCuts = cl.enabled && words.length
+  // Pauses are cut from measured silences even with no transcript (Windows #17); fillers need words.
+  const autoCuts = cl.enabled && (words.length || pauses?.length)
     ? cleanupCuts(words, meta.durationMs, cl, { removeFillers: cl.removeFillers, shortenPauses: cl.shortenPauses, pauses })
     : [];
   // Multi-take (demand #1): rejected takes become cuts, so audio, captions and video all follow.

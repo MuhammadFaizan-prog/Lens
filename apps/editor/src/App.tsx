@@ -10,6 +10,7 @@ import { AnnotationToolbar } from "./components/AnnotationToolbar";
 import { BrandPanel } from "./components/BrandPanel";
 import { PresetsMenu } from "./components/PresetsMenu";
 import { ExportDialog } from "./components/ExportDialog";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
@@ -44,6 +45,7 @@ function TopBar() {
           {dirty && <i className="dirty-dot" title="Unsaved changes" />}
         </span>
       </div>
+      <UpdateBanner />
       <div className="top-actions">
         <button className="icon-btn" disabled={!canUndo} title={`Undo ${undoLabel ?? ""} (⌘Z)`} aria-label="Undo" data-testid="undo" onClick={() => store.undo()}>
           <Icon name="undo" />
@@ -334,7 +336,13 @@ export function App() {
   const error = useEditor((s) => s.error);
   useKeys();
   useEffect(() => {
-    void loadCaptionFont().then(() => store.load(new URLSearchParams(location.search).get("dir") ?? undefined));
+    const q = new URLSearchParams(location.search);
+    void loadCaptionFont()
+      .then(() => store.load(q.get("dir") ?? undefined))
+      // desktop Settings > "Auto-play when entering the editor" (Windows #19)
+      .then(() => {
+        if (q.get("autoplay") === "1" && store.get().status === "ready") store.play();
+      });
   }, []);
   return (
     <div className="app" data-status={status}>

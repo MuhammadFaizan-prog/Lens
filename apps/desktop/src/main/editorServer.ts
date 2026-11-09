@@ -22,10 +22,16 @@ export interface EditorServer {
 
 export async function startEditorServer(): Promise<EditorServer> {
   process.env.LENS_EXPORT = "browser";
+  // caption translation needs Python + models the app does not ship (Windows #1b): shown as unavailable
+  process.env.LENS_TRANSLATE = "off";
   process.env.LENS_ROOT = lensRoot();
   process.env.LENS_FFMPEG = ffmpegPath();
   const fd = fontDir();
   if (fd) process.env.LENS_FONT_DIR = fd;
+  // privacy scan / step labels off the main thread (Windows #1). The worker and tesseract.js are
+  // unpacked from app.asar (worker_threads cannot start a script inside an asar archive).
+  const worker = path.join(__dirname, "jobWorker.cjs").replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+  if (fs.existsSync(worker)) process.env.LENS_JOB_WORKER = worker;
   // after the environment is set: api.ts reads it at module load
   const { apiMiddleware } = await import("../../../editor/server/api");
   const api = apiMiddleware();

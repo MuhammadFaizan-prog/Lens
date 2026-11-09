@@ -20,6 +20,8 @@
  *   POST /api/steps-export           { project, kind: demo|guide } -> { id }: interactive demo / step guide (compositor/export_steps.py)
  *   GET  /api/steps-export/:id       { state, error, result }
  *   GET  /api/steps-export/:id/file/<path>   a file of that export (index.html, demo.json, images/..., guide.pdf, ...)
+ *   POST /api/transcribe             in-app speech-to-text (whisper.cpp, base.en) on the mic track -> { id }; writes transcript.json
+ *   GET  /api/transcribe/:id         { state, done (percent), error, result (transcript) }
  *   POST /api/translate              { langs } -> { id }: translate/lens-translate on the bundle's transcript.json
  *   GET  /api/translate/:id          { state, language, index, languages, done, total, error, result: { tracks, stats } }
  *
@@ -34,6 +36,9 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
+import { startJob } from "./jobs";
+import { transcribe } from "./stt";
+import { detectSilencesSync, type Range } from "./silence";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
@@ -48,6 +53,8 @@ const FONT_DIR = process.env.LENS_FONT_DIR ? [process.env.LENS_FONT_DIR] : [];
 const FONT_CANDIDATES = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans-Bold.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"];
 const FONT_REGULAR = [...FONT_DIR.map((d) => path.join(d, "DejaVuSans.ttf")), "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/DejaVuSans.ttf"];
 /** "browser": export through the editor's Canvas2D renderer + ffmpeg (no Python); default: compositor/render.py. */
+/** Privacy scan / step labels: in-app (Node + tesseract.js, no Python) unless LENS_REDACT=python (the reference). */
+const PYTHON_JOBS = process.env.LENS_REDACT === "python";
 const EXPORT_PATH = process.env.LENS_EXPORT === "browser" ? "browser" : "compositor";
 
 type Next = (err?: unknown) => void;
@@ -98,8 +105,19 @@ function startScan(bundle: string, force: boolean): ScanJob {
   }
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const args = [path.join(ROOT, "redact", "lens-redact"), video, "-o", out, "--thumbs", dir, "--progress"];
   const ev = path.join(bundle, "events.jsonl");
+  if (!PYTHON_JOBS) {
+    // in-app (Windows #1): Node + tesseract.js on a worker thread, no Python
+    startJob({ kind: "scan", ffmpeg: FFMPEG, video, events: fs.existsSync(ev) ? ev : null, thumbs: dir }, (stage, done, total) => Object.assign(job, { stage, done, total }))
+      .then((r) => {
+        fs.writeFileSync(out, JSON.stringify(r));
+        fs.writeFileSync(stamp, mtime);
+        Object.assign(job, { result: r, state: "done", finishedAt: Date.now() });
+      })
+      .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+    return job;
+  }
+  const args = [path.join(ROOT, "redact", "lens-redact"), video, "-o", out, "--thumbs", dir, "--progress"];
   if (fs.existsSync(ev)) args.push("--events", ev);
   const py = spawn("python3", args, { cwd: ROOT });
   let err = "";
@@ -154,6 +172,17 @@ interface TranslateJob {
 
 const translateJobs = new Map<string, TranslateJob>();
 
+/**
+ * Windows #1b: caption translation still runs the Python lens-translate (CTranslate2 + OPUS-MT models),
+ * which the desktop app does not ship. The desktop server sets LENS_TRANSLATE=off; the editor then shows
+ * the reason instead of a Translate button that fails with "python3: can't open file".
+ */
+export function translateUnavailable(): string | null {
+  return process.env.LENS_TRANSLATE === "off"
+    ? "Caption translation is not available in the desktop app yet: it needs the on-device translation models, which are not bundled. Captions in the recording's own language work."
+    : null;
+}
+
 /** Caption translation (demand #8): on-device lens-translate over the bundle transcript, one track per language. */
 function startTranslate(bundle: string, langs: string[]): TranslateJob {
   const id = "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -161,6 +190,12 @@ function startTranslate(bundle: string, langs: string[]): TranslateJob {
   translateJobs.set(id, job);
   const transcript = path.join(bundle, "transcript.json");
   const out = path.join(bundle, ".lens-cache", "translate", id);
+  const off = translateUnavailable();
+  if (off) {
+    job.state = "error";
+    job.error = off;
+    return job;
+  }
   if (!fs.existsSync(transcript)) {
     job.state = "error";
     job.error = "this recording has no transcript";
@@ -228,6 +263,16 @@ function startSteps(bundle: string): StepJob {
     return job;
   }
   fs.mkdirSync(dir, { recursive: true });
+  if (!PYTHON_JOBS) {
+    startJob({ kind: "steps", ffmpeg: FFMPEG, video, events: ev }, () => undefined)
+      .then((r) => {
+        fs.writeFileSync(out, JSON.stringify(r));
+        fs.writeFileSync(stamp, key);
+        Object.assign(job, { result: r, state: "done", finishedAt: Date.now() });
+      })
+      .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+    return job;
+  }
   const py = spawn("python3", [path.join(ROOT, "redact", "lens-redact"), "steps", video, "--events", ev, "-o", out], { cwd: ROOT });
   let err = "";
   py.stderr.on("data", (d: Buffer) => (err += d.toString()));
@@ -243,6 +288,61 @@ function startSteps(bundle: string): StepJob {
     }
   });
   return job;
+}
+
+interface TranscribeJob { id: string; state: "running" | "done" | "error"; done: number; error?: string; result?: unknown; startedAt: number; finishedAt?: number }
+const transcribeJobs = new Map<string, TranscribeJob>();
+
+/** The bundle's mic track (project.json audio tracks, else mic.wav) and its offset on the recording clock. */
+function micTrack(bundle: string): { file: string; offsetMs: number } | null {
+  const p = readJson(path.join(bundle, "project.json")) as { audio?: { tracks?: Array<{ kind?: string; path?: string; offsetMs?: number }> } } | null;
+  const t = p?.audio?.tracks?.find((x) => x.kind === "mic" && x.path) ?? p?.audio?.tracks?.find((x) => x.path);
+  if (t?.path && fs.existsSync(path.join(bundle, t.path))) return { file: path.join(bundle, t.path), offsetMs: t.offsetMs ?? 0 };
+  for (const f of ["mic.wav", "mic.webm"]) if (fs.existsSync(path.join(bundle, f))) return { file: path.join(bundle, f), offsetMs: 0 };
+  return null;
+}
+
+/** In-app speech-to-text (Windows #5): whisper.cpp + base.en on the mic track, written to transcript.json. */
+function startTranscribe(bundle: string, auto = false): TranscribeJob {
+  if (auto) {
+    fs.mkdirSync(path.join(bundle, ".lens-cache"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, ".lens-cache", "transcribe-auto"), new Date().toISOString());
+  }
+  const id = "w" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const job: TranscribeJob = { id, state: "running", done: 0, startedAt: Date.now() };
+  transcribeJobs.set(id, job);
+  const mic = micTrack(bundle);
+  if (!mic) return Object.assign(job, { state: "error" as const, error: "this recording has no microphone track", finishedAt: Date.now() });
+  transcribe(FFMPEG, mic.file, mic.offsetMs, (pct) => (job.done = pct))
+    .then((t) => {
+      fs.writeFileSync(path.join(bundle, "transcript.json"), JSON.stringify(t, null, 1));
+      Object.assign(job, { state: "done", done: 100, result: t, finishedAt: Date.now() });
+    })
+    .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+  return job;
+}
+
+/**
+ * Measured silences on the mic track, on the recording clock (Windows #17: "Shorten pauses" works with
+ * no transcript). Cached in .lens-cache/silences.json, keyed by the mic file's size, mtime and offset.
+ */
+function micSilences(bundle: string): Range[] {
+  const mic = micTrack(bundle);
+  if (!mic) return [];
+  const st = fs.statSync(mic.file);
+  const key = `${path.basename(mic.file)}:${st.size}:${st.mtimeMs}:${mic.offsetMs}:v1`;
+  const cache = path.join(bundle, ".lens-cache", "silences.json");
+  const c = readJson(cache) as { key?: string; silences?: Range[] } | null;
+  if (c?.key === key && Array.isArray(c.silences)) return c.silences;
+  let silences: Range[] = [];
+  try {
+    silences = detectSilencesSync(FFMPEG, mic.file, { minMs: 300 }).silences.map((r) => ({ startMs: r.startMs + mic.offsetMs, endMs: r.endMs + mic.offsetMs }));
+  } catch {
+    return [];
+  }
+  fs.mkdirSync(path.dirname(cache), { recursive: true });
+  fs.writeFileSync(cache, JSON.stringify({ key, silences }));
+  return silences;
 }
 
 const extracting = new Map<string, Promise<number>>();
@@ -353,6 +453,14 @@ async function loadBundle(dir: string) {
     events,
     project,
     transcript,
+    hasMic: !!micTrack(dir),
+    /** Measured silences on the mic (pauses for Cleanup when there is no transcript). */
+    silences: micSilences(dir),
+    // a fresh desktop recording with a mic (recording.json autoTranscribe, written at Stop): the editor
+    // starts on-device speech-to-text once; the marker stops a failed run from repeating on every open
+    translateUnavailable: translateUnavailable(),
+    autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
+      && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
     screen: { ...probeVideo(path.join(dir, "screen.mp4")), frames: screenFrames },
     camera: hasCam ? { ...probeVideo(path.join(dir, "cam.mp4")), frames: camFrames } : null,
   };
@@ -396,7 +504,7 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const job: ExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now() };
@@ -435,8 +543,8 @@ function startExportBrowser(bundle: string, rawProject: unknown): BrowserExportJ
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
-  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id);
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
+  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT);
   jobs.set(id, job);
   return job;
 }
@@ -581,6 +689,16 @@ export function apiMiddleware() {
           return fs.createReadStream(job.out).pipe(res);
         }
         return sendJson(res, { id: job.id, state: job.state, done: job.done, total: job.total, error: job.error, out: job.out,
+          seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if (url.pathname === "/api/transcribe" && req.method === "POST") {
+        const job = startTranscribe(bundle, url.searchParams.get("auto") === "1");
+        return sendJson(res, { id: job.id, state: job.state, error: job.error });
+      }
+      if ((m = /^\/api\/transcribe\/([a-z0-9]+)$/.exec(url.pathname))) {
+        const job = transcribeJobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such job" }, 404);
+        return sendJson(res, { id: job.id, state: job.state, done: job.done, error: job.error, result: job.state === "done" ? job.result : undefined,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       if (url.pathname === "/api/privacy/scan" && req.method === "POST") {

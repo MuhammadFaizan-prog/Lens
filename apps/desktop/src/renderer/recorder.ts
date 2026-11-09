@@ -17,10 +17,22 @@ interface Source {
 
 interface Bridge {
   sources(): Promise<Source[]>;
+  captureSource(id: string, opts?: { systemAudio?: boolean }): Promise<{ ok: boolean }>;
+  pickRegion(displayId: string | undefined): Promise<{ x: number; y: number; w: number; h: number } | null>;
+  teleprompter(): Promise<{ open: boolean }>;
+  history(): Promise<Array<{ dir: string; name: string; createdMs: number; durationMs: number | null; imported: boolean; thumbnail: string | null }>>;
+  historyOpen(dir: string): Promise<void>;
+  historyReveal(dir: string): Promise<void>;
+  historyDelete(dir: string): Promise<void>;
+  importVideo(file?: string): Promise<{ dir: string } | null>;
+  settingsGet(): Promise<{ settings: AppSettings }>;
+  settingsOpen(): Promise<void>;
+  onSettings(fn: (s: AppSettings) => void): void;
+  onMode(fn: (m: string) => void): void;
   status(): Promise<{ hotkey: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
   begin(): Promise<{ dir: string }>;
   started(info: unknown): Promise<unknown>;
-  chunk(kind: "video" | "audio", data: ArrayBuffer): void;
+  chunk(kind: "video" | "audio" | "camera" | "system", data: ArrayBuffer): void;
   stop(opts?: { stopAt?: number }): Promise<{ dir: string; durationMs: number; warnings: string[]; clickSources: Record<string, number> }>;
   abort(): Promise<void>;
   onToggle(fn: () => void): void;
@@ -44,7 +56,24 @@ interface UpdateUi {
 
 const lens = (window as unknown as { lensDesktop: Bridge }).lensDesktop;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;
+interface AppSettings {
+  record: { fps: 30 | 60; quality: "standard" | "high" | "max"; countdown: 0 | 3 | 5; hideWhileRecording: boolean; showSystemCursor: boolean };
+  shortcuts: { startStop: string };
+}
+const QUALITY_BPP = { standard: 0.08, high: 0.12, max: 0.2 } as const;
+// Settings > Record (Windows #19); ?fps= still overrides for tests
+let FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;
+let BPP: number = QUALITY_BPP.high;
+let COUNTDOWN = 0;
+function applySettings(s: AppSettings): void {
+  if (!new URLSearchParams(location.search).get("fps")) FPS = s.record.fps;
+  BPP = QUALITY_BPP[s.record.quality] ?? QUALITY_BPP.high;
+  COUNTDOWN = s.record.countdown;
+  const sc = document.getElementById("syscursor") as HTMLInputElement | null;
+  if (sc && state === "idle") sc.checked = s.record.showSystemCursor;
+  const hk = document.getElementById("hotkey");
+  if (hk) hk.textContent = s.shortcuts.startStop.replace("CommandOrControl", "Ctrl");
+}
 const nowEpoch = () => performance.timeOrigin + performance.now();
 
 let sources: Source[] = [];
@@ -54,6 +83,17 @@ let state: "idle" | "starting" | "recording" | "stopping" = "idle";
 let streams: MediaStream[] = [];
 let videoRec: MediaRecorder | null = null;
 let audioRec: MediaRecorder | null = null;
+let webcamRec: MediaRecorder | null = null;
+let systemRec: MediaRecorder | null = null;
+// ---- recorder home (Windows #7): mode cards + devices column
+type Mode = "screen" | "region" | "window";
+let mode: Mode = "screen";
+/** Custom mode: the dragged region as fractions of the chosen screen (null = not drawn yet). */
+let region: { x: number; y: number; w: number; h: number } | null = null;
+let micStream: MediaStream | null = null;
+let webcamStream: MediaStream | null = null;
+let meterStop: (() => void) | null = null;
+const meter = { peak: 0 };
 let sendChain: Promise<void> = Promise.resolve();
 let camera: LiveCamera | null = null;
 let capture = { width: 0, height: 0 };
@@ -71,8 +111,15 @@ function setStatus(text: string, rec = false): void {
   s.classList.toggle("rec", rec);
 }
 
+let sourcesError: string | null = null;
 async function loadSources(): Promise<void> {
-  sources = await lens.sources();
+  try {
+    sources = await lens.sources();
+    sourcesError = null;
+  } catch (e) {
+    sources = [];
+    sourcesError = e instanceof Error ? e.message : String(e);
+  }
   if (!selected || !sources.some((s) => s.id === selected!.id)) selected = sources.find((s) => s.kind === "screen") ?? sources[0] ?? null;
   renderSources();
 }
@@ -93,9 +140,18 @@ function renderSources(): void {
     b.onclick = () => {
       selected = s;
       renderSources();
+      if (mode === "region") void drawRegion();
     };
     box.append(b);
   }
+  if (!box.childElementCount) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.dataset.testid = "sources-empty";
+    p.textContent = sourcesError ? `Could not list ${tab}s: ${sourcesError}. Press ↻ to retry.` : tab === "screen" ? "No screens found. Press ↻ to retry." : "No windows to record. Open one, then press ↻.";
+    box.append(p);
+  }
+  $("pick-title").textContent = mode === "window" ? "Windows" : mode === "region" ? "Pick the screen, then drag the area to record" : "Screens";
   $("tab-screen").classList.toggle("active", tab === "screen");
   $("tab-window").classList.toggle("active", tab === "window");
 }
@@ -106,7 +162,7 @@ function pickMime(kind: "video" | "audio"): string {
   return list.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
 }
 
-function queueChunk(kind: "video" | "audio", blob: Blob): void {
+function queueChunk(kind: "video" | "audio" | "camera" | "system", blob: Blob): void {
   if (!blob.size) return;
   sendChain = sendChain.then(async () => lens.chunk(kind, await blob.arrayBuffer()));
 }
@@ -144,19 +200,31 @@ function stoppedEvent(r: MediaRecorder): Promise<void> {
   return new Promise((resolve) => r.addEventListener("stop", () => resolve(), { once: true }));
 }
 
-async function start(sourceId?: string): Promise<void> {
-  if (state !== "idle") return;
-  if (sourceId) selected = sources.find((s) => s.id === sourceId) ?? selected;
-  if (!selected) await loadSources();
-  const src = selected;
-  if (!src) throw new Error("no capture source");
-  state = "starting";
-  lastError = null;
-  setStatus("Starting…");
-  $<HTMLButtonElement>("go").disabled = true;
+let captureApi: "getDisplayMedia" | "getUserMedia" = "getDisplayMedia";
+
+/**
+ * The capture stream. getDisplayMedia (the main process hands it the chosen source, no picker) so the
+ * OS cursor can be left out (cursor: "never"; Windows #9). Electron builds without
+ * setDisplayMediaRequestHandler support fall back to the legacy desktop capture, which always
+ * includes the OS cursor.
+ */
+async function captureStream(src: Source, size: Source["size"], cursor: "never" | "always", systemAudio = false): Promise<MediaStream> {
   try {
-    const size = src.size;
-    const video = await navigator.mediaDevices.getUserMedia({
+    await lens.captureSource(src.id, { systemAudio });
+    const s = await navigator.mediaDevices.getDisplayMedia({
+      audio: systemAudio,
+      video: {
+        cursor,
+        frameRate: { ideal: FPS, max: FPS },
+        ...(size ? { width: { ideal: size.width, max: size.width }, height: { ideal: size.height, max: size.height } } : { width: { max: 3840 }, height: { max: 2160 } }),
+      } as unknown as MediaTrackConstraints,
+    });
+    captureApi = "getDisplayMedia";
+    return s;
+  } catch (e) {
+    console.warn("[lens] getDisplayMedia failed, legacy desktop capture (OS cursor included):", e);
+    captureApi = "getUserMedia";
+    return navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         // Chromium's desktop capture constraints (Electron)
@@ -168,6 +236,36 @@ async function start(sourceId?: string): Promise<void> {
         },
       } as unknown as MediaTrackConstraints,
     });
+  }
+}
+
+async function start(sourceId?: string): Promise<void> {
+  if (state !== "idle") return;
+  if (sourceId) selected = sources.find((s) => s.id === sourceId) ?? selected;
+  if (!selected) await loadSources();
+  const src = selected;
+  if (!src) throw new Error("no capture source");
+  state = "starting";
+  lastError = null;
+  if (COUNTDOWN > 0) {
+    const cd = $("countdown");
+    cd.hidden = false;
+    for (let n = COUNTDOWN; n > 0; n--) {
+      cd.textContent = String(n);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    cd.hidden = true;
+  }
+  setStatus("Starting…");
+  $<HTMLButtonElement>("go").disabled = true;
+  try {
+    const size = src.size;
+    const cursorWanted: "never" | "always" = $<HTMLInputElement>("syscursor").checked ? "always" : "never";
+    const wantSystem = $<HTMLSelectElement>("sys-audio").value === "loopback";
+    if (mode === "region" && !region) throw new Error("drag the area to record first (Custom mode)");
+    const video = await captureStream(src, size, cursorWanted, wantSystem);
+    const vt = video.getVideoTracks()[0];
+    const cursorInfo = { requested: cursorWanted, reported: ((vt?.getSettings() as { cursor?: string } | undefined)?.cursor ?? null), api: captureApi };
     streams = [video];
     const v = $<HTMLVideoElement>("v");
     v.srcObject = video;
@@ -175,24 +273,37 @@ async function start(sourceId?: string): Promise<void> {
     if (!v.videoWidth) await new Promise((r) => v.addEventListener("loadedmetadata", r, { once: true }));
     capture = { width: v.videoWidth, height: v.videoHeight };
     let mic: MediaStream | null = null;
-    if ($<HTMLInputElement>("mic").checked) {
-      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
-      streams.push(mic);
-    }
+    const micId = $<HTMLSelectElement>("mic-device").value;
+    if (micId || $<HTMLInputElement>("mic").checked) mic = micStream ?? (await openMic(micId));
+    const webcam = $<HTMLSelectElement>("cam-device").value ? webcamStream : null;
+    if (mic) streams.push(mic);
+    if (webcam) streams.push(webcam);
+    const sysTracks = video.getAudioTracks();
+    const sysStream = sysTracks.length ? new MediaStream(sysTracks) : null;
     await lens.begin();
     const vMime = pickMime("video");
-    videoRec = new MediaRecorder(video, { mimeType: vMime, videoBitsPerSecond: Math.round(capture.width * capture.height * FPS * 0.12) });
+    videoRec = new MediaRecorder(video, { mimeType: vMime, videoBitsPerSecond: Math.round(capture.width * capture.height * FPS * BPP) });
     videoRec.ondataavailable = (e) => queueChunk("video", e.data);
     audioRec = mic ? new MediaRecorder(mic, { mimeType: pickMime("audio"), audioBitsPerSecond: 128000 }) : null;
     if (audioRec) audioRec.ondataavailable = (e) => queueChunk("audio", e.data);
+    webcamRec = webcam ? new MediaRecorder(webcam, { mimeType: pickMime("video"), videoBitsPerSecond: 2_500_000 }) : null;
+    if (webcamRec) webcamRec.ondataavailable = (e) => queueChunk("camera", e.data);
+    systemRec = sysStream ? new MediaRecorder(sysStream, { mimeType: pickMime("audio"), audioBitsPerSecond: 128000 }) : null;
+    if (systemRec) systemRec.ondataavailable = (e) => queueChunk("system", e.data);
+    const wStarted = webcamRec ? startedEvent(webcamRec) : Promise.resolve(0);
+    const sStarted = systemRec ? startedEvent(systemRec) : Promise.resolve(0);
     const vStarted = startedEvent(videoRec);
     const aStarted = audioRec ? startedEvent(audioRec) : Promise.resolve(0);
     const frames = watchFrames(v);
     const startCall = nowEpoch();
     videoRec.start(1000);
     audioRec?.start(1000);
+    webcamRec?.start(1000);
+    systemRec?.start(1000);
     const startEvent = await vStarted;
     const micStart = await aStarted;
+    const webcamStart = await wStarted;
+    const systemStart = await sStarted;
     // Video clock origin = the first frame the recorder took, i.e. the first frame reaching the stream
     // after start(). Its capture time (requestVideoFrameCallback captureTime) when Chromium reports it,
     // else when it was presented; the recorder's "start" event fires only after that frame was encoded.
@@ -204,7 +315,10 @@ async function start(sourceId?: string): Promise<void> {
     ripples = [];
     await lens.started({
       sourceId: src.id, sourceName: src.name, kind: src.kind, displayId: src.displayId, capture, fps: FPS, videoMime: vMime, videoStart, clock,
-      mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null,
+      mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null, cursor: cursorInfo,
+      webcam: webcamRec ? { mime: webcamRec.mimeType, start: webcamStart } : null,
+      system: systemRec ? { mime: systemRec.mimeType, start: systemStart } : null,
+      crop: mode === "region" && region ? { x: Math.round(region.x * capture.width), y: Math.round(region.y * capture.height), w: Math.round(region.w * capture.width), h: Math.round(region.h * capture.height) } : null,
     });
     state = "recording";
     setStatus("Recording", true);
@@ -220,6 +334,9 @@ async function start(sourceId?: string): Promise<void> {
     setStatus(`Could not start: ${lastError}`);
     for (const s of streams) s.getTracks().forEach((t) => t.stop());
     streams = [];
+    micStream = null;
+    webcamStream = null;
+    void applyDevices();
     await lens.abort();
     state = "idle";
     $<HTMLButtonElement>("go").disabled = false;
@@ -233,7 +350,7 @@ async function stop(): Promise<unknown> {
   state = "stopping";
   setStatus("Saving…");
   $<HTMLButtonElement>("go").disabled = true;
-  const done = [videoRec, audioRec].filter((r): r is MediaRecorder => !!r).map((r) => {
+  const done = [videoRec, audioRec, webcamRec, systemRec].filter((r): r is MediaRecorder => !!r).map((r) => {
     const p = stoppedEvent(r);
     r.stop();
     return p;
@@ -249,6 +366,12 @@ async function stop(): Promise<unknown> {
   v.load();
   videoRec = null;
   audioRec = null;
+  webcamRec = null;
+  systemRec = null;
+  // the device streams were stopped with the rest: reopen the previews / meter for the next take
+  micStream = null;
+  webcamStream = null;
+  void applyDevices();
   try {
     lastResult = await lens.stop({ stopAt });
     setStatus("Saved — opened in the editor");
@@ -323,6 +446,179 @@ lens.onLive((b) => {
 lens.onFinalizing((stage) => setStatus(`Saving ${stage}…`));
 lens.onToggle(() => void (state === "idle" ? start().catch(() => undefined) : stop()));
 $("go").onclick = () => void (state === "idle" ? start().catch(() => undefined) : stop());
+async function openMic(deviceId: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({ audio: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+}
+
+function startMeter(stream: MediaStream): () => void {
+  const ctx = new AudioContext();
+  const an = ctx.createAnalyser();
+  an.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+  let raf = 0;
+  const tick = () => {
+    an.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (const v of buf) sum += v * v;
+    const db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);
+    const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+    meter.peak = Math.max(meter.peak, pct);
+    $("mic-level").style.width = `${pct.toFixed(0)}%`;
+    raf = requestAnimationFrame(tick);
+  };
+  tick();
+  return () => {
+    cancelAnimationFrame(raf);
+    void ctx.close();
+    $("mic-level").style.width = "0%";
+  };
+}
+
+/** Fill the camera / mic lists (labels appear once a device has been opened). */
+async function listDevices(): Promise<void> {
+  const all = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
+  for (const [id, kind, noun] of [["cam-device", "videoinput", "Camera"], ["mic-device", "audioinput", "Microphone"]] as const) {
+    const sel = $<HTMLSelectElement>(id);
+    const keep = sel.value;
+    sel.length = 1;
+    all.filter((d) => d.kind === kind && d.deviceId !== "communications").forEach((d, i) => {
+      const o = document.createElement("option");
+      o.value = d.deviceId || `${kind}-${i}`;
+      o.textContent = d.label || `${noun} ${i + 1}`;
+      sel.append(o);
+    });
+    if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  }
+}
+
+/** Open / close the selected mic (level meter) and camera (preview) when the choice changes. */
+async function applyDevices(): Promise<void> {
+  if (state !== "idle") return;
+  const micId = $<HTMLSelectElement>("mic-device").value;
+  meterStop?.();
+  meterStop = null;
+  micStream?.getTracks().forEach((t) => t.stop());
+  micStream = null;
+  $<HTMLInputElement>("mic").checked = !!micId;
+  if (micId) {
+    try {
+      micStream = await openMic(micId);
+      meterStop = startMeter(micStream);
+    } catch (e) {
+      setStatus(`Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  const camId = $<HTMLSelectElement>("cam-device").value;
+  webcamStream?.getTracks().forEach((t) => t.stop());
+  webcamStream = null;
+  const pv = $<HTMLVideoElement>("cam-preview");
+  pv.hidden = !camId;
+  if (camId) {
+    try {
+      webcamStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+      pv.srcObject = webcamStream;
+      await pv.play().catch(() => undefined);
+    } catch (e) {
+      setStatus(`Camera unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else pv.srcObject = null;
+  await listDevices();
+}
+
+function setMode(m: Mode): void {
+  mode = m;
+  tab = m === "window" ? "window" : "screen";
+  document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
+  if (selected && selected.kind !== tab) selected = sources.find((s) => s.kind === tab) ?? null;
+  $("region-info").hidden = m !== "region";
+  if (m === "region") $("region-info").textContent = region ? `Area ${Math.round(region.w * 100)}% x ${Math.round(region.h * 100)}% of the screen · click the screen again to redraw` : "Click a screen to drag the area to record.";
+  renderSources();
+}
+
+async function drawRegion(): Promise<void> {
+  const r = await lens.pickRegion(selected?.displayId);
+  if (r && r.w > 0.01 && r.h > 0.01) region = r;
+  setMode("region");
+}
+
+// ---- File menu (Windows #18): History, Import Video
+const fmt = (ms: number | null) => (ms == null ? "?" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+async function showHistory(): Promise<number> {
+  $("file-menu").hidden = true;
+  $("history").hidden = false;
+  const list = $("history-list");
+  list.textContent = "Loading…";
+  const items = await lens.history();
+  list.textContent = "";
+  if (!items.length) list.textContent = "No recordings yet.";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "hitem";
+    row.dataset.testid = "history-item";
+    row.dataset.dir = it.dir;
+    const img = document.createElement(it.thumbnail ? "img" : "div");
+    if (it.thumbnail) (img as HTMLImageElement).src = it.thumbnail;
+    else img.className = "noimg";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const b = document.createElement("b");
+    b.textContent = it.name.replace(/^Lens-/, "") + (it.imported ? " (imported)" : "");
+    meta.append(b, `${new Date(it.createdMs).toLocaleString()} · ${fmt(it.durationMs)}`);
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    for (const [label, fn] of [
+      ["Open", () => void lens.historyOpen(it.dir)],
+      ["Show in folder", () => void lens.historyReveal(it.dir)],
+      ["Delete", async () => {
+        if (!confirm(`Delete ${it.name}? This removes the recording and its edits.`)) return;
+        await lens.historyDelete(it.dir);
+        void showHistory();
+      }],
+    ] as const) {
+      const btn = document.createElement("button");
+      btn.className = "tab";
+      btn.textContent = label;
+      btn.dataset.testid = `history-${label.split(" ")[0]!.toLowerCase()}`;
+      btn.onclick = fn as () => void;
+      acts.append(btn);
+    }
+    row.append(img, meta, acts);
+    list.append(row);
+  }
+  return items.length;
+}
+async function importVideo(file?: string): Promise<unknown> {
+  $("file-menu").hidden = true;
+  setStatus("Importing…");
+  try {
+    const r = await lens.importVideo(file);
+    setStatus(r ? "Imported — opened in the editor" : "Ready");
+    return r;
+  } catch (e) {
+    setStatus(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+$("gear").onclick = () => void lens.settingsOpen();
+lens.onSettings(applySettings);
+lens.onMode((m) => {
+  if (m === "region" && state === "idle") setMode("region");
+});
+$("file-btn").onclick = (e) => {
+  e.stopPropagation();
+  $("file-menu").hidden = !$("file-menu").hidden;
+};
+document.addEventListener("click", () => ($("file-menu").hidden = true));
+$("menu-history").onclick = () => void showHistory();
+$("menu-import").onclick = () => void importVideo();
+$("history-close").onclick = () => ($("history").hidden = true);
+
+document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => (b.onclick = () => setMode(b.dataset.mode as Mode)));
+$("mic-device").onchange = () => void applyDevices();
+$("cam-device").onchange = () => void applyDevices();
+$("teleprompter").onclick = () => void lens.teleprompter();
+navigator.mediaDevices.addEventListener?.("devicechange", () => void listDevices());
 $("tab-screen").onclick = () => ((tab = "screen"), renderSources());
 $("tab-window").onclick = () => ((tab = "window"), renderSources());
 $("refresh").onclick = () => void loadSources();
@@ -331,7 +627,15 @@ void (async () => {
   const st = await lens.status();
   $("hotkey").textContent = st.hotkey.replace("CommandOrControl", st.platform === "darwin" ? "Cmd" : "Ctrl");
   if (!st.hook) $("hookwarn").textContent = "Click logging is off (input hook unavailable).";
+  await lens.settingsGet().then((r) => applySettings(r.settings)).catch(() => undefined);
   await loadSources();
+  if (st.platform !== "win32") {
+    // Chromium captures system audio (loopback) on Windows only
+    $<HTMLSelectElement>("sys-audio").disabled = true;
+    $("sys-audio-note").hidden = false;
+    $("sys-audio-note").textContent = "System audio recording works on Windows.";
+  }
+  await listDevices();
 })();
 
 // ---- auto-update banner (main/updater.ts)
@@ -384,6 +688,12 @@ void lens.updateState().then((u) => {
 (window as unknown as { lensRecorder: unknown }).lensRecorder = {
   start,
   stop,
+  setMode,
+  showHistory,
+  importVideo,
+  setRegion: (r: typeof region) => ((region = r), setMode("region")),
+  devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
+  settings: () => ({ FPS, BPP, COUNTDOWN }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,
     zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update }),
 };
