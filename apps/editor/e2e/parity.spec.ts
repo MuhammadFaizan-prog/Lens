@@ -99,3 +99,24 @@ test("brand kit (watermark, brand font, intro / outro cards): browser preview ma
   expect(BRAND_FRAMES.some((i) => plan.frames[i]!.caption && plan.frames[i]!.caption!.active >= 0)).toBe(true);
   expect(BRAND_FRAMES.some((i) => plan.frames[i]!.annotations.some((a) => a.ops.some((o) => o.op === "text" && o.font === "Inter")))).toBe(true);
 });
+
+/**
+ * Translated captions (demand #8) at parity: the translation sample (apps/editor/sample-translate)
+ * burns in its Urdu track: right-to-left lines (word-level bidi from the engine), each Arabic-script
+ * word shaped (browser HarfBuzz vs PIL RAQM) in Noto Naskh Arabic, word highlight moving through the
+ * re-timed words. Same thresholds as above.
+ */
+const TR_FRAMES = [5, 14, 30, 45, 70, 85, 120, 160, 180, 195, 215, 240, 260, 275];
+
+test("translated right-to-left captions (Urdu): browser preview matches compositor/render.py", async ({ page }) => {
+  test.setTimeout(400_000);
+  const { plan } = await parityRun(page, path.join(EDITOR, "test-results", "parity-translate"), TR_FRAMES, path.join(EDITOR, "sample-translate"));
+  // the chosen frames really show Urdu captions, two-line and one-line, with the highlight on several words
+  expect(plan.style.captions.language).toBe("ur");
+  expect(plan.fonts?.map((f) => f.family)).toEqual(["Noto Naskh Arabic"]);
+  const caps = TR_FRAMES.map((i) => plan.frames[i]!.caption).filter(Boolean);
+  expect(caps.length).toBeGreaterThanOrEqual(11);
+  expect(caps.every((c) => c!.visual && /[\u0600-\u06FF]/.test(c!.text))).toBe(true);
+  expect(new Set(caps.map((c) => c!.lines.length)).size).toBe(2);
+  expect(new Set(caps.map((c) => c!.active)).size).toBeGreaterThanOrEqual(4);
+});

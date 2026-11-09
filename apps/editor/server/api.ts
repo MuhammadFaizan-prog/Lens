@@ -246,9 +246,10 @@ function ensureSample(dir: string): void {
   const privacy = path.resolve(dir) === path.resolve(EDITOR, "sample-privacy");
   const annotations = path.resolve(dir) === path.resolve(EDITOR, "sample-annotations");
   const brand = path.resolve(dir) === path.resolve(EDITOR, "sample-brand");
-  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes && !privacy && !annotations && !brand) throw new Error(`no screen.mp4 in ${dir}`);
+  const translate = path.resolve(dir) === path.resolve(EDITOR, "sample-translate");
+  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes && !privacy && !annotations && !brand && !translate) throw new Error(`no screen.mp4 in ${dir}`);
   const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : []), ...(privacy ? ["--privacy"] : []),
-    ...(annotations ? ["--annotations"] : []), ...(brand ? ["--brand"] : [])], { encoding: "utf8" });
+    ...(annotations ? ["--annotations"] : []), ...(brand ? ["--brand"] : []), ...(translate ? ["--translate"] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`make_sample failed: ${r.stderr}`);
 }
 

@@ -6,6 +6,7 @@
   python3 apps/editor/scripts/make_sample.py --privacy [--out apps/editor/sample-privacy]
   python3 apps/editor/scripts/make_sample.py --annotations [--out apps/editor/sample-annotations]
   python3 apps/editor/scripts/make_sample.py --brand [--out apps/editor/sample-brand]
+  python3 apps/editor/scripts/make_sample.py --translate [--out apps/editor/sample-translate]
 
 Writes a Lens bundle the editor opens by default:
   screen.mp4  cursorless fake-app recording (1280x720 @ 30 fps, 10 s) + meta.json + events.jsonl
@@ -226,6 +227,35 @@ def make_brand(out: Path, force: bool) -> int:
     return 0
 
 
+def make_translate(out: Path, force: bool) -> int:
+    """The main sample's screen + transcript with Spanish and Urdu caption tracks (demand #8), made
+    on-device by translate/lens-translate; Urdu selected (right-to-left captions in the preview)."""
+    if (out / "project.json").exists() and (out / "screen.mp4").exists() and not force:
+        print(f"sample exists: {out}")
+        return 0
+    import subprocess
+
+    out.mkdir(parents=True, exist_ok=True)
+    synthesize(out, W, H, FPS, DUR)
+    (out / "transcript.json").write_text(json.dumps(transcript(), indent=1))
+    proj = {
+        "version": 1,
+        "output": {"aspect": "16:9", "resolution": 720, "fps": 30},
+        "background": {"kind": "gradient", "colors": ["#0f2027", "#2c5364", "#7ab8a6"], "angle": 135, "blur": 0},
+        "captions": {"enabled": True, "wordHighlight": True, "maxWordsPerBlock": 7,
+                     "style": {"fontSize": 52, "highlightColor": "#ffd23f", "position": "bottom", "maxWordsPerLine": 5}},
+    }
+    (out / "project.json").write_text(json.dumps(proj, indent=2))
+    r = subprocess.run([sys.executable, str(ROOT / "translate" / "lens-translate"), str(out / "transcript.json"), "--to", "es,ur",
+                        "--project", str(out / "project.json"), "--select", "ur"], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr, file=sys.stderr)
+        return 1
+    (out / "reference.png").unlink(missing_ok=True)
+    print(f"translation sample written: {out}")
+    return 0
+
+
 def project() -> dict:
     sx = W / 1920
     return {
@@ -256,7 +286,11 @@ def main() -> int:
     ap.add_argument("--privacy", action="store_true", help="write the privacy-redaction sample (default --out apps/editor/sample-privacy)")
     ap.add_argument("--annotations", action="store_true", help="write the annotations sample (default --out apps/editor/sample-annotations)")
     ap.add_argument("--brand", action="store_true", help="write the brand-kit sample (default --out apps/editor/sample-brand)")
+    ap.add_argument("--translate", action="store_true", help="write the caption-translation sample (default --out apps/editor/sample-translate)")
     a = ap.parse_args()
+    if a.translate:
+        out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-translate"
+        return make_translate(out, a.force)
     if a.brand:
         out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-brand"
         return make_brand(out, a.force)
