@@ -430,9 +430,11 @@ select {
 .tool-btn:hover { color: var(--text); }
 .tool-btn.on { color: var(--accent); border-color: rgba(94, 234, 212, 0.5); background: rgba(94, 234, 212, 0.1); }
 .tool-btn .glyph { font-size: 13px; width: 14px; text-align: center; }
+.tool-btn .tool-label { display: none; }
+.tool-btn.on .tool-label { display: inline; }
 .ann-toolbar .divider { width: 1px; height: 20px; background: var(--line-2); margin: 0 4px; }
 .ann-toolbar .segmented.pin { width: auto; }
-.ann-toolbar .segmented.pin button { padding: 3px 8px; font-size: 11.5px; }
+.ann-toolbar .segmented.pin button { padding: 3px 8px; font-size: 11.5px; flex: none; overflow: visible; text-overflow: clip; }
 .ann-card .ann-text-row { display: flex; align-items: center; gap: 8px; }
 .ann-text-input { flex: 1; min-width: 0; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 4px 7px; font: inherit; user-select: text; }
 .ann-anim { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }

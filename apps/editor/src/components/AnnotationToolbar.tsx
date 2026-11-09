@@ -8,7 +8,7 @@ const TOOLS: Array<{ id: AnnotationTool; label: string; key: string; glyph: stri
   { id: "rect", label: "Box", key: "B", glyph: "▭" },
   { id: "ellipse", label: "Ellipse", key: "E", glyph: "◯" },
   { id: "text", label: "Text", key: "T", glyph: "T" },
-  { id: "callout", label: "Callout", key: "C", glyph: "💬" },
+  { id: "callout", label: "Callout", key: "C", glyph: "❝" },
   { id: "badge", label: "Step badge", key: "N", glyph: "①" },
 ];
 
@@ -20,7 +20,7 @@ export function AnnotationToolbar() {
   return (
     <div className="ann-toolbar" role="toolbar" aria-label="Annotation tools" data-testid="ann-toolbar">
       {TOOLS.map((t) => (
-        <button key={t.id} className={`tool-btn ${tool === t.id ? "on" : ""}`} aria-pressed={tool === t.id} title={`${t.label} (${t.key})`} data-testid={`tool-${t.id}`} onClick={() => store.setTool(t.id)}>
+        <button key={t.id} className={`tool-btn ${tool === t.id ? "on" : ""}`} aria-pressed={tool === t.id} aria-label={t.label} title={`${t.label} (${t.key})`} data-testid={`tool-${t.id}`} onClick={() => store.setTool(t.id)}>
           <span className="glyph">{t.glyph}</span>
           <span className="tool-label">{t.label}</span>
         </button>

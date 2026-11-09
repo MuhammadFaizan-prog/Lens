@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { StepDraft } from "@lens/engine";
+import { badgeNumbers, type StepDraft } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { timecode } from "../state/timelineOps";
 import { Icon } from "./Icon";
@@ -69,13 +69,15 @@ function Row({ d, n, fps }: { d: StepDraft; n: number | null; fps: number }) {
 
 export function StepsPanel() {
   const steps = useEditor((s) => s.project.stepLabels);
+  const annotations = useEditor((s) => s.project.annotations);
   const run = useEditor((s) => s.stepRun);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
   const running = run && (run.state === "starting" || run.state === "running");
   const drafts = steps.drafts;
   const pending = drafts.filter((d) => d.state === "pending");
-  const accepted = drafts.filter((d) => d.state === "accepted").sort((a, b) => a.clickMs - b.clickMs);
-  const num = new Map(accepted.map((d, i) => [d.id, i + 1]));
+  // the number each accepted step's badge shows (shared with any other auto-numbered badges)
+  const bn = badgeNumbers(annotations);
+  const num = new Map(annotations.filter((a) => a.stepId).map((a) => [a.stepId!, bn.get(a.id) ?? 0]));
   return (
     <aside className="transcript steps" data-testid="steps-panel">
       <header className="tr-head">

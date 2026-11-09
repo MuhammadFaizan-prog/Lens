@@ -21,11 +21,14 @@ const renderer = new PlanRenderer();
 const canvas = document.getElementById("c") as HTMLCanvasElement;
 
 const ready = (async () => {
-  const b = await fetchBundle(new URLSearchParams(location.search).get("dir") ?? undefined);
+  const dir = new URLSearchParams(location.search).get("dir");
+  const b = await fetchBundle(dir ?? undefined);
   await loadCaptionFont();
   plan = buildPlan(b, b.project);
-  screen = new FrameStore("screen", b.screen.frames, b.screen.fps);
-  cam = b.camera && b.project.camera.enabled ? new FrameStore("cam", b.camera.frames, b.camera.fps) : null;
+  // frames from the bundle opened with ?dir= (the annotations parity run), not the default sample
+  const q = dir ? `?dir=${encodeURIComponent(dir)}` : "";
+  screen = new FrameStore("screen", b.screen.frames, b.screen.fps, q);
+  cam = b.camera && b.project.camera.enabled ? new FrameStore("cam", b.camera.frames, b.camera.fps, q) : null;
   canvas.width = plan.output.width;
   canvas.height = plan.output.height;
 })();
