@@ -89,6 +89,8 @@ test("three caption fonts: export differs per font and matches the preview", asy
   const lens = await openLens(dir, { w: 1600, h: 1000 });
   const page = lens.page;
   await page.getByTestId("tab-captions").click();
+  // the picker renders after the tab switch; on a loaded box the $$eval below can run before it does
+  await page.getByTestId("caption-font-poppins").waitFor({ timeout: 30_000 });
   const H = await page.evaluate(() => (window as any).__lens.store.get().plan.output.height);
   const y0 = Math.round(H * 0.62);
 
@@ -117,6 +119,8 @@ test("three caption fonts: export differs per font and matches the preview", asy
     await seekSrc(page, T_MS);
     const prev = await previewBand(page, y0);
     const mp4 = await exportMp4(page, dir);
+    // the "Export ready" sheet covers the inspector (the next font click) and keeps exporting.state at "done"
+    await page.evaluate(() => (window as any).__lens.store.closeExport());
     const exp = exportBand(mp4, y0);
     expect([exp.w, exp.h]).toEqual([prev.w, prev.h]);
     const region = captionMask(prev, bare);
