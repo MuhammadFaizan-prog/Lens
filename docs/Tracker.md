@@ -35,7 +35,11 @@
 | Caption translation (demand #8): `lens-translate` (CTranslate2 + SentencePiece, Argos Translate / OPUS-MT packages, SHA-256 pinned, on the CPU, offline after one download) per caption segment into es / fr / de / ur / ar tracks (`project.translations`), SRT + VTT; engine re-times each segment's words onto the surviving speech (syllable-weighted), segment-bounded blocks, 42-char line limit (`maxCharsPerLine`, default 42, 0 = off), word-level bidi; compositor shapes Arabic-script words with RAQM in Noto Naskh Arabic (OFL); editor Languages section (switcher, Translate to... with progress, side-by-side edit, .srt / .vtt) and About sheet with third-party notices. Models + licences: en-es / en-de / en-ar Argos MIT / CC0-1.0; en-fr / en-ur OPUS-MT **CC-BY-4.0** (credited in `docs/Translation.md` and the About sheet); CTranslate2 MIT, SentencePiece Apache-2.0. See `docs/Translation.md` | done (first version, subtitles; no dubbing) | pytest `test_translation.py` 9: chrF (sacrebleu chrF2, cross-checked) on 24 frozen self-written UI / tutorial references **es 81.2, fr 91.5, de 85.4** (bound >= 45, set before measuring), **ur 50.5** (reported, no bound); references written by the test author, so these are optimistic. Speed (beam 4, 2 ARM cores, load excluded) es 336 / fr 225 / de 163 / ur 214 words/s, load 0.35-0.86 s. Burned-in Spanish OCR (tesseract spa) **20/20** words (bound >= 80% per block). RTL: Urdu and Arabic lines vs a whole-line libraqm rendering ink **IoU 1.000** (bound 0.90, unchanged; logical-order control 0.22 / 0.19, bound < 0.60). vitest `translation.test.ts` 19 (timing inside segments, monotonic highlight, cuts, wrapping, bidi). Playwright: Urdu parity SSIM mean **0.98955** / min **0.98399** (bounds 0.97 / 0.95), `translate.spec.ts` 1 |
 | Automation (demand #6): `lens` CLI (`packages/cli`): project new / open / info, plan, export / render (mp4 / gif / srt / vtt), frame (PNG), transcribe, translate, takes list / set, privacy scan / accept / dismiss, steps generate / accept / dismiss, preset list / apply, brand set, get / set by JSON pointer, zoom / cut / annotate add, run; `--json` on every command, exit codes 0-6, idempotent mutations returning JSON-pointer diffs; `lens-mcp` MCP server (stdio, @modelcontextprotocol/sdk MIT) with 24 tools + JSON schemas, resources (project JSON, info, transcript, preview PNG, frame template) and `render_frame` returning the image; sandbox: every read / write / stored path confined to the root (symlinks followed), no shell tool; `lens run script.lens.yaml` demo-as-code; `compositor/frame.py`. See `docs/Automation.md` | done (first version; no recording) | vitest unit 27 (pointers, diff, args, times, sandbox: dot-dot / absolute / symlink out / NUL, MCP argument validation, usage exit codes); CLI integration 19 (every subcommand happy + error path, exit codes, 17 JSON-shape snapshots, idempotency byte-identical, export **300 / 300 frames, 10.000 s vs plan 10000 ms**); MCP 5: tools listed, open -> zoom_add -> render_frame **mean diff 40.56** (bound >= 2.0) -> export 300 frames = plan, resources, **14 / 14 path escapes refused**; script vs the same CLI edits: project.json byte-identical, plan hash identical, **282 / 282 frames identical, SSIM min 1.000000** (bound >= 0.999). Two full passes green |
 | Interactive demo + step guide (demand #7, Part B): `lens export demo` writes one self-contained offline HTML click-through (a compositor still per accepted step label with the video's crop, layout, backdrop, privacy masks and watermark; pulsing hotspot at the click mapped through crop / camera / layout; tooltip; next / back / arrow keys / deep links that follow `hashchange`; progress bar; call-to-action slide; brand colours, font and logo; CSP with no network); `lens export guide` writes Markdown + HTML + PDF (cover + one page per step, cropped screenshot, highlight box around the clicked control); `lens demo hotspot`; MCP `export_demo` / `export_guide`; editor Export dialog (Video / Interactive demo / Step guide tabs, iframe preview, hotspot editor), dev server `/api/steps-export`. See `docs/InteractiveDemo.md` | done (first version; stills, no per-step clips, no analytics beacon) | pytest `test_steps_export.py` 6: hotspot on the click (marker centroid) **worst 0.13 px in the stills** (bound 2 px), **0.16 px in the rendered page** at two viewport sizes; leak **0 / 41** secret regions readable by OCR with privacy items accepted, **control 40 / 41** read with them dismissed (bound >= 70%); guide **PDF 7 pages for 6 steps** (cover + one per step), every highlight box present; page offline with **zero network requests** and no console errors. CLI integration (demo / guide / hotspot), MCP (26 tools), engine vitest demo, Playwright `stepsExport.spec.ts` |
-| Tauri app shell | not started | |
+| Desktop shell: **Electron instead of Tauri** (decision 2026-11-09) | decided | The sandbox this project is built in cannot build or test Rust / Tauri; Electron can, and it reuses the React editor (`apps/editor`) and the TypeScript engine (`packages/engine`) unchanged. Tauri stays open for later (smaller binary, native capture). `docs/Desktop.md` |
+| Desktop recorder (`apps/desktop`, Windows target): screen / window capture (H.264 MediaRecorder), cursor + clicks + shortcuts on the video clock (uiohook-napi), live auto-zoom preview, project save, bundled editor, in-app export (no Python), tray + global hotkey | done on Linux; **unverified on Windows** | vitest 15 (coords / DPI, event log + privacy, live camera). e2e `record.spec.ts` (Xvfb, synthetic Tk scene, scale 1) run 12 and later: positions 0 px (bound 2), logged click vs scene press -15.5..+11.2 ms (bound 50), first-frame clock 0.7-16 ms off the flash-bracketed origin, duration within 0.11 s of wall (bound 0.5), zoom covers 6 / 6 clicks at scale >= 1.2, click central 500 ms later 6 / 6 in all four runs that reached the check. Measurement notes and every test change after a failure below ("Desktop recorder notes") |
+| Desktop in-app export (`LENS_EXPORT=browser`: editor Canvas2D renderer -> JPEG -> ffmpeg, plan audio mixed by a filter graph) | done | `export.spec.ts` 2026-11-09 on the recorded bundle, 480p30, first 8 s kept (cut after): **240 / 240 plan frames** (bound: = plan frames), 854x480, h264, bt709, 8.00 s, 80 s wall on 2 cores. Streams frame by frame with back-pressure (at most one frame waits on ffmpeg's stdin; unit test). Peak during the run: electron main 242 MB, editor renderer 219 MB, ffmpeg 65 MB. Not yet passed at 720p / full length on this box (OOM killer, below) |
+| Windows installer + auto-update (NSIS, electron-updater, GitHub Releases) | see Desktop recorder notes | `docs/Releasing.md`; `e2e/update.spec.ts` |
+| Tauri app shell | deferred (Electron chosen, above) | |
 | GPU renderer (wgpu) | not started | |
 
 Cursor smoothing default: engine uses 220 ms spring settle after a One Euro prefilter. The harness's
@@ -377,4 +381,76 @@ PDF pages = steps + 1; no network request offline). No bound was changed.
    sandbox has ~1.3-2 GB free while the editor, Chromium and a compositor job run together.
 5. Not done: per-step video snippets, the analytics beacon and the 5-team pilot, branching demos,
    hosting.
+
+## Desktop recorder notes (2026-11-09)
+
+Measurement notes, test changes made after a failing run (each says whether the engine or the
+expectation was wrong), and runs lost to the kernel OOM killer (machine: 2 cores, ~1.3-1.8 GB free;
+other workspaces share the RAM). An OOM kill is logged here and is not counted as an assertion failure.
+
+Test changes after a failure:
+1. eventlog.test: expected shortcut overlay label "Ctrl+S"; the engine's label format is "Ctrl S"
+   (expectation wrong; engine unchanged).
+2. eventlog.test: the typed-sentence privacy check searched the raw JSON for quoted single chars and
+   matched the field name "t"; rewritten to check every key event has key "" / modifiers [] and no
+   `"key":"<char>` in the log.
+3. liveCamera.test: the synthetic session moved the cursor away from each click immediately, so a
+   follow-zoom correctly followed it out of view; the scenario now dwells 1 s on each click (bounds
+   unchanged: in view, scale > 1.3 at click + 600 ms).
+4. e2e run 1: every click logged at (640,360): Electron's `screen.getCursorScreenPoint` on X11 stayed
+   stale while the pointer was over the scene (another X client). Fix in the app: Linux takes cursor +
+   click points from uiohook (X11 px). Bounds unchanged; positions then 0 px error.
+5. e2e run 3: click time vs "first frame showing its flash" (bound 50 ms) failed by 47-260 ms because
+   capture was starved (webm frame gaps median 40 ms, p90 221, max 551 ms on 2 cores), not a clock
+   error. The timing check was changed after the failure to: (a) logged t between the last frame
+   without the flash and the first frame with it, +-50 ms; (b) logged t vs the scene's own press stamp
+   on the video clock whose origin is bracketed by the flash frames (bracket consistent and <= 50 ms
+   wide), |diff| <= 50 ms. Run 3 numbers for (b): -20..-49 ms, bracket 17 ms wide. Also: scene flash
+   400 -> 700 ms (a flash fell entirely inside a 550 ms frame gap), preview drawn at ~30 fps, the Stop
+   time taken when Stop is pressed and the mp4 held to it (Chromium sends frames only on change: run 3
+   webm ended 0.7 s before Stop; mp4 19.9 s vs wall 20.39 s).
+6. e2e runs 3 and 5: click 3 (640,380) flash never detected: the captured cursor sprite covered the
+   sampled block at the click point. Detection changed after the failure to a 16x16 crop up-left of the
+   hotspot inside the 48 px flash, decoded at full resolution; bounds unchanged. Run 5 also showed the
+   MediaRecorder "start" event lands 110 ms after the true first frame; t0 is now the first frame
+   reaching the stream after start() (requestVideoFrameCallback captureTime, else presentation time).
+7. e2e run 9: recording bounds all met; the spec then failed to find the editor window (it waited for
+   a new-window event after the window had already opened). Spec now collects windows from launch and
+   records crashes; the same bundle opened fine by hand (status ready, 874 frames).
+8. e2e runs 12-13: export inside record.spec.ts was OOM-killed (x264 at 1080p60, then the editor
+   renderer at 720p30). Export moved to its own spec (`export.spec.ts`) and to 720p30 (same code path,
+   bound unchanged: frames = plan frames). 2026-11-09: `LENS_E2E_EXPORT_RES` / `LENS_E2E_EXPORT_KEEP_S`
+   added so the spec can export a smaller project (480p, first 8 s); bound unchanged.
+9. "Click in the central 60% of the zoom 500 ms after the click" was reported as failing for 3 of 6
+   clicks. Re-reading every saved report (runs ...527707, ...591251, ...889240, ...026110): the asserted
+   check (camera 500 ms after the click) passed **6 / 6 in all four runs**. The three `false` values were
+   the `central` flag the report also carried for the click frame itself, which was never a bound: at
+   the click frame the camera spring is still panning toward the click by design (scale 1.25-1.70 there,
+   1.34-1.98 at +500 ms), and only "inside the viewport" is required (met 6 / 6). Neither the engine
+   nor the check was wrong; the report was misleading. The spec no longer writes a `central` flag for
+   the click frame. Bound unchanged (0.6). The 2x DPI variant (`LENS_E2E_SCALE=2`) was not run this
+   session (a full record run; the box was OOM-killing heavier jobs).
+10. browserExport.test "ffmpeg -i parsing": expected `1k tbr` to parse as 1000 fps; it parses as the
+    30 fps fallback. "1k tbr" is a VFR WebM timebase, not a frame rate, and the probe only reads the
+    constant-30 fps screen.mp4, so the expectation was wrong; code unchanged.
+
+Fix from a real failure: export runs 1-4 (export.spec.ts) were OOM-killed mid-export (frames 94-296 of
+635; the last one took ffmpeg, anon-rss 130 MB). Export already streamed (one frame in flight, its own
+frame stores released behind the playhead), but (a) x264 ran with its default threads / lookahead,
+now `-threads 2` with `rc-lookahead=10`, and (b) a frame write waiting on ffmpeg's stdin hung forever
+if ffmpeg died; it now rejects with the error. Unit tests cover back-pressure and the dead-ffmpeg case.
+
+Runs lost to the OOM killer (dmesg-confirmed, not assertion failures): e2e runs 2, 4, 6, 7, 8, 10, 11
+(the recorder renderer kept ~465 MB of capture buffers after Stop; fixed by replacing the recorder
+window after each recording: 471 MB -> 4.6 MB shmem), 12, 13; export runs 1-2 (editor renderer),
+export run 4 (ffmpeg), export run 5 (electron main, 480p / 8 s); editor e2e "export renders an MP4
+through the compositor" twice (python3 compositor, 2026-11-09; no Python or compositor code changed
+this session; it passed in the earlier full verification). Editor e2e playback-rate (1.21x vs bound
+1.15) and caption-highlight checks failed once in the full editor.spec run on the loaded box and both
+passed on the immediate rerun with no change.
+
+Suite counts 2026-11-09 (this code): `npm run build && npm test` engine 156 / 156, cli 27 / 27, editor
+32 / 32 (26 + 6 browserExport), desktop 15 / 15. Playwright editor.spec 13 / 14 (11 in the full run + 2
+on rerun; compositor export lost to the OOM killer twice), stepsExport 2 / 2. pytest not run (no
+Python changed).
 
