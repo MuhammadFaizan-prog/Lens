@@ -1,3 +1,4 @@
+import { FileMenu, desktopFile } from "./components/FileMenu";
 import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
@@ -50,6 +51,7 @@ function TopBar() {
       </div>
       <UpdateBanner />
       <div className="top-actions">
+        <FileMenu />
         <button className="icon-btn" disabled={!canUndo} title={`Undo ${undoLabel ?? ""} (⌘Z)`} aria-label="Undo" data-testid="undo" onClick={() => store.undo()}>
           <Icon name="undo" />
         </button>
@@ -99,6 +101,7 @@ function AboutButton() {
               ))}
             </ul>
             <div className="sheet-actions">
+              {desktopFile && <button className="btn ghost" data-testid="open-log-folder" onClick={() => void desktopFile?.openLogFolder()}>Open log folder</button>}
               <button className="btn" onClick={() => setOpen(false)}>Close</button>
             </div>
           </div>
@@ -383,7 +386,14 @@ export function App() {
       style={{ ["--left-w" as string]: `${L.leftOpen ? L.leftW : 0}px`, ["--right-w" as string]: `${L.rightOpen ? L.rightW : 0}px`, ["--tl-h" as string]: `${L.tlH}px` }}
     >
       <TopBar />
-      {status === "error" && <div className="banner error">Could not open the recording: {error}</div>}
+      {status === "error" && <div className="banner error" data-testid="load-error">Could not open the recording: {error}</div>}
+      {status !== "ready" ? (
+        // nothing of the project is shown until the bundle has loaded: no empty 00:00.01 project, no "no microphone track"
+        <main className="workspace loading" data-testid="loading">
+          <div className="loading-card">{status === "loading" ? <><span className="spinner" /> Opening the recording…</> : "The recording could not be opened. The reason is above; the log folder is in About."}</div>
+        </main>
+      ) : (
+      <>
       <main className="workspace">
         {L.leftOpen ? <LeftPanel /> : <div className="panel-stub" />}
         <Splitter kind="left" />
@@ -397,6 +407,8 @@ export function App() {
       </main>
       <Splitter kind="timeline" />
       <Timeline />
+      </>
+      )}
       <ExportSheet />
       <ExportDialog />
       <ExportWarning />

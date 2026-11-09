@@ -120,7 +120,7 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const video = path.join(dir, "video.mp4");
-  const ff = spawn(ffmpeg, browserExportArgs(plan, video));
+  const ff = spawn(ffmpeg, browserExportArgs(plan, video), { windowsHide: true });
   const job: BrowserExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now(), ff, chain: Promise.resolve(), stage: "frames" };
   job.audio = renderExportAudio(ffmpeg, plan.audio, outputMs(plan), path.join(dir, "audio"), root);
   job.audio.catch(() => undefined); // reported when the video is done

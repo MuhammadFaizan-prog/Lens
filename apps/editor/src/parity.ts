@@ -30,8 +30,8 @@ const ready = (async () => {
   const q = dir ? `?dir=${encodeURIComponent(dir)}` : "";
   setAssetBundle(q);
   await ensurePlanAssets(plan);
-  screen = new FrameStore("screen", b.screen.frames, b.screen.fps, q);
-  cam = b.camera && b.project.camera.enabled ? new FrameStore("cam", b.camera.frames, b.camera.fps, q) : null;
+  screen = new FrameStore("screen", b.screen.frames, b.screen.fps, q, 24, true);
+  cam = b.camera && b.project.camera.enabled ? new FrameStore("cam", b.camera.frames, b.camera.fps, q, 24, true) : null;
   canvas.width = plan.output.width;
   canvas.height = plan.output.height;
 })();

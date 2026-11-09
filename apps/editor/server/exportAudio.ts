@@ -61,7 +61,7 @@ export function synthClick(sr = 48000, ms = 30): Float32Array {
 
 function run(ffmpeg: string, args: string[], opts: { cwd?: string; stdout?: string } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpeg, args, { cwd: opts.cwd });
+    const p = spawn(ffmpeg, args, { cwd: opts.cwd, windowsHide: true });
     let err = "";
     const out = opts.stdout ? fs.createWriteStream(opts.stdout) : null;
     if (out) p.stdout.pipe(out);
@@ -85,7 +85,7 @@ export async function decodeToRaw(ffmpeg: string, input: string, sr: number, out
 /** Pipe a Float32 interleaved stereo block through an ffmpeg filter chain (raw in, raw out). */
 function filterBlock(ffmpeg: string, x: Float32Array, sr: number, af: string): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpeg, ["-v", "error", "-nostdin", "-f", "f32le", "-ar", String(sr), "-ac", "2", "-i", "pipe:0", "-af", `${af},${PIN(sr)}`, "-f", "f32le", "-ac", "2", "-ar", String(sr), "pipe:1"]);
+    const p = spawn(ffmpeg, ["-v", "error", "-nostdin", "-f", "f32le", "-ar", String(sr), "-ac", "2", "-i", "pipe:0", "-af", `${af},${PIN(sr)}`, "-f", "f32le", "-ac", "2", "-ar", String(sr), "pipe:1"], { windowsHide: true });
     const chunks: Buffer[] = [];
     let err = "";
     p.stdout.on("data", (d: Buffer) => chunks.push(d));

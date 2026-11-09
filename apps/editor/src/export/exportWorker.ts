@@ -50,8 +50,8 @@ async function run(m: StartMsg): Promise<void> {
     const canvas = new OffscreenCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d")!;
     const sep = query ? "&" : "?";
-    const scr = new FrameStore("screen", m.screen.count, m.screen.fps, query, 6);
-    const cam = m.cam ? new FrameStore("cam", m.cam.count, m.cam.fps, query, 6) : null;
+    const scr = new FrameStore("screen", m.screen.count, m.screen.fps, query, 6, true);
+    const cam = m.cam ? new FrameStore("cam", m.cam.count, m.cam.fps, query, 6, true) : null;
     for (i = 0; i < total; i++) {
       if (cancelled) return post({ type: "cancelled", done: i });
       const f = plan.frames[i]!;

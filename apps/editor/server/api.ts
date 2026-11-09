@@ -345,7 +345,7 @@ function micSilences(bundle: string): Range[] {
   return silences;
 }
 
-const extracting = new Map<string, Promise<number>>();
+const extracting = new Map<string, Extraction>();
 
 export function defaultBundle(): string {
   return path.resolve(process.env.LENS_BUNDLE ?? path.join(EDITOR, "sample"));
@@ -381,33 +381,132 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Decode every frame of a track to JPEG once (cached in <bundle>/.lens-cache/<track>/). */
-function extractFrames(bundle: string, track: "screen" | "cam"): Promise<number> {
+/**
+ * Decode every frame of a track to JPEG once (cached in <bundle>/.lens-cache/<track>/), in the
+ * background: /api/bundle no longer waits for it (Windows report 2026-11-09: the editor sat on its empty
+ * defaults while a 1080p60 minute was decoded to 3600 JPEGs; 37 s on the 2-core test box, minutes on
+ * Windows). Frames already written are served from the cache, the rest one by one (frameAt), and the
+ * export (?exact=1) waits for this full pass, so exported frames are the exact decoded ones.
+ */
+interface Extraction {
+  done: Promise<number>;
+  /** frames fully written so far (a frame counts once the next one exists or the pass ended) */
+  written(): number;
+  finished: boolean;
+}
+function extractFrames(bundle: string, track: "screen" | "cam"): Extraction {
   const video = path.join(bundle, `${track}.mp4`);
   const dir = path.join(bundle, ".lens-cache", track);
-  const key = dir;
-  const pending = extracting.get(key);
+  const pending = extracting.get(dir);
   if (pending) return pending;
-  const p = new Promise<number>((resolve, reject) => {
-    const stamp = path.join(dir, ".done");
-    const mtime = fs.statSync(video).mtimeMs;
-    if (fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === String(mtime)) {
-      resolve(fs.readdirSync(dir).filter((f) => f.endsWith(".jpg")).length);
-      return;
-    }
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    const ff = spawn(FFMPEG, ["-v", "error", "-y", "-i", video, "-vsync", "0", "-q:v", "2", path.join(dir, "%05d.jpg")]);
-    let err = "";
-    ff.stderr.on("data", (d: Buffer) => (err += d.toString()));
-    ff.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`ffmpeg frame extract failed: ${err}`));
-      fs.writeFileSync(stamp, String(mtime));
-      resolve(fs.readdirSync(dir).filter((f) => f.endsWith(".jpg")).length);
-    });
+  const stamp = path.join(dir, ".done");
+  const mtime = String(fs.statSync(video).mtimeMs);
+  const count = () => fs.readdirSync(dir).filter((f) => f.endsWith(".jpg")).length;
+  if (fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === mtime) {
+    const n = count();
+    const x: Extraction = { done: Promise.resolve(n), written: () => n, finished: true };
+    extracting.set(dir, x);
+    return x;
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  let progress = 0;
+  const x: Extraction = {
+    finished: false,
+    written: () => (x.finished ? Number.MAX_SAFE_INTEGER : Math.max(0, progress - 1)),
+    done: new Promise<number>((resolve, reject) => {
+      const ff = spawn(FFMPEG, ["-hide_banner", "-v", "error", "-progress", "pipe:1", "-nostats", "-y", "-i", video, "-vsync", "0", "-q:v", "2", path.join(dir, "%05d.jpg")], { windowsHide: true });
+      let err = "";
+      let buf = "";
+      ff.stdout.on("data", (d: Buffer) => {
+        buf += d.toString();
+        for (const m of buf.matchAll(/^frame=(\d+)/gm)) progress = Number(m[1]);
+        buf = buf.slice(buf.lastIndexOf("\n") + 1);
+      });
+      ff.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      ff.on("error", (e) => reject(new Error(`ffmpeg frame extract could not start (${FFMPEG}): ${e.message}`)));
+      ff.on("close", (code) => {
+        if (code !== 0) return reject(new Error(`ffmpeg frame extract failed (exit ${code}): ${err.trim().slice(-400)}`));
+        fs.writeFileSync(stamp, mtime);
+        x.finished = true;
+        resolve(count());
+      });
+    }),
+  };
+  extracting.set(dir, x);
+  // a failed pass stays recorded (no restart per frame request): frames then come from frameAt, and
+  // the export's exact request reports the reason
+  x.done.catch((e) => {
+    console.error(`[lens] ${track} frame extract: ${e instanceof Error ? e.message : String(e)} (${bundle})`);
   });
-  extracting.set(key, p);
-  p.catch(() => extracting.delete(key));
+  return x;
+}
+
+/** Number of video frames without decoding: a stream copy to null counts the packets (~0.1 s for a 1080p60 minute). Cached by mtime. */
+const counted = new Map<string, number>();
+function frameCount(bundle: string, track: "screen" | "cam"): number {
+  const video = path.join(bundle, `${track}.mp4`);
+  const mtime = String(fs.statSync(video).mtimeMs);
+  const memo = counted.get(`${video}|${mtime}`);
+  if (memo) return memo;
+  const cache = path.join(bundle, ".lens-cache", `${track}.count.json`);
+  const c = readJson(cache) as { mtime?: string; frames?: number } | null;
+  if (c?.mtime === mtime && typeof c.frames === "number" && c.frames > 0) {
+    counted.set(`${video}|${mtime}`, c.frames);
+    return c.frames;
+  }
+  const r = spawnSync(FFMPEG, ["-hide_banner", "-i", video, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"], { encoding: "utf8", windowsHide: true, timeout: 60_000 });
+  if (r.error) throw new Error(`could not run ffmpeg (${FFMPEG}) to read ${track}.mp4: ${r.error.message}`);
+  const all = [...String(r.stderr ?? "").matchAll(/frame=\s*(\d+)/g)];
+  const frames = all.length ? Number(all[all.length - 1]![1]) : 0;
+  if (!frames) throw new Error(`${track}.mp4 has no readable video frames (ffmpeg: ${String(r.stderr ?? "").trim().split(/\r?\n/).slice(-2).join(" / ").slice(0, 300)})`);
+  fs.mkdirSync(path.dirname(cache), { recursive: true });
+  fs.writeFileSync(cache, JSON.stringify({ mtime, frames }));
+  counted.set(`${video}|${mtime}`, frames);
+  return frames;
+}
+
+// at most 3 seek decodes at a time (scrubbing far ahead of the pass must not start dozens of ffmpegs)
+let seekBusy = 0;
+const seekWait: Array<() => void> = [];
+function seekSlot(): Promise<() => void> {
+  const release = () => {
+    seekBusy--;
+    seekWait.shift()?.();
+  };
+  if (seekBusy < 3) {
+    seekBusy++;
+    return Promise.resolve(release);
+  }
+  return new Promise((r) => seekWait.push(() => {
+    seekBusy++;
+    r(release);
+  }));
+}
+
+/** One frame decoded on demand (seek, then the first frame at or after n / fps): for frames the background pass has not reached. */
+const frameJobs = new Map<string, Promise<Buffer>>();
+function frameAt(bundle: string, track: "screen" | "cam", n: number, fps: number): Promise<Buffer> {
+  const key = `${bundle}|${track}|${n}`;
+  const hit = frameJobs.get(key);
+  if (hit) return hit;
+  const video = path.join(bundle, `${track}.mp4`);
+  const t = Math.max(0, (n - 0.25) / fps);
+  const p = seekSlot().then((release) => new Promise<Buffer>((resolve, reject) => {
+    const ff = spawn(FFMPEG, ["-hide_banner", "-v", "error", "-ss", t.toFixed(4), "-i", video, "-frames:v", "1", "-q:v", "2", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"], { windowsHide: true });
+    const out: Buffer[] = [];
+    let err = "";
+    ff.stdout.on("data", (d: Buffer) => out.push(d));
+    ff.stderr.on("data", (d: Buffer) => (err += d.toString()));
+    ff.on("error", reject);
+    ff.on("close", (code) => {
+      const b = Buffer.concat(out);
+      if (code === 0 && b.length) resolve(b);
+      else reject(new Error(`frame ${n}: ffmpeg exited ${code}: ${err.trim().slice(-300)}`));
+    });
+  }).finally(release));
+  frameJobs.set(key, p);
+  void p.finally(() => frameJobs.delete(key)).catch(() => undefined);
   return p;
 }
 
@@ -443,7 +542,11 @@ async function loadBundle(dir: string) {
   const project = readJson(path.join(dir, "project.json")) ?? {};
   const transcript = readJson(path.join(dir, "transcript.json"));
   const hasCam = fs.existsSync(path.join(dir, "cam.mp4"));
-  const [screenFrames, camFrames] = await Promise.all([extractFrames(dir, "screen"), hasCam ? extractFrames(dir, "cam") : Promise.resolve(0)]);
+  // frame counts without decoding; the JPEG pass starts in the background (served as it lands)
+  const screenFrames = frameCount(dir, "screen");
+  const camFrames = hasCam ? frameCount(dir, "cam") : 0;
+  extractFrames(dir, "screen");
+  if (hasCam) extractFrames(dir, "cam");
   return {
     dir,
     name: path.basename(dir),
@@ -461,20 +564,28 @@ async function loadBundle(dir: string) {
     translateUnavailable: translateUnavailable(),
     autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
       && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
-    screen: { ...probeVideo(path.join(dir, "screen.mp4")), frames: screenFrames },
-    camera: hasCam ? { ...probeVideo(path.join(dir, "cam.mp4")), frames: camFrames } : null,
+    screen: { ...probeVideoCached(path.join(dir, "screen.mp4")), frames: screenFrames },
+    camera: hasCam ? { ...probeVideoCached(path.join(dir, "cam.mp4")), frames: camFrames } : null,
   };
+}
+
+const probed = new Map<string, { width: number; height: number; fps: number }>();
+function probeVideoCached(f: string): { width: number; height: number; fps: number } {
+  const k = `${f}|${fs.statSync(f).mtimeMs}`;
+  let v = probed.get(k);
+  if (!v) probed.set(k, (v = probeVideo(f)));
+  return v;
 }
 
 /** Width, height and frame rate of a video's first stream: ffprobe, or `ffmpeg -i` when no ffprobe is shipped (desktop build). */
 export function probeVideo(f: string): { width: number; height: number; fps: number } {
-  const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", f], { encoding: "utf8" });
+  const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", f], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
   if (r.status === 0 && r.stdout) {
     const s = JSON.parse(r.stdout).streams[0];
     const [n, d] = String(s.r_frame_rate).split("/").map(Number);
     return { width: s.width as number, height: s.height as number, fps: (n ?? 30) / (d ?? 1) };
   }
-  const info = spawnSync(FFMPEG, ["-hide_banner", "-i", f], { encoding: "utf8" }).stderr ?? "";
+  const info = spawnSync(FFMPEG, ["-hide_banner", "-i", f], { encoding: "utf8", windowsHide: true, timeout: 30_000 }).stderr ?? "";
   return parseFfmpegVideoInfo(info);
 }
 
@@ -612,12 +723,20 @@ export function apiMiddleware() {
       if (url.pathname === "/api/bundle" && req.method === "GET") return sendJson(res, await loadBundle(bundle));
       if ((m = /^\/api\/frames\/(screen|cam)\/(\d+)\.jpg$/.exec(url.pathname))) {
         const track = m[1] as "screen" | "cam";
-        const n = await extractFrames(bundle, track);
-        const idx = Math.min(n - 1, Math.max(0, Number(m[2])));
-        const file = path.join(bundle, ".lens-cache", track, `${String(idx + 1).padStart(5, "0")}.jpg`);
+        const x = extractFrames(bundle, track);
+        const total = x.finished ? await x.done : frameCount(bundle, track);
+        const idx = Math.min(total - 1, Math.max(0, Number(m[2])));
         res.setHeader("content-type", "image/jpeg");
         res.setHeader("cache-control", "max-age=3600");
-        return fs.createReadStream(file).pipe(res);
+        // the export asks for exact frames: wait for the full decode pass
+        if (url.searchParams.get("exact") === "1" && !x.finished) await x.done;
+        const file = path.join(bundle, ".lens-cache", track, `${String(idx + 1).padStart(5, "0")}.jpg`);
+        if (x.finished || idx < x.written()) return fs.createReadStream(file).pipe(res);
+        // not decoded yet: frames a little ahead of the pass are worth a short wait, the rest are decoded on their own
+        for (let i = 0; i < 10 && !x.finished && idx >= x.written() && idx - x.written() < 30; i++) await new Promise((r) => setTimeout(r, 50));
+        if (x.finished || idx < x.written()) return fs.createReadStream(file).pipe(res);
+        res.setHeader("cache-control", "no-store");
+        return res.end(await frameAt(bundle, track, idx, probeVideoCached(path.join(bundle, `${track}.mp4`)).fps));
       }
       if ((m = /^\/api\/media\/([^/]+)$/.exec(url.pathname))) {
         const file = path.join(bundle, path.basename(decodeURIComponent(m[1]!)));
@@ -783,7 +902,9 @@ export function apiMiddleware() {
       }
       return sendJson(res, { error: "unknown endpoint" }, 404);
     } catch (e) {
-      return sendJson(res, { error: e instanceof Error ? e.message : String(e) }, 500);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[lens] ${req.method} ${url.pathname} (${bundle}): ${msg}`);
+      return sendJson(res, { error: msg }, 500);
     }
   };
 }

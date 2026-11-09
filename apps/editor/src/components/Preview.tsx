@@ -27,6 +27,8 @@ export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingCo
     [scr, cam] = await Promise.all([scr ?? store.screen.load(si), wantCam ? cam ?? store.cam!.load(ci) : Promise.resolve(null)]);
   }
   renderer.draw(g, editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null });
+  // time from page start to the first real source frame on screen (window.__lens.state().firstPaintMs)
+  if (scr && store.firstPaintMs == null) store.firstPaintMs = Math.round(performance.now());
   return true;
 }
 

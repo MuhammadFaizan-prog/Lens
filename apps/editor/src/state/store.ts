@@ -197,6 +197,9 @@ export class EditorStore {
   // ------------------------------------------------------------------ loading
 
   private loading: Promise<void> | null = null;
+  /** ms from page start: bundle answered / first source frame painted (open-time measurements) */
+  readyMs: number | null = null;
+  firstPaintMs: number | null = null;
 
   /** Open a bundle once (React StrictMode mounts effects twice in dev). */
   load(dir?: string): Promise<void> {
@@ -219,6 +222,7 @@ export class EditorStore {
       this.screen = new FrameStore("screen", bundle.screen.frames, bundle.screen.fps, q, maxBitmaps);
       this.cam = bundle.camera ? new FrameStore("cam", bundle.camera.frames, bundle.camera.fps, q, maxBitmaps) : null;
       this.history.reset(bundle.project);
+      this.readyMs = Math.round(performance.now());
       this.set({ bundle, status: "ready", error: null, frame: 0, selection: null, selectedWords: [], savedAt: null, dirty: false });
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
@@ -1219,8 +1223,8 @@ export class EditorStore {
     const canvas = makeCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d") as CanvasRenderingContext2D;
     const sep = q ? "&" : "?";
-    const scrStore = new FrameStore("screen", this.screen!.count, this.screen!.fps, q, 6);
-    const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6) : null;
+    const scrStore = new FrameStore("screen", this.screen!.count, this.screen!.fps, q, 6, true);
+    const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6, true) : null;
     for (let i = 0; i < total; i++) {
       if (this.exportCancel) return false;
       const f = plan.frames[i]!;

@@ -454,7 +454,7 @@ lens.onLive((b) => {
   if (camera && liveCursor) camera.step(b.t, liveCursor);
 });
 
-lens.onFinalizing((stage) => setStatus(`Saving ${stage}…`));
+lens.onFinalizing((stage) => setStatus(stage.startsWith("Preparing") ? stage : `Saving ${stage}…`));
 lens.onToggle(() => void (state === "idle" ? start().catch(() => undefined) : stop()));
 $("go").onclick = () => void (state === "idle" ? start().catch(() => undefined) : stop());
 async function openMic(deviceId: string): Promise<MediaStream> {
