@@ -2,6 +2,7 @@
 """Generate the editor's sample project (all media synthetic, made here; nothing third-party).
 
   python3 apps/editor/scripts/make_sample.py [--out apps/editor/sample] [--force]
+  python3 apps/editor/scripts/make_sample.py --takes [--out apps/editor/sample-takes]
 
 Writes a Lens bundle the editor opens by default:
   screen.mp4  cursorless fake-app recording (1280x720 @ 30 fps, 10 s) + meta.json + events.jsonl
@@ -52,6 +53,53 @@ def transcript() -> dict:
             "source": {"path": "mic.wav", "trackId": "mic"}, "words": words, "pauses": pauses}
 
 
+# Multi-take variant (--takes): the same media, with a fumbled first take of the second sentence.
+TAKES_WORDS = [
+    ("This", 400, 650), ("is", 700, 820), ("Lens,", 870, 1300), ("um", 1380, 1700), ("a", 1760, 1820),
+    ("clean-room", 1870, 2350), ("screen", 2400, 2700), ("recorder.", 2750, 3300),
+    ("Watch", 3600, 3850), ("the", 3900, 4000), ("camera", 4050, 4400), ("uh", 4460, 4760),
+    ("Watch", 5200, 5500), ("the", 5550, 5650), ("camera", 5700, 6050), ("follow", 6480, 6780),
+    ("every", 6830, 7080), ("click.", 7130, 7550),
+    ("Private", 7900, 8250), ("bits", 8300, 8500), ("stay", 8550, 8800), ("blurred.", 8850, 9400),
+]
+
+
+def takes_transcript() -> dict:
+    t = transcript()
+    words = [{"text": w, "startMs": s, "endMs": e, "confidence": 0.9, **({"filler": True} if w in FILLERS else {})} for w, s, e in TAKES_WORDS]
+    pauses, prev = [], 0
+    for w in words:
+        if w["startMs"] - prev > 150:
+            pauses.append({"startMs": prev, "endMs": w["startMs"]})
+        prev = w["endMs"]
+    pauses.append({"startMs": prev, "endMs": DUR})
+    t.update(words=words, pauses=pauses)
+    return t
+
+
+def make_takes(out: Path, force: bool) -> int:
+    """Link the default sample's media and write a transcript with a retake, takes on."""
+    base = ROOT / "apps" / "editor" / "sample"
+    if not (base / "screen.mp4").exists():
+        import subprocess
+        subprocess.run([sys.executable, __file__, "--out", str(base)], check=True)
+    if (out / "project.json").exists() and (out / "screen.mp4").exists() and not force:
+        print(f"sample exists: {out}")
+        return 0
+    out.mkdir(parents=True, exist_ok=True)
+    for name in ("screen.mp4", "cam.mp4", "mic.wav", "meta.json", "events.jsonl"):
+        dst = out / name
+        if dst.is_symlink() or dst.exists():
+            dst.unlink()
+        dst.symlink_to(base / name)
+    p = project()
+    p["edits"]["takes"] = {"enabled": True, "strategy": "last"}
+    (out / "transcript.json").write_text(json.dumps(takes_transcript(), indent=1))
+    (out / "project.json").write_text(json.dumps(p, indent=2))
+    print(f"takes sample written: {out}")
+    return 0
+
+
 def project() -> dict:
     sx = W / 1920
     return {
@@ -78,7 +126,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(ROOT / "apps" / "editor" / "sample"))
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--takes", action="store_true", help="write the multi-take sample (default --out apps/editor/sample-takes)")
     a = ap.parse_args()
+    if a.takes:
+        out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-takes"
+        return make_takes(out, a.force)
     out = Path(a.out)
     if (out / "project.json").exists() and (out / "screen.mp4").exists() and not a.force:
         print(f"sample exists: {out}")

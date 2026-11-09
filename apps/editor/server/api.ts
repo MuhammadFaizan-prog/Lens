@@ -12,7 +12,7 @@
  *
  * A bundle is a folder with screen.mp4, meta.json, events.jsonl and optionally cam.mp4,
  * transcript.json, project.json and audio files. Default: $LENS_BUNDLE or apps/editor/sample
- * (generated on first use by scripts/make_sample.py).
+ * (generated on first use by scripts/make_sample.py; apps/editor/sample-takes, the multi-take sample, too).
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -49,8 +49,9 @@ export function defaultBundle(): string {
 
 function ensureSample(dir: string): void {
   if (fs.existsSync(path.join(dir, "screen.mp4"))) return;
-  if (path.resolve(dir) !== path.resolve(EDITOR, "sample")) throw new Error(`no screen.mp4 in ${dir}`);
-  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir], { encoding: "utf8" });
+  const takes = path.resolve(dir) === path.resolve(EDITOR, "sample-takes");
+  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes) throw new Error(`no screen.mp4 in ${dir}`);
+  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`make_sample failed: ${r.stderr}`);
 }
 

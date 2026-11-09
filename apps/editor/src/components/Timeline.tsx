@@ -21,9 +21,10 @@ import { Icon } from "./Icon";
 const LABEL_W = 112;
 const SNAP_PX = 8;
 const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000 };
-const TRACKS: Array<{ kind: TrackKind | "caption" | "audio"; label: string }> = [
+const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
+  { kind: "takes", label: "Alt takes" },
   { kind: "speed", label: "Speed" },
   { kind: "mask", label: "Masks" },
   { kind: "caption", label: "Captions" },
@@ -61,6 +62,7 @@ export function Timeline() {
   const bundle = useEditor((s) => s.bundle);
   const frame = useEditor((s) => s.frame);
   const selection = useEditor((s) => s.selection);
+  const audition = useEditor((s) => s.audition);
   const playing = useEditor((s) => s.playing);
   const duration = bundle?.meta.durationMs ?? 1;
   const scroller = useRef<HTMLDivElement>(null);
@@ -300,6 +302,51 @@ export function Timeline() {
                 <div key={`cl-${i}`} className="block block-cleanup" style={{ left: xOf(c.startMs), width: Math.max(3, xOf(c.endMs) - xOf(c.startMs)) }} title="Cleanup cut (fillers / pauses)" />
               ))}
               {project.edits.cuts.map((c, i) => block("cut", i, c, "cut"))}
+            </div>
+            <div className={`lane lane-takes ${project.edits.takes.enabled ? "" : "off"}`} data-testid="lane-takes" onPointerDown={scrubLane}>
+              {(plan?.takes ?? []).map((g, gi) => (
+                <div key={`tg-${g.id}`} className="take-group" style={{ left: xOf(g.startMs), width: Math.max(6, xOf(g.endMs) - xOf(g.startMs)) }} title={`Retake group · ${g.takes.length} takes · ${g.manual ? "marked by you" : `found by ${g.cues.join(", ") || "repeat"}`}`} />
+              ))}
+              {(plan?.takes ?? []).flatMap((g, gi) =>
+                g.takes.map((t, k) => {
+                  const isKept = k === g.kept;
+                  const auditioning = audition?.group === gi && audition.take === k;
+                  return (
+                    <div
+                      key={`take-${g.id}-${k}`}
+                      className={`block block-take ${isKept ? "kept" : "rejected"} ${auditioning ? "auditioning" : ""}`}
+                      style={{ left: xOf(t.startMs), width: Math.max(14, xOf(t.endMs) - xOf(t.startMs)) }}
+                      data-testid={`take-${gi}-${k}`}
+                      data-kept={isKept ? "1" : "0"}
+                      title={`Take ${k + 1} of ${g.takes.length}${isKept ? " · kept" : " · click to keep this take"} · score ${t.score.toFixed(2)} · ${timecode(t.startMs, fps)}–${timecode(t.endMs, fps)}`}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        if (e.button !== 0) return;
+                        if (!isKept) store.keepTake(gi, k);
+                        else store.seekSource(t.startMs);
+                      }}
+                    >
+                      <span className="block-label">{isKept ? "✓ " : ""}Take {k + 1}</span>
+                      <button
+                        className="take-ab"
+                        data-testid={`take-ab-${gi}-${k}`}
+                        title={`A/B preview take ${k + 1}`}
+                        aria-label={`Preview take ${k + 1}`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (auditioning) store.endAudition();
+                          else store.audition(gi, k);
+                        }}
+                      >
+                        {auditioning ? "■" : "▶"}
+                      </button>
+                    </div>
+                  );
+                }),
+              )}
+              {project.edits.takes.enabled && !(plan?.takes ?? []).length && <span className="lane-hint">No retakes found</span>}
+              {!project.edits.takes.enabled && <span className="lane-hint">Takes off · turn on in the transcript panel</span>}
             </div>
             <div className="lane" data-testid="lane-speed" onPointerDown={scrubLane} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}

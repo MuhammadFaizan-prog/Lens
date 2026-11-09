@@ -43,7 +43,7 @@ button { font: inherit; color: inherit; }
 .app {
   height: 100vh;
   display: grid;
-  grid-template-rows: 52px minmax(0, 1fr) 292px;
+  grid-template-rows: 52px minmax(0, 1fr) 326px;
 }
 
 /* ---------------------------------------------------------------- top bar */
@@ -323,3 +323,36 @@ select {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); pointer-events: none; transition: opacity 0.18s, transform 0.18s; z-index: 60; font-size: 12.5px;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------------------------------------------------------------- multi-take */
+:root { --take: #f472b6; }
+.dot-takes { background: var(--take); }
+.lane-takes.off { opacity: 0.45; }
+.lane-hint { position: absolute; left: 10px; top: 9px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+.take-group { position: absolute; top: 2px; bottom: 2px; border-radius: 8px; border: 1px dashed rgba(244, 114, 182, 0.55); pointer-events: none; }
+.block-take { cursor: pointer; z-index: 2; padding-right: 22px; }
+.block-take.kept { background: var(--take); }
+.block-take.rejected {
+  background: repeating-linear-gradient(135deg, rgba(244, 114, 182, 0.30) 0 5px, rgba(244, 114, 182, 0.12) 5px 10px);
+  box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.65);
+}
+.block-take.rejected .block-label { color: #f9c6df; text-decoration: line-through; font-weight: 550; }
+.block-take.auditioning { box-shadow: inset 0 0 0 2px #fff, 0 0 0 3px rgba(244, 114, 182, 0.35); }
+.take-ab {
+  position: absolute; right: 3px; top: 3px; width: 18px; height: 18px; border-radius: 4px; border: none; padding: 0;
+  background: rgba(10, 12, 15, 0.55); color: #fff; font-size: 9px; line-height: 18px; cursor: pointer;
+}
+.take-ab:hover { background: rgba(10, 12, 15, 0.85); }
+.word.alt-take { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--take); opacity: 0.55; }
+.word.take-kept { box-shadow: inset 0 -2px 0 rgba(244, 114, 182, 0.75); border-radius: 3px 3px 0 0; }
+.take-chip {
+  display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 0 2px; padding: 0 6px; height: 20px; vertical-align: 1px;
+  border-radius: 10px; border: 1px solid rgba(244, 114, 182, 0.6); background: rgba(244, 114, 182, 0.12); color: #f9c6df;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.take-chip:hover { background: rgba(244, 114, 182, 0.25); }
+.take-chip.on { background: var(--take); color: #1a0b13; }
+.tr-takes { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 0 12px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--text-2); }
+.tr-takes select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; font-size: 12px; padding: 2px 4px; }
+.audition-bar { display: flex; align-items: center; gap: 8px; margin: 0 12px 10px; padding: 6px 10px; border-radius: 8px; background: rgba(244, 114, 182, 0.14); border: 1px solid rgba(244, 114, 182, 0.5); font-size: 12px; color: #f9c6df; }
+.toggle-inline { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; cursor: pointer; }

@@ -128,8 +128,11 @@ function useKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (el && (el.tagName === "INPUT" && (el as HTMLInputElement).type !== "range" || el.tagName === "SELECT" || el.tagName === "TEXTAREA")) return;
       const mod = e.metaKey || e.ctrlKey;
+      const type = el?.tagName === "INPUT" ? (el as HTMLInputElement).type : "";
+      // Text fields keep their own keys; a focused checkbox only keeps its plain keys (Space), so
+      // undo / redo / save still work right after toggling one.
+      if (el && ((el.tagName === "INPUT" && type !== "range" && !((type === "checkbox" || type === "radio") && mod)) || el.tagName === "SELECT" || el.tagName === "TEXTAREA")) return;
       const k = e.key;
       if (mod && k.toLowerCase() === "z") {
         e.preventDefault();

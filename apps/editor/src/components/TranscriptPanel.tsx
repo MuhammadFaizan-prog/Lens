@@ -15,17 +15,32 @@ export function TranscriptPanel() {
   const plan = useEditor((s) => s.plan);
   const selected = useEditor((s) => s.selectedWords);
   const fillersList = useEditor((s) => s.project.edits.cleanup.fillers);
+  const takesCfg = useEditor((s) => s.project.edits.takes);
+  const audition = useEditor((s) => s.audition);
   const fps = plan?.output.fps ?? 30;
   const src = plan?.frames[frame]?.src ?? 0;
 
+  const takeCuts = plan?.takeCuts;
+  const groups = plan?.takes;
   const info = useMemo(
     () =>
-      (words ?? []).map((w) => {
+      (words ?? []).map((w, i) => {
         const mid = (w.startMs + w.endMs) / 2;
-        return { deleted: (cuts ?? []).some((c) => mid >= c.startMs && mid < c.endMs), filler: isFiller(w, fillersList) };
+        const altTake = (takeCuts ?? []).some((c) => mid >= c.startMs && mid < c.endMs);
+        const keptTake = !altTake && (groups ?? []).some((g) => { const t = g.takes[g.kept]!; return i >= t.firstWord && i <= t.lastWord; });
+        return { deleted: (cuts ?? []).some((c) => mid >= c.startMs && mid < c.endMs), filler: isFiller(w, fillersList), altTake, keptTake };
       }),
-    [words, cuts, fillersList],
+    [words, cuts, fillersList, takeCuts, groups],
   );
+  // word index -> [group, take] where a take starts (a chip there swaps / previews it)
+  const takeStarts = useMemo(() => {
+    const m = new Map<number, Array<{ g: number; k: number }>>();
+    (groups ?? []).forEach((g, gi) => g.takes.forEach((t, k) => {
+      const at = k === 0 ? Math.min(t.firstWord, g.takes[0]!.firstWord) : t.firstWord;
+      m.set(at, [...(m.get(at) ?? []), { g: gi, k }]);
+    }));
+    return m;
+  }, [groups]);
   const activeIdx = useMemo(() => {
     if (!words) return -1;
     let a = -1;
@@ -67,6 +82,23 @@ export function TranscriptPanel() {
         <h2>Transcript</h2>
         <span className="stat">{words.filter((w) => !w.inferred).length} words</span>
       </header>
+      <div className="tr-takes" data-testid="takes-controls">
+        <label className="toggle-inline">
+          <input type="checkbox" checked={takesCfg.enabled} data-testid="takes-enabled" onChange={(e) => store.setTakesEnabled(e.target.checked)} /> Takes
+        </label>
+        <select value={takesCfg.strategy} disabled={!takesCfg.enabled} data-testid="takes-strategy" aria-label="Which take to keep" onChange={(e) => store.setTakeStrategy(e.target.value as "last" | "best")}>
+          <option value="last">Keep last</option>
+          <option value="best">Keep best</option>
+        </select>
+        <span className="stat" data-testid="takes-count">{groups?.length ? `${groups.length} retake${groups.length > 1 ? "s" : ""}` : takesCfg.enabled ? "no retakes" : ""}</span>
+      </div>
+      {audition && groups?.[audition.group] && (
+        <div className="audition-bar" data-testid="audition-bar">
+          A/B: playing take {audition.take + 1} of {groups[audition.group]!.takes.length}
+          <button className="chip-btn" data-testid="audition-keep" onClick={() => store.keepTake(audition.group, audition.take)}>Keep it</button>
+          <button className="chip-btn" data-testid="audition-stop" onClick={() => store.endAudition()}>Back</button>
+        </div>
+      )}
       <div className="tr-actions">
         <button className="chip-btn accent" disabled={!pendingFillers} data-testid="remove-fillers" onClick={() => store.removeFillers()} title="Cut every filler word (one undo step)">
           <Icon name="sparkle" /> {pendingFillers ? `Remove ${pendingFillers} filler${pendingFillers === 1 ? "" : "s"}` : "No fillers left"}
@@ -74,6 +106,11 @@ export function TranscriptPanel() {
         {selected.length > 0 && !selDeleted && (
           <button className="chip-btn danger" data-testid="delete-words" onClick={() => store.deleteWords(selected)} title="Cut the selected words (Del)">
             <Icon name="scissors" /> Cut {selected.length}
+          </button>
+        )}
+        {selected.length > 0 && !selDeleted && (
+          <button className="chip-btn" data-testid="mark-retake" onClick={() => store.markRetake(selected)} title="These words are a fumbled take: cut them and keep what follows (reversible)">
+            Mark retake
           </button>
         )}
         {selected.length > 0 && selDeleted && (
@@ -90,12 +127,27 @@ export function TranscriptPanel() {
           return (
             <span key={i} className="tr-wrap">
               {gapBefore && <span className="tr-pause" title={`pause ${((w.startMs - words[i - 1]!.endMs) / 1000).toFixed(1)} s`}>⋯</span>}
+              {(takeStarts.get(i) ?? []).map(({ g, k }) => {
+                const grp = groups![g]!;
+                const on = grp.kept === k;
+                return (
+                  <button
+                    key={`chip-${g}-${k}`}
+                    className={`take-chip ${on ? "on" : ""}`}
+                    data-testid={`take-chip-${g}-${k}`}
+                    title={on ? `Take ${k + 1} of ${grp.takes.length} is kept · click to preview` : `Take ${k + 1} of ${grp.takes.length} · click to keep this take`}
+                    onClick={() => (on ? store.audition(g, k) : store.keepTake(g, k))}
+                  >
+                    {on ? "✓" : "⇄"} {k + 1}/{grp.takes.length}
+                  </button>
+                );
+              })}
               <button
                 role="listitem"
-                className={`word ${st.deleted ? "deleted" : ""} ${st.filler ? "filler" : ""} ${selSet.has(i) ? "sel" : ""} ${i === activeIdx ? "active" : ""}`}
+                className={`word ${st.deleted && !st.altTake ? "deleted" : ""} ${st.altTake ? "alt-take" : ""} ${st.keptTake ? "take-kept" : ""} ${st.filler ? "filler" : ""} ${selSet.has(i) ? "sel" : ""} ${i === activeIdx ? "active" : ""}`}
                 data-testid={`word-${i}`}
                 data-start={w.startMs}
-                title={`${timecode(w.startMs, fps)}${st.filler ? " · filler" : ""}${st.deleted ? " · cut" : ""}`}
+                title={`${timecode(w.startMs, fps)}${st.filler ? " · filler" : ""}${st.altTake ? " · alt take (not used)" : st.deleted ? " · cut" : ""}`}
                 onClick={(e) => onWord(i, e)}
               >
                 {w.text}

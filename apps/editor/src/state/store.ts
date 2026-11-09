@@ -4,8 +4,8 @@
  * through useEditor(selector) so the preview can redraw at 60 fps without re-rendering React.
  */
 import { useSyncExternalStore } from "react";
-import { applyZoomPreset, cutsForDeletedWords, isFiller, resolveProject } from "@lens/engine";
-import type { ProjectConfig, RenderPlan, ZoomPresetName } from "@lens/engine";
+import { applyZoomPreset, cutsForDeletedWords, isFiller, resolveProject, withTakeChoice } from "@lens/engine";
+import type { ProjectConfig, RenderPlan, TakeSettings, TakeStrategy, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { History } from "./history";
@@ -50,6 +50,11 @@ export interface EditorState {
   dirty: boolean;
   /** Bumped by any plan change, so views can memo on it. */
   revision: number;
+  /**
+   * A/B preview of one take: the plan is built as if that take were kept (no history entry) and
+   * plays from the take's start; anything else ends it and restores the project's own plan.
+   */
+  audition: { group: number; take: number; endFrame: number } | null;
 }
 
 type Listener = () => void;
@@ -77,6 +82,7 @@ export class EditorStore {
     savedAt: null,
     dirty: false,
     revision: 0,
+    audition: null,
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -135,14 +141,15 @@ export class EditorStore {
     this.notify(`Opened ${name}`);
   }
 
-  private rebuild(project: ProjectConfig): void {
+  private rebuild(project: ProjectConfig, planProject: ProjectConfig = project): void {
     const b = this.s.bundle;
     if (!b) {
       this.set({ project });
       return;
     }
+    if (planProject === project && this.s.audition) this.s = { ...this.s, audition: null };
     const t0 = performance.now();
-    const plan = buildPlan(b, project);
+    const plan = buildPlan(b, planProject);
     const planMs = performance.now() - t0;
     const frame = Math.min(this.s.frame, plan.frames.length - 1);
     const h = this.history;
@@ -164,6 +171,7 @@ export class EditorStore {
 
   /** One finished edit = one undo step. */
   edit(label: string, fn: (p: ProjectConfig) => ProjectConfig): void {
+    if (this.s.audition) this.endAudition();
     this.flushGesture();
     const next = fn(this.history.doc);
     this.history.commit(next, label);
@@ -206,6 +214,7 @@ export class EditorStore {
   }
 
   undo(): void {
+    this.endAudition();
     this.flushGesture();
     const label = this.history.undoLabel;
     if (this.history.undo()) {
@@ -216,6 +225,7 @@ export class EditorStore {
   }
 
   redo(): void {
+    this.endAudition();
     this.flushGesture();
     const label = this.history.redoLabel;
     if (this.history.redo()) {
@@ -289,6 +299,76 @@ export class EditorStore {
     return idx.length;
   }
 
+  // ------------------------------------------------------------------ takes (multi-take)
+
+  private takesEdit(label: string, fn: (t: TakeSettings) => TakeSettings): void {
+    this.endAudition();
+    this.edit(label, (p) => ({ ...p, edits: { ...p.edits, takes: fn(p.edits.takes) } }));
+  }
+
+  setTakesEnabled(on: boolean): void {
+    this.takesEdit(on ? "Turn on takes" : "Turn off takes", (t) => ({ ...t, enabled: on }));
+  }
+
+  setTakeStrategy(strategy: TakeStrategy): void {
+    this.takesEdit(`Takes: keep ${strategy}`, (t) => ({ ...t, strategy }));
+  }
+
+  /** Keep take `take` of group `group` (one undo step). The playhead moves to that take. */
+  keepTake(group: number, take: number): void {
+    const g = this.s.plan?.takes[group];
+    if (!g || take < 0 || take >= g.takes.length || take === g.kept) return;
+    this.takesEdit(`Keep take ${take + 1} of ${g.takes.length}`, (t) => withTakeChoice(t, g, take));
+    this.pause();
+    this.seekSource(g.takes[take]!.startMs);
+    this.notify(`Kept take ${take + 1} of ${g.takes.length}`);
+  }
+
+  /** The selected transcript words become a rejected take; the speech after them is kept. */
+  markRetake(idx: number[]): void {
+    const words = this.s.bundle?.transcript?.words ?? [];
+    if (!idx.length || !words.length) return;
+    const a = words[Math.min(...idx)]!;
+    const b = words[Math.max(...idx)]!;
+    this.takesEdit(`Mark retake`, (t) => ({ ...t, enabled: true, marked: [...t.marked, { startMs: a.startMs, endMs: b.endMs }] }));
+    this.set({ selectedWords: [] });
+  }
+
+  /** "Not a retake": dismiss a detected group, or remove a user-marked one. */
+  dismissTakeGroup(group: number): void {
+    const g = this.s.plan?.takes[group];
+    if (!g) return;
+    this.takesEdit("Not a retake", (t) =>
+      g.manual
+        ? { ...t, marked: t.marked.filter((r) => !(r.startMs < g.endMs && r.endMs > g.startMs)) }
+        : { ...t, ignored: [...t.ignored, g.startMs] },
+    );
+  }
+
+  /** A/B preview: play take `take` of group `group` as if it were kept, without editing the project. */
+  audition(group: number, take: number): void {
+    const plan = this.s.plan;
+    const g = plan?.takes[group];
+    if (!g || !this.s.bundle) return;
+    this.pause();
+    const p = this.history.doc;
+    const trial: ProjectConfig = { ...p, edits: { ...p.edits, takes: withTakeChoice(p.edits.takes, g, take) } };
+    this.rebuild(p, trial);
+    const np = this.s.plan!;
+    const t = g.takes[take]!;
+    const start = Math.max(0, frameForSource(np, t.startMs) - Math.round(np.output.fps * 0.25));
+    const endFrame = Math.min(np.frames.length - 1, frameForSource(np, t.endMs) + Math.round(np.output.fps * 0.6));
+    this.set({ audition: { group, take, endFrame }, frame: start });
+    this.play(1);
+  }
+
+  endAudition(): void {
+    if (!this.s.audition) return;
+    this.pause();
+    this.s = { ...this.s, audition: null };
+    this.rebuild(this.history.doc);
+  }
+
   // ------------------------------------------------------------------ transport
 
   seek(frame: number): void {
@@ -336,6 +416,15 @@ export class EditorStore {
           this.pause();
           return;
         }
+      }
+      const au = this.s.audition;
+      if (au && f >= au.endFrame) {
+        // the A/B preview played its take: back to the project's own plan, at that take
+        const t = p.takes[au.group]?.takes[au.take];
+        this.set({ frame: au.endFrame });
+        this.endAudition();
+        if (t) this.seekSource(t.startMs);
+        return;
       }
       if (f !== this.s.frame) this.set({ frame: f });
       this.prefetch(f);

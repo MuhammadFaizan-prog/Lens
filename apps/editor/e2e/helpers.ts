@@ -18,6 +18,9 @@ export interface LensState {
   planCuts: Array<{ startMs: number; endMs: number }>;
   zooms: Array<{ startMs: number; endMs: number; scale: number; auto: boolean }>;
   caption: { words: string[]; active: number } | null;
+  takes: Array<{ kept: number; auto: number; manual: boolean; takes: Array<{ startMs: number; endMs: number; firstWord: number; lastWord: number }> }>;
+  takeCuts: Array<{ startMs: number; endMs: number }>;
+  audition: { group: number; take: number; endFrame: number } | null;
   canUndo: boolean;
   canRedo: boolean;
   project: Record<string, any>;
@@ -30,9 +33,9 @@ export async function state(page: Page): Promise<LensState> {
 /** Decoded-frame LRU size in tests (24 in the app): 8 x 1280x720 bitmaps per track keeps Chromium small. */
 export const TEST_MAX_BITMAPS = 8;
 
-export async function openEditor(page: Page): Promise<void> {
+export async function openEditor(page: Page, url = "/"): Promise<void> {
   await page.addInitScript((n) => ((window as any).__lensMaxBitmaps = n), TEST_MAX_BITMAPS);
-  await page.goto("/");
+  await page.goto(url);
   await page.waitForFunction(() => (window as any).__lens?.state().status === "ready", null, { timeout: 90_000 });
   await waitDrawn(page);
 }
