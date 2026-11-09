@@ -201,7 +201,7 @@ def build_demo(manifest: dict, plan: dict, frames: list[np.ndarray], out: Path, 
         steps_out.append({
             "n": st["n"], "stepId": st["stepId"], "label": redact_text(st["label"]), "clickMs": st["clickMs"], "stillMs": st["stillMs"],
             "image": name, "width": W, "height": H,
-            "hotspot": {"x": round(hx, 2), "y": round(hy, 2), "fx": round(hx / W, 6), "fy": round(hy / H, 6), "insideImage": inside},
+            "hotspot": {"x": round(hx, 2), "y": round(hy, 2), "fx": round((hx + 0.5) / W, 6), "fy": round((hy + 0.5) / H, 6), "insideImage": inside},
             "source": {"x": st["x"], "y": st["y"]}, "map": As.as_list(),
             "_uri": _data_uri("image/jpeg", jpg),
         })
@@ -354,8 +354,9 @@ if(/lens-preview/.test(location.hash)&&window.parent!==window){
     } else if(m.type==="lens-demo:go"&&typeof m.index==="number"){show(m.index,false);}
   });
 }
-var h=/^#step-(\d+)/.exec(location.hash);
-show(h?Number(h[1])-1:(location.hash==="#end"?N:0),false);
+function fromHash(){var h=/^#step-(\d+)/.exec(location.hash);return h?Number(h[1])-1:(location.hash==="#end"?N:0);}
+window.addEventListener("hashchange",function(){if(!/lens-preview/.test(location.hash))show(fromHash(),false);});
+show(fromHash(),false);
 })();
 """
 

@@ -127,8 +127,8 @@ def test_hotspot_sits_on_the_click(marker_sessions):
             rows.append({"n": s["n"], "hotspot": [s["hotspot"]["x"], s["hotspot"]["y"]], "marker": [round(mx, 2), round(my, 2)],
                          "dx": round(dx, 3), "dy": round(dy, 3)})
             assert abs(dx) <= HOTSPOT_TOL_PX and abs(dy) <= HOTSPOT_TOL_PX, (name, rows[-1])
-            # the fraction the page uses to place it in the responsive layout
-            assert s["hotspot"]["fx"] == pytest.approx(s["hotspot"]["x"] / s["width"], abs=1e-5)
+            # the fraction the page uses to place it in the responsive layout (pixel centre -> CSS edge)
+            assert s["hotspot"]["fx"] == pytest.approx((s["hotspot"]["x"] + 0.5) / s["width"], abs=1e-5)
         report[name] = rows
     if "zoomed" in marker_sessions:  # the zoom really was applied to step 3's still
         d, res = marker_sessions["zoomed"]
