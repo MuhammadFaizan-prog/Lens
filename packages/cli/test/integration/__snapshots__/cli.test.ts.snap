@@ -166,6 +166,12 @@ exports[`privacy / steps > steps generate drafts labels from clicks; accept make
       "path": "string",
       "value": [
         {
+          "box": {
+            "h": "number",
+            "w": "number",
+            "x": "number",
+            "y": "number",
+          },
           "clickMs": "number",
           "confidence": "number",
           "id": "string",

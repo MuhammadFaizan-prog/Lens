@@ -231,6 +231,38 @@ describe("privacy / steps", () => {
   });
 });
 
+describe("export demo / guide (demand #7)", () => {
+  it("demo + guide from accepted steps; hotspot editor idempotent; no steps / unknown step fail", () => {
+    const empty = smallProject(path.join(dir, "nosteps"));
+    fails(["export", "demo", "-C", empty], 3, "not_found");
+    fails(["export", "demo", "--crf", "3", "-C", P], 2, "usage");
+    const steps = (ok(["get", "/stepLabels/drafts", "-C", P]).value as { state: string }[]).filter((d) => d.state === "accepted").length;
+    expect(steps).toBeGreaterThan(0);
+    const d = ok(["export", "demo", "-C", P]);
+    expect(d.steps.length).toBe(steps);
+    const html = fs.readFileSync(path.join(d.out, "index.html"), "utf8");
+    expect(html).toContain("default-src 'none'");
+    expect((html.match(/data:image\/jpeg;base64,/g) ?? []).length).toBe(steps);
+    expect(JSON.parse(fs.readFileSync(path.join(d.out, "demo.json"), "utf8")).steps.length).toBe(steps);
+    expect(ok(["export", "--format", "demo", "--out", path.join(dir, "demo2"), "-C", P]).kind).toBe("demo");
+    const g = ok(["export", "guide", "-C", P]);
+    expect(g.guide.pages).toBe(steps + 1);
+    for (const f of g.files as string[]) expect(fs.existsSync(f)).toBe(true);
+    expect(fs.readFileSync(path.join(g.out, "guide.pdf")).subarray(0, 5).toString()).toBe("%PDF-");
+    const id = d.steps[0].id as string;
+    const h = idempotent(["demo", "hotspot", id, "--x", "300", "--y", "200", "--tooltip", "Start here", "-C", P]);
+    expect(h.changed).toBe(true);
+    expect(ok(["get", "/demo/hotspots", "-C", P]).value).toEqual([{ stepId: id, x: 300, y: 200, tooltip: "Start here" }]);
+    const d2 = ok(["export", "demo", "--out", path.join(dir, "demo3"), "-C", P]);
+    expect(d2.steps[0].label).toBe("Start here");
+    idempotent(["demo", "hotspot", id, "--clear", "-C", P]);
+    expect(ok(["get", "/demo/hotspots", "-C", P]).value).toEqual([]);
+    fails(["demo", "hotspot", "zzz", "--x", "1", "-C", P], 3, "not_found");
+    fails(["demo", "hotspot", id, "-C", P], 2, "usage");
+    fails(["set", "/demo/cta/url", "javascript:alert(1)", "-C", P], 4, "invalid");
+  });
+});
+
 describe("root sandbox (CLI --root)", () => {
   it("refuses projects and outputs outside the root", () => {
     const root = path.dirname(P);

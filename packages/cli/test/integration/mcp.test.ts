@@ -19,6 +19,7 @@ const EXPECTED_TOOLS = [
   "project_new", "project_open", "project_info", "plan", "export", "render_frame", "transcribe", "translate",
   "takes_list", "takes_set", "privacy_scan", "privacy_review", "steps_generate", "steps_review",
   "preset_list", "preset_apply", "brand_set", "get", "set", "zoom_add", "cut_add", "annotate", "captions", "run_script",
+  "export_demo", "export_guide",
 ];
 
 let base: string;
@@ -123,6 +124,21 @@ describe("lens-mcp", () => {
     await refused("set", { pointer: "/captions/nope", value: 1 }, "invalid");
     await refused("zoom_add", { start: 1, end: 2, shell: "rm -rf /" }, "usage");
     await refused("no_such_tool", {}, "usage");
+  });
+
+  it("export_demo / export_guide (demand #7): no accepted steps is not_found; after steps review both export", async () => {
+    await ok("steps_review", { state: "dismissed" }).catch(() => undefined);
+    await refused("export_demo", {}, "not_found");
+    await ok("steps_generate");
+    await ok("steps_review", { state: "accepted" });
+    const d = (await ok("export_demo")).structuredContent;
+    expect(d.kind).toBe("demo");
+    expect(d.steps.length).toBeGreaterThan(0);
+    expect(fs.readFileSync(path.join(d.out, "index.html"), "utf8")).toContain("lens-demo-data");
+    const g = (await ok("export_guide", { out: "guide-out" })).structuredContent;
+    expect(g.guide.pages).toBe(d.steps.length + 1);
+    expect(g.out).toBe(fs.realpathSync(path.join(root, "guide-out")));
+    await refused("export_demo", { out: "../demo-escape" });
   });
 
   it("refuses every path outside the root", async () => {
