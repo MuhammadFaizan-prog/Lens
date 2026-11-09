@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
-import type { MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
-import { store, useEditor } from "../state/store";
+import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
+import { store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { deleteSelection } from "./Timeline";
@@ -243,11 +243,125 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
       <Slider label="Size" value={cs.fontSize} min={24} max={84} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
       <Segmented label="Position" value={cs.position === "custom" ? "bottom" : cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
       <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
+      <Slider label="Chars / line" value={cs.maxCharsPerLine} min={0} max={80} step={1} format={(v) => (v ? String(v) : "off")} testId="caption-chars" onChange={(v) => t("Characters per line", () => ({ maxCharsPerLine: v }))} />
       <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))}
         onReset={() => store.edit("Highlight follows theme", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, highlightColor: "@highlight" } } }))} />
       <ColorInput label="Text" value={cs.textColor} onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
       <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
+    </Section>
+  );
+}
+
+function download(name: string, text: string): void {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** One translated segment beside its source (demand #8): edit the translation, commit on blur or Enter. */
+function SegmentRow({ language, rtl, seg }: { language: string; rtl: boolean; seg: CaptionSegment }) {
+  const [text, setText] = useState(seg.text);
+  const [prev, setPrev] = useState(seg.text);
+  if (prev !== seg.text) {
+    setPrev(seg.text);
+    setText(seg.text);
+  }
+  const commit = () => store.editTranslation(language, seg.id, text);
+  return (
+    <div className="tr-row" data-testid={`tr-seg-${seg.id}`}>
+      <button type="button" className="tr-time stat" title="Go to this segment" onClick={() => store.seekSource(seg.startMs + 1)}>
+        {(seg.startMs / 1000).toFixed(1)}s
+      </button>
+      <div className="tr-src" data-testid={`tr-src-${seg.id}`}>{seg.source}</div>
+      <textarea
+        className="tr-text"
+        dir={rtl ? "rtl" : "ltr"}
+        lang={language}
+        rows={2}
+        value={text}
+        aria-label={`Translation of: ${seg.source}`}
+        data-testid={`tr-text-${seg.id}`}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            commit();
+          }
+          e.stopPropagation();
+        }}
+      />
+      {seg.edited && <span className="tr-edited stat">edited</span>}
+    </div>
+  );
+}
+
+function LanguagesSection({ p }: { p: ProjectConfig }) {
+  const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
+  const srcLang = useEditor((s) => s.bundle?.transcript?.language || "en");
+  const run = useEditor((s) => s.translateRun);
+  const tr = p.translations;
+  const missing = TRANSLATE_LANGUAGES.filter((l) => !tr.tracks.some((t) => t.language === l.code));
+  const [pick, setPick] = useState<string>(missing[0]?.code ?? TRANSLATE_LANGUAGES[0]!.code);
+  const busy = !!run && ["starting", "running"].includes(run.state);
+  const current = tr.language ? tr.tracks.find((t) => t.language === tr.language) : undefined;
+  const nameOf = (code: string) => TRANSLATE_LANGUAGES.find((l) => l.code === code);
+  const langOptions = [
+    { value: "", label: `${srcLang === "en" ? "English" : srcLang} (source)` },
+    ...tr.tracks.map((t) => ({ value: t.language, label: `${t.name ?? t.language}${nameOf(t.language) ? ` · ${nameOf(t.language)!.english}` : ""}` })),
+  ];
+  const pct = run && run.total ? ((run.index + run.done / run.total) / Math.max(1, run.languages)) * 100 : run?.stage === "done" ? 100 : 4;
+  return (
+    <Section title="Languages" aside={<span className="stat">on-device</span>}>
+      <Select label="Caption language" value={tr.language ?? ""} options={langOptions} testId="caption-language" onChange={(v) => store.setCaptionLanguage(v || null)} />
+      <div className="ctl tr-translate">
+        <span className="ctl-label">Translate to…</span>
+        <select value={pick} aria-label="Translate to" data-testid="translate-to" onChange={(e) => setPick(e.target.value)} disabled={busy}>
+          {TRANSLATE_LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.name} · {l.english}
+              {tr.tracks.some((t) => t.language === l.code) ? " (redo)" : ""}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn primary" data-testid="translate-go" disabled={busy || !hasWords} onClick={() => void store.translateCaptions([pick])}>
+          {busy ? "Translating…" : "Translate"}
+        </button>
+      </div>
+      {run && run.state !== "done" && (
+        <div className="pv-progress" data-testid="translate-progress">
+          <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)}><div style={{ width: `${pct}%` }} /></div>
+          <span className="stat">
+            {run.state === "error" ? `Translation failed: ${run.error}` : run.stage === "download" ? `Downloading the ${run.language} model (once)…` : run.total ? `${nameOf(run.language)?.english ?? run.language}: ${run.done} / ${run.total} segments` : "Loading model…"}
+          </span>
+        </div>
+      )}
+      {!hasWords && <p className="note">Translation needs a transcript.</p>}
+      {current && (
+        <>
+          <div className="tr-actions">
+            <button type="button" className="btn" data-testid="download-srt" onClick={() => { const f = store.subtitleFile(current.language, "srt"); if (f) download(f.name, f.text); }}>.srt</button>
+            <button type="button" className="btn" data-testid="download-vtt" onClick={() => { const f = store.subtitleFile(current.language, "vtt"); if (f) download(f.name, f.text); }}>.vtt</button>
+            <button type="button" className="btn ghost" data-testid="remove-translation" onClick={() => store.removeTranslation(current.language)}>Remove {current.name ?? current.language}</button>
+          </div>
+          <div className="tr-list" data-testid="translation-list">
+            <div className="tr-head stat"><span>Source</span><span>{current.name ?? current.language}</span></div>
+            {current.segments.map((seg) => (
+              <SegmentRow key={seg.id} language={current.language} rtl={current.rtl} seg={seg} />
+            ))}
+          </div>
+          {current.engine && <p className="note">Machine translation by {current.engine.model} ({current.engine.licence}), on this computer. See About for attribution.</p>}
+        </>
+      )}
+      {!current && tr.tracks.length > 0 && (
+        <div className="tr-actions">
+          <button type="button" className="btn" data-testid="download-srt" onClick={() => { const f = store.subtitleFile(null, "srt"); if (f) download(f.name, f.text); }}>.srt</button>
+          <button type="button" className="btn" data-testid="download-vtt" onClick={() => { const f = store.subtitleFile(null, "vtt"); if (f) download(f.name, f.text); }}>.vtt</button>
+        </div>
+      )}
     </Section>
   );
 }
@@ -303,7 +417,12 @@ export function Inspector() {
         {tab === "zoom" && <ZoomTab p={p} />}
         {tab === "cursor" && <CursorTab p={p} />}
         {tab === "camera" && <CameraTab p={p} />}
-        {tab === "captions" && <CaptionsTab p={p} />}
+        {tab === "captions" && (
+          <>
+            <CaptionsTab p={p} />
+            <LanguagesSection p={p} />
+          </>
+        )}
         {tab === "audio" && <AudioTab p={p} />}
       </div>
       <footer className="insp-foot">plan rebuilt in {planMs.toFixed(1)} ms</footer>

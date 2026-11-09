@@ -30,7 +30,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from . import annotations as ann
-from .annotations import draw_items, image_premul, resolve_asset, set_fonts, text_font
+from .annotations import draw_items, image_premul, resolve_asset, set_fonts, shaped_font, text_font
 from .audio import build_audio, export_gif, mux_audio
 
 FONT_CANDIDATES = [
@@ -365,8 +365,21 @@ def apply_masks(view: np.ndarray, masks: list[dict], to_rect, kx: float, ky: flo
 
 # ---------------------------------------------------------------- captions (AI-03)
 
+_ARABIC_RANGES = ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF))
+
+
+def has_arabic_script(s: str) -> bool:
+    """Arabic-script text (Arabic, Urdu, Persian); mirrors translation.ts hasArabicScript."""
+    return any(a <= ord(c) <= b for c in s for a, b in _ARABIC_RANGES)
+
+
 def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
-    """Styled caption: wrapped lines, optional pill background, per-word highlight."""
+    """Styled caption: wrapped lines, optional pill background, per-word highlight.
+
+    Translated captions (demand #8): Arabic-script words use the plan's script font with RAQM
+    shaping (HarfBuzz joining, right-to-left glyph order, no kerning, as the preview draws them);
+    a right-to-left caption carries each line's left-to-right word order in cap["visual"]
+    (word-level bidi from the engine). All words of a line share one baseline."""
     if isinstance(cap, str):  # plans from before caption styling
         cap = {"text": cap, "words": cap.split(), "lines": [len(cap.split())], "active": -1}
     words = cap["words"]
@@ -375,14 +388,30 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     size = max(10, int(round(cs.get("fontSize", H * 0.04))))
     # theme / brand font (demand #9): same BASIC-layout file the preview loads; default unchanged
     font = text_font(size, True, cs["font"]) if cs.get("font") else _font(size)
-    space = d.textlength(" ", font=font)
+    sfont = shaped_font(size, True, cs["scriptFont"]) if cs.get("scriptFont") else None
+    script = [bool(sfont) and has_arabic_script(w) for w in words]
+    # a right-to-left line is one Arabic-script run: its spaces come from the script font, shaped, as
+    # a full-line shaper (HarfBuzz itemising by script) would take them; left-to-right lines unchanged
+    rtl_line = bool(cap.get("visual")) and any(script)
+    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else d.textlength(" ", font=font)
+
+    def wlen(j: int) -> float:
+        if script[j]:
+            return d.textlength(words[j], font=sfont, direction="rtl", features=["-kern"])
+        return d.textlength(words[j], font=font)
+
     lines, i = [], 0
     for n in cap["lines"]:
         lines.append(list(range(i, i + n)))
         i += n
-    widths = [[d.textlength(words[j], font=font) for j in ln] for ln in lines]
+    widths = [[wlen(j) for j in ln] for ln in lines]
     line_w = [sum(ws) + space * (len(ws) - 1) for ws in widths]
     asc, desc = font.getmetrics() if hasattr(font, "getmetrics") else (size, size // 4)
+    main_asc = asc
+    s_asc = asc
+    if any(script):
+        s_asc, s_desc = sfont.getmetrics()
+        asc, desc = max(asc, s_asc), max(desc, s_desc)
     lh = int((asc + desc) * 1.12)
     block_h = lh * len(lines)
     pos = cs.get("position", "bottom")
@@ -403,11 +432,19 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     text_rgb = hex_to_rgb(cs.get("textColor", "#ffffff"))
     hi_rgb = hex_to_rgb(cs.get("highlightColor", "#ffd23f"))
     active = cap.get("active", -1) if cs.get("wordHighlight", True) else -1
+    visual = cap.get("visual")
     for li, ln in enumerate(lines):
         x = (W - line_w[li]) / 2
         y = top + li * lh
-        for j, wj in zip(ln, widths[li]):
-            d.text((x, y), words[j], font=font, fill=(*(hi_rgb if j == active else text_rgb), 255))
+        order = visual[li] if visual else ln
+        for j in order:
+            wj = widths[li][ln.index(j)]
+            fill = (*(hi_rgb if j == active else text_rgb), 255)
+            if script[j]:
+                # each word from its own ascender, so every word sits on the line's baseline (y + asc)
+                d.text((x, y + asc - s_asc), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"])
+            else:
+                d.text((x, y + asc - main_asc), words[j], font=font, fill=fill)
             x += wj + space
 
 

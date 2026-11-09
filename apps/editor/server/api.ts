@@ -17,6 +17,8 @@
  *   GET  /api/privacy/thumb/:name    a review thumbnail (.lens-cache/privacy/)
  *   POST /api/steps                  start `redact/lens-redact steps` (auto step labels) -> { id } (cached per screen.mp4)
  *   GET  /api/steps/:id              { state, error, result }
+ *   POST /api/translate              { langs } -> { id }: translate/lens-translate on the bundle's transcript.json
+ *   GET  /api/translate/:id          { state, language, index, languages, done, total, error, result: { tracks, stats } }
  *
  * A bundle is a folder with screen.mp4, meta.json, events.jsonl and optionally cam.mp4,
  * transcript.json, project.json and audio files. Default: $LENS_BUNDLE or apps/editor/sample
@@ -123,6 +125,79 @@ interface StepJob {
 }
 
 const stepJobs = new Map<string, StepJob>();
+
+interface TranslateJob {
+  id: string;
+  state: "running" | "done" | "error";
+  stage: string;
+  language: string;
+  index: number;
+  languages: number;
+  done: number;
+  total: number;
+  error?: string;
+  result?: { tracks: unknown[]; stats: unknown };
+  startedAt: number;
+  finishedAt?: number;
+}
+
+const translateJobs = new Map<string, TranslateJob>();
+
+/** Caption translation (demand #8): on-device lens-translate over the bundle transcript, one track per language. */
+function startTranslate(bundle: string, langs: string[]): TranslateJob {
+  const id = "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const job: TranslateJob = { id, state: "running", stage: "start", language: langs[0] ?? "", index: 0, languages: langs.length, done: 0, total: 0, startedAt: Date.now() };
+  translateJobs.set(id, job);
+  const transcript = path.join(bundle, "transcript.json");
+  const out = path.join(bundle, ".lens-cache", "translate", id);
+  if (!fs.existsSync(transcript)) {
+    job.state = "error";
+    job.error = "this recording has no transcript";
+    return job;
+  }
+  if (!langs.length || langs.some((l) => !/^[a-z]{2,3}$/.test(l))) {
+    job.state = "error";
+    job.error = "choose at least one language";
+    return job;
+  }
+  fs.mkdirSync(out, { recursive: true });
+  const py = spawn("python3", [path.join(ROOT, "translate", "lens-translate"), transcript, "--to", langs.join(","), "-o", out, "--progress"], { cwd: ROOT });
+  let err = "";
+  let buf = "";
+  let stats: unknown = null;
+  py.stdout.on("data", (d: Buffer) => {
+    buf += d.toString();
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      try {
+        const ev = JSON.parse(line) as Record<string, unknown>;
+        job.stage = String(ev.stage ?? job.stage);
+        if (typeof ev.language === "string") job.language = ev.language;
+        if (typeof ev.index === "number") job.index = ev.index;
+        if (typeof ev.done === "number") job.done = ev.done;
+        if (typeof ev.total === "number") job.total = ev.total;
+        if (ev.stage === "done") stats = ev.stats;
+      } catch {
+        // not a progress line
+      }
+    }
+  });
+  py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+  py.on("close", (code) => {
+    job.finishedAt = Date.now();
+    try {
+      if (code !== 0) throw new Error(err.trim().split("\n").slice(-3).join("\n") || `lens-translate exited ${code}`);
+      const tracks = langs.map((l) => JSON.parse(fs.readFileSync(path.join(out, `${l}.track.json`), "utf8")));
+      job.result = { tracks, stats };
+      job.state = "done";
+    } catch (e) {
+      job.state = "error";
+      job.error = e instanceof Error ? e.message : String(e);
+    }
+  });
+  return job;
+}
 
 /** Draft step labels from the clicks in events.jsonl + local OCR; cached next to the frames by screen.mp4's mtime. */
 function startSteps(bundle: string): StepJob {
@@ -423,6 +498,18 @@ export function apiMiddleware() {
         const job = stepJobs.get(m[1]!);
         if (!job) return sendJson(res, { error: "no such run" }, 404);
         return sendJson(res, { id: job.id, state: job.state, error: job.error, result: job.state === "done" ? job.result : undefined,
+          seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if (url.pathname === "/api/translate" && req.method === "POST") {
+        const body = JSON.parse((await readBody(req)) || "{}") as { langs?: string[] };
+        const job = startTranslate(bundle, body.langs ?? []);
+        return sendJson(res, { id: job.id, state: job.state, error: job.error });
+      }
+      if ((m = /^\/api\/translate\/([a-z0-9]+)$/.exec(url.pathname))) {
+        const job = translateJobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such run" }, 404);
+        return sendJson(res, { id: job.id, state: job.state, stage: job.stage, language: job.language, index: job.index, languages: job.languages,
+          done: job.done, total: job.total, error: job.error, result: job.state === "done" ? job.result : undefined,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       return sendJson(res, { error: "unknown endpoint" }, 404);

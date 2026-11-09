@@ -21,3 +21,4 @@ export * from "./brand.js";
 export * from "./themeSettings.js";
 export * from "./presets.js";
 export * from "./theme.js";
+export * from "./translation.js";

@@ -88,6 +88,8 @@ export interface Word {
    * never shown in captions.
    */
   inferred?: boolean;
+  /** Translated caption words (demand #8): index of the segment the word belongs to; caption blocks never cross segments. */
+  segment?: number;
 }
 
 export interface TimeRange {

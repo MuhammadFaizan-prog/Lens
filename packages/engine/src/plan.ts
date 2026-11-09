@@ -7,10 +7,11 @@ import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events
 import { layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
-import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, type SlideSpan } from "./timeline.js";
+import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
 import { resolveTakes, type TakeGroup } from "./takes.js";
-import { captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
+import { ARABIC_FONT, hasArabicScript, trackWords } from "./translation.js";
+import { subtitleCues, captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
 import { applyTheme } from "./theme.js";
 import type { WatermarkPlan } from "./brand.js";
@@ -44,7 +45,13 @@ export interface RenderPlan {
     /** Webcam crop [x, y, w, h] in camera px, or null. */
     cameraCrop: [number, number, number, number] | null;
     /** Caption style with fontSize already scaled to the output resolution. */
-    captions: CaptionStyle & { wordHighlight: boolean };
+    captions: CaptionStyle & {
+      wordHighlight: boolean;
+      /** Family for Arabic-script words (demand #8; shaped, right to left); in plan.fonts. */
+      scriptFont?: string;
+      /** Language of the burned-in captions when it is a translation. */
+      language?: string;
+    };
   };
   export: ProjectConfig["export"];
   /** Audio mix instructions, or null when the export is silent. */
@@ -58,6 +65,11 @@ export interface RenderPlan {
   /** The part of cuts that removes rejected takes. */
   takeCuts: TimeRange[];
   zoomSegments: ZoomSegment[];
+  /**
+   * Caption cues on the output clock in the caption language (demand #8), wrapped like the burned-in
+   * caption: what SRT / VTT export writes. Empty when captions are off.
+   */
+  subtitles: Array<{ startMs: number; endMs: number; text: string }>;
   /** Text slides on the output clock (demand #4): each holds its source time and has no audio. */
   slides: SlideSpan[];
   /**
@@ -163,7 +175,13 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const shortcuts = project.shortcuts.enabled ? shortcutOverlays(events, project.shortcuts.displayMs) : [];
   // Words removed by any cut (transcript deletions, manual cuts, cleanup) never appear in captions.
   const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
-  const captions = project.captions.enabled ? captionBlocks(shownWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs) : [];
+  // Translated captions (demand #8): the selected language's track, re-timed onto the speech that survives the cuts.
+  const track = project.translations.language ? project.translations.tracks.find((tr) => tr.language === project.translations.language) : undefined;
+  const capWords = track ? trackWords(track, words.length ? words : null, allCuts) : shownWords;
+  const capChars = project.captions.style.maxCharsPerLine;
+  const captions = project.captions.enabled ? captionBlocks(capWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, capChars) : [];
+  const capRtl = !!track?.rtl;
+  const capFonts = track && captions.some((b) => b.words.some((w) => hasArabicScript(w.text))) ? [ARABIC_FONT] : [];
 
   const annSpace = { cropX: crop.x, cropY: crop.y, width: out.width, height: out.height, resScale, palette: theme.palette };
   const numbers = badgeNumbers(project.annotations);
@@ -208,7 +226,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       },
       masks: masksAt(masks, src),
       shortcut: sc ? sc.label : null,
-      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight) : null,
+      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight, capChars, capRtl) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
     });
@@ -242,6 +260,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
         ...project.captions.style,
         fontSize: project.captions.style.fontSize * resScale,
         wordHighlight: project.captions.wordHighlight,
+        ...(capFonts.length ? { scriptFont: ARABIC_FONT.family } : {}),
+        ...(track ? { language: track.language } : {}),
       },
     },
     export: project.export,
@@ -251,8 +271,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     takes: takes.groups,
     takeCuts: takes.cuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     zoomSegments,
+    subtitles: subtitleCues(captions, project.captions.style.maxWordsPerLine, capChars, (src) => sourceToOutput(timeline, src) ?? sourceToOutput(timeline, src - 1)),
     slides: slideSpans.map((sp) => ({ id: sp.id, outStart: r2(sp.outStart), outEnd: r2(sp.outEnd), srcAt: r2(sp.srcAt) })),
-    ...(theme.fonts.length ? { fonts: theme.fonts } : {}),
+    ...(theme.fonts.length || capFonts.length ? { fonts: [...theme.fonts, ...capFonts] } : {}),
     ...(theme.watermark ? { watermark: theme.watermark } : {}),
     frames: planFrames,
   };

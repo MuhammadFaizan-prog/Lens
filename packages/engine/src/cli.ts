@@ -5,13 +5,14 @@ import { buildRenderPlan } from "./plan.js";
 import { resolveProject, ProjectValidationError } from "./project.js";
 import { applyPrivacyScan, privacyCounts, reviewPrivacy } from "./privacy.js";
 import { applyStepDrafts, reviewSteps } from "./annotations.js";
-import { parseTranscript, TranscriptError } from "./transcript.js";
+import { parseTranscript, toSrt, toVtt, TranscriptError } from "./transcript.js";
 import type { RecordingMeta } from "./types.js";
 import { applyPreset, parsePreset, PresetError, PRESET_SECTIONS, type PresetSection } from "./presets.js";
 
 const USAGE = `lens-plan --meta meta.json --events events.jsonl [--project project.json] [--words transcript.json]
           [--privacy-scan privacy.json [--accept-privacy]] [--step-labels steps.json [--accept-steps]]
-          [--preset look.lenspreset [--preset-sections look,zoom,...]] [--project-out project.json] --out plan.json
+          [--preset look.lenspreset [--preset-sections look,zoom,...]] [--captions-language es|source]
+          [--srt captions.srt] [--vtt captions.vtt] [--project-out project.json] --out plan.json
 
 Builds a render plan (per-frame camera, cursor, clicks, layout, overlays) from a cursorless
 recording's metadata and its input-event log. The compositor renders the plan to video.
@@ -20,7 +21,9 @@ recording's metadata and its input-event log. The compositor renders the plan to
 kept); --accept-privacy accepts every detection, so each becomes a tracked mask. --step-labels merges
 auto step-label drafts (lens-redact steps output); --accept-steps accepts them all as numbered badges. --project-out
 writes the resulting project. --preset applies a .lenspreset (all sections, or only --preset-sections:
-${PRESET_SECTIONS.join(", ")}) before planning. A warning is printed while detections are still pending review.`;
+${PRESET_SECTIONS.join(", ")}) before planning. A warning is printed while detections are still pending review.
+--captions-language picks the caption track (a translation in project.translations, or "source");
+--srt / --vtt write the captions in that language on the output clock (cuts, speed, slides applied).`;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -57,6 +60,8 @@ function main(): number {
     const stepsPath = arg("step-labels");
     if (stepsPath) project = applyStepDrafts(project, JSON.parse(readFileSync(stepsPath, "utf8")).drafts, new Date().toISOString());
     if (process.argv.includes("--accept-steps")) project = reviewSteps(project, null, "accepted");
+    const capLang = arg("captions-language");
+    if (capLang) project = resolveProject({ ...project, translations: { ...project.translations, language: capLang === "source" ? null : capLang } });
     const projectOut = arg("project-out");
     if (projectOut) writeFileSync(projectOut, JSON.stringify(project, null, 1));
     const pc = privacyCounts(project);
@@ -65,6 +70,10 @@ function main(): number {
     const transcript = wordsPath ? parseTranscript(JSON.parse(readFileSync(wordsPath, "utf8"))) : null;
     const plan = buildRenderPlan({ meta, events, project, words: transcript?.words ?? [], pauses: transcript?.pauses });
     writeFileSync(outPath, JSON.stringify(plan));
+    const srt = arg("srt");
+    if (srt) writeFileSync(srt, toSrt(plan.subtitles));
+    const vtt = arg("vtt");
+    if (vtt) writeFileSync(vtt, toVtt(plan.subtitles, project.translations.language ?? transcript?.language ?? undefined));
     const cleaned = plan.cleanupCuts.length ? `, ${plan.cleanupCuts.length} cleanup cuts` : "";
     console.log(`plan: ${plan.output.frames} frames ${plan.output.width}x${plan.output.height}@${plan.output.fps}, ${plan.zoomSegments.length} zoom segments${cleaned} -> ${outPath}`);
     return 0;

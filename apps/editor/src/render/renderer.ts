@@ -11,7 +11,7 @@
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
  */
-import type { PlanFrame, RenderPlan } from "@lens/engine";
+import { hasArabicScript, type PlanFrame, type RenderPlan } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
@@ -500,21 +500,46 @@ export class PlanRenderer {
     if (!words.length) return;
     const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
     g.save();
-    g.font = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
+    const mainFont = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
+    // demand #8: Arabic-script words (Urdu, Arabic) in the plan's script font, shaped right to left
+    const scriptFont = cs.scriptFont ? `bold ${size}px ${fontCss(cs.scriptFont, FONT_STACK)}` : null;
+    const isScript = words.map((w) => !!scriptFont && hasArabicScript(w));
+    const useFont = (j: number) => {
+      g.font = isScript[j] ? scriptFont! : mainFont;
+      (g as unknown as { direction: string }).direction = isScript[j] ? "rtl" : "ltr";
+    };
+    // a right-to-left line is one Arabic-script run: its spaces come from the script font (as in the compositor)
+    const rtlLine = !!cap.visual && isScript.some(Boolean);
+    g.font = rtlLine ? scriptFont! : mainFont;
     setNoKerning(g);
     g.textBaseline = "alphabetic";
+    g.textAlign = "left";
+    (g as unknown as { direction: string }).direction = rtlLine ? "rtl" : "ltr";
     const space = g.measureText(" ").width;
+    g.font = mainFont;
     const lines: number[][] = [];
     let i = 0;
     for (const n of cap.lines) {
       lines.push(Array.from({ length: n }, (_, j) => i + j));
       i += n;
     }
-    const widths = lines.map((ln) => ln.map((j) => g.measureText(words[j]!).width));
+    const widths = lines.map((ln) => ln.map((j) => {
+      useFont(j);
+      return g.measureText(words[j]!).width;
+    }));
+    g.font = mainFont;
+    (g as unknown as { direction: string }).direction = "ltr";
     const lineW = widths.map((ws) => ws.reduce((a, b) => a + b, 0) + space * (ws.length - 1));
     const fm = g.measureText("Hg");
-    const asc = Math.ceil(fm.fontBoundingBoxAscent);
-    const desc = Math.ceil(fm.fontBoundingBoxDescent);
+    let asc = Math.ceil(fm.fontBoundingBoxAscent);
+    let desc = Math.ceil(fm.fontBoundingBoxDescent);
+    if (isScript.some(Boolean)) {
+      g.font = scriptFont!;
+      const sm = g.measureText("\u0628");
+      asc = Math.max(asc, Math.ceil(sm.fontBoundingBoxAscent));
+      desc = Math.max(desc, Math.ceil(sm.fontBoundingBoxDescent));
+      g.font = mainFont;
+    }
     const lh = Math.trunc((asc + desc) * 1.12);
     const blockH = lh * lines.length;
     const pos = cs.position ?? "bottom";
@@ -534,11 +559,16 @@ export class PlanRenderer {
     lines.forEach((ln, li) => {
       let x = (W - lineW[li]!) / 2;
       const y = top + li * lh;
-      ln.forEach((j, n) => {
+      // right-to-left captions carry their left-to-right drawing order (word-level bidi)
+      const order = cap.visual?.[li] ?? ln;
+      for (const j of order) {
+        const n = ln.indexOf(j);
+        useFont(j);
         g.fillStyle = j === active ? cs.highlightColor ?? "#ffd23f" : cs.textColor ?? "#ffffff";
+        // every word sits on the line's baseline (line top + the taller font's ascent), as in the compositor
         g.fillText(words[j]!, x, y + asc);
         x += widths[li]![n]! + space;
-      });
+      }
     });
     g.restore();
   }

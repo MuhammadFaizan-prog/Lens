@@ -1,0 +1,17 @@
+[project]
+name = "lens-translate"
+version = "0.1.0"
+description = "Lens on-device caption translation: per-segment local machine translation into caption tracks, SRT and WebVTT"
+requires-python = ">=3.10"
+dependencies = ["ctranslate2>=4.0", "sentencepiece>=0.2"]
+license = { text = "UNLICENSED" }
+
+[project.scripts]
+lens-translate = "lens_translate.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lens_translate"]

@@ -1,5 +1,6 @@
 import { mergeRanges } from "./timeline.js";
 import type { TimeRange, Word } from "./types.js";
+import { visualOrderRtl } from "./translation.js";
 
 /**
  * Transcript JSON written by the local speech-to-text (transcribe/lens_transcribe, lens-transcribe
@@ -188,8 +189,12 @@ export interface CaptionBlock {
   words: Word[];
 }
 
-/** Group words into caption blocks (G01/G02): break on punctuation, word count, or duration. */
-export function captionBlocks(words: Word[], maxWords: number, maxBlockMs: number): CaptionBlock[] {
+/**
+ * Group words into caption blocks (G01/G02): break on punctuation, word count, duration, a change
+ * of translated segment (demand #8), or when the block would need more than two lines of
+ * maxCharsPerLine characters (0 = no character limit).
+ */
+export function captionBlocks(words: Word[], maxWords: number, maxBlockMs: number, maxCharsPerLine = 0): CaptionBlock[] {
   const out: CaptionBlock[] = [];
   let cur: Word[] = [];
   const flush = () => {
@@ -197,13 +202,41 @@ export function captionBlocks(words: Word[], maxWords: number, maxBlockMs: numbe
     out.push({ startMs: cur[0]!.startMs, endMs: cur[cur.length - 1]!.endMs, text: cur.map((w) => w.text).join(" "), words: cur });
     cur = [];
   };
+  const chars = (ws: Word[]) => ws.reduce((n, w) => n + [...w.text].length, 0) + Math.max(0, ws.length - 1);
   for (const w of words) {
     if (cur.length && (cur.length >= maxWords || w.endMs - cur[0]!.startMs > maxBlockMs)) flush();
+    if (cur.length && w.segment !== cur[cur.length - 1]!.segment) flush();
+    if (cur.length && maxCharsPerLine > 0 && chars([...cur, w]) > maxCharsPerLine * 2) flush();
     cur.push(w);
-    if (/[.!?]$/.test(w.text)) flush();
+    if (/[.!?\u061F\u06D4]["')\]]?$/u.test(w.text)) flush();
   }
   flush();
   return out;
+}
+
+/**
+ * Subtitle cues from caption blocks (SRT / VTT, demand #8): each block's text wrapped exactly like
+ * the burned-in caption (lines joined with "\n"), times mapped by `toOut` (source -> output time;
+ * null drops the block). Text is in logical order; players apply bidi for right-to-left languages.
+ */
+export function subtitleCues(
+  blocks: CaptionBlock[],
+  maxWordsPerLine: number,
+  maxCharsPerLine: number,
+  toOut: (srcMs: number) => number | null = (t) => t,
+): Array<{ startMs: number; endMs: number; text: string }> {
+  const cues: Array<{ startMs: number; endMs: number; text: string }> = [];
+  for (const b of blocks) {
+    const a = toOut(b.startMs);
+    const e = toOut(b.endMs);
+    if (a === null || e === null || e <= a) continue;
+    const words = b.words.map((w) => w.text);
+    const lines = wrapLines(words, maxWordsPerLine, maxCharsPerLine);
+    let i = 0;
+    const text = lines.map((n) => { const l = words.slice(i, i + n).join(" "); i += n; return l; }).join("\n");
+    cues.push({ startMs: Math.round(a), endMs: Math.round(e), text });
+  }
+  return cues;
 }
 
 function srtTime(ms: number): string {
@@ -219,6 +252,42 @@ function srtTime(ms: number): string {
 /** SRT export (G05). Pass blocks already mapped to output time. */
 export function toSrt(blocks: Array<{ startMs: number; endMs: number; text: string }>): string {
   return blocks.map((b, i) => `${i + 1}\n${srtTime(b.startMs)} --> ${srtTime(b.endMs)}\n${b.text}\n`).join("\n");
+}
+
+function vttTime(ms: number): string {
+  return srtTime(ms).replace(",", ".");
+}
+
+/**
+ * WebVTT export (demand #8). Pass blocks already mapped to output time. A right-to-left track
+ * gets `direction`-free cues (players apply the Unicode bidi algorithm to the text); the language
+ * goes in a NOTE so the file stays valid for every player.
+ */
+export function toVtt(blocks: Array<{ startMs: number; endMs: number; text: string }>, language?: string): string {
+  const head = language ? `WEBVTT\n\nNOTE language: ${language}\n` : "WEBVTT\n";
+  return head + blocks.map((b, i) => `\n${i + 1}\n${vttTime(b.startMs)} --> ${vttTime(b.endMs)}\n${b.text.replace(/-->/g, "->")}\n`).join("");
+}
+
+/** WebVTT import: cues with optional identifiers and settings; NOTE / STYLE / REGION blocks skipped. */
+export function parseVtt(text: string): Array<{ startMs: number; endMs: number; text: string }> {
+  const toMs = (s: string) => {
+    const m = /(?:(\d+):)?(\d+):(\d+)\.(\d+)/.exec(s);
+    if (!m) throw new Error(`bad VTT time ${s}`);
+    return +(m[1] ?? 0) * 3600000 + +m[2]! * 60000 + +m[3]! * 1000 + +m[4]!.padEnd(3, "0").slice(0, 3);
+  };
+  const body = text.replace(/\r/g, "").replace(/^\uFEFF/, "");
+  if (!/^WEBVTT/.test(body)) throw new Error("not a WebVTT file");
+  return body
+    .split(/\n\s*\n/)
+    .slice(1)
+    .map((block) => block.trim().split("\n"))
+    .filter((lines) => lines.length >= 2 || (lines.length === 1 && lines[0]!.includes("-->")))
+    .filter((lines) => !/^(NOTE|STYLE|REGION)\b/.test(lines[0]!))
+    .map((lines) => {
+      const ti = lines.findIndex((l) => l.includes("-->"));
+      const [a, b] = lines[ti]!.split("-->");
+      return { startMs: toMs(a!.trim()), endMs: toMs(b!.trim().split(/\s+/)[0]!), text: lines.slice(ti + 1).join("\n") };
+    });
 }
 
 /** SRT import (G04). */
@@ -245,13 +314,18 @@ export function parseSrt(text: string): Array<{ startMs: number; endMs: number; 
 export interface CaptionFrame {
   text: string;
   words: string[];
-  /** Word count of each line, after wrapping at maxWordsPerLine. */
+  /** Word count of each line, after wrapping at maxWordsPerLine (and maxCharsPerLine). */
   lines: number[];
   /**
    * Index (within words) of the word to highlight: the word being spoken, or during a gap the
    * last word already spoken. -1 before the block's first word starts or when highlighting is off.
    */
   active: number;
+  /**
+   * Right-to-left caption (demand #8): for each line, the word indices in left-to-right drawing
+   * order (word-level bidi). Absent for left-to-right captions, which draw in index order.
+   */
+  visual?: number[][];
 }
 
 export function wrapWords(count: number, maxWordsPerLine: number): number[] {
@@ -264,17 +338,87 @@ export function wrapWords(count: number, maxWordsPerLine: number): number[] {
   return Array.from({ length: lines }, (_, i) => base + (i < extra ? 1 : 0));
 }
 
+const lineChars = (words: string[], a: number, b: number) => words.slice(a, b).reduce((n, w) => n + [...w].length, 0) + Math.max(0, b - a - 1);
+
+/**
+ * Line breaks for a caption: at most maxWordsPerLine words and (when maxCharsPerLine > 0) at most
+ * maxCharsPerLine characters per line; a single longer word gets a line of its own. Uses the
+ * word-count balance of wrapWords when that already fits, else the fewest lines that fit, balanced
+ * by character count.
+ */
+export function wrapLines(words: string[], maxWordsPerLine: number, maxCharsPerLine = 0): number[] {
+  const byCount = wrapWords(words.length, maxWordsPerLine);
+  if (!(maxCharsPerLine > 0)) return byCount;
+  const fits = (counts: number[]) => {
+    let i = 0;
+    for (const n of counts) {
+      if (n > 1 && lineChars(words, i, i + n) > maxCharsPerLine) return false;
+      i += n;
+    }
+    return true;
+  };
+  if (fits(byCount)) return byCount;
+  const per = Math.max(1, Math.floor(maxWordsPerLine));
+  for (let lines = byCount.length + 1; lines <= words.length; lines++) {
+    const counts = balanceChars(words, lines, per, maxCharsPerLine);
+    if (counts && fits(counts)) return counts;
+  }
+  return words.map(() => 1);
+}
+
+/** Split words into exactly `lines` lines, each ≤ per words, minimising the longest line (DP). */
+function balanceChars(words: string[], lines: number, per: number, maxChars: number): number[] | null {
+  const n = words.length;
+  const INF = Number.POSITIVE_INFINITY;
+  // best[k][i]: minimal max line length placing the first i words on k lines
+  const best = Array.from({ length: lines + 1 }, () => new Array<number>(n + 1).fill(INF));
+  const from = Array.from({ length: lines + 1 }, () => new Array<number>(n + 1).fill(-1));
+  best[0]![0] = 0;
+  for (let k = 1; k <= lines; k++)
+    for (let i = 1; i <= n; i++)
+      for (let j = Math.max(0, i - per); j < i; j++) {
+        if (best[k - 1]![j] === INF) continue;
+        const len = lineChars(words, j, i);
+        const over = i - j > 1 && len > maxChars ? INF : len;
+        const v = Math.max(best[k - 1]![j]!, over);
+        if (v < best[k]![i]!) {
+          best[k]![i] = v;
+          from[k]![i] = j;
+        }
+      }
+  if (best[lines]![n] === INF) return null;
+  const counts: number[] = [];
+  let i = n;
+  for (let k = lines; k > 0; k--) {
+    const j = from[k]![i]!;
+    counts.unshift(i - j);
+    i = j;
+  }
+  return counts;
+}
+
 export function activeWordIndex(words: Word[], tMs: number): number {
   let idx = -1;
   for (let i = 0; i < words.length; i++) if (tMs >= words[i]!.startMs) idx = i;
   return idx;
 }
 
-export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: number, highlight: boolean): CaptionFrame {
-  return {
+export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: number, highlight: boolean, maxCharsPerLine = 0, rtl = false): CaptionFrame {
+  const words = block.words.map((w) => w.text);
+  const lines = wrapLines(words, maxWordsPerLine, maxCharsPerLine);
+  const f: CaptionFrame = {
     text: block.text,
-    words: block.words.map((w) => w.text),
-    lines: wrapWords(block.words.length, maxWordsPerLine),
+    words,
+    lines,
     active: highlight ? activeWordIndex(block.words, tMs) : -1,
   };
+  if (rtl) {
+    let i = 0;
+    f.visual = lines.map((n) => {
+      const idx = Array.from({ length: n }, (_, k) => i + k);
+      i += n;
+      return visualOrderRtl(words, idx);
+    });
+  }
+  return f;
 }

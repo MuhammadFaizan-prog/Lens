@@ -8,6 +8,7 @@ import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET
 import type { BrandKit, Preset, PresetSection } from "@lens/engine";
 import { ensurePlanAssets, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
+import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
 import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
 import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
@@ -86,7 +87,31 @@ export interface EditorState {
   editingText: string | null;
   /** The step-label run in progress (or its last outcome). */
   stepRun: { id: string; state: "starting" | "running" | "done" | "error"; error?: string; seconds?: number } | null;
+  /** The caption translation run in progress (or its last outcome), demand #8. */
+  translateRun: TranslateRunState | null;
 }
+
+export interface TranslateRunState {
+  id: string;
+  state: "starting" | "running" | "done" | "error";
+  stage: string;
+  language: string;
+  index: number;
+  languages: number;
+  done: number;
+  total: number;
+  error?: string;
+  seconds?: number;
+}
+
+/** Languages the bundled on-device models translate English into (translate/lens_translate/models.py). */
+export const TRANSLATE_LANGUAGES: Array<{ code: string; name: string; english: string }> = [
+  { code: "es", name: "Español", english: "Spanish" },
+  { code: "fr", name: "Français", english: "French" },
+  { code: "de", name: "Deutsch", english: "German" },
+  { code: "ur", name: "اردو", english: "Urdu" },
+  { code: "ar", name: "العربية", english: "Arabic" },
+];
 
 export type AnnotationTool = "select" | "arrow" | "rect" | "ellipse" | "text" | "badge" | "callout";
 
@@ -125,6 +150,7 @@ export class EditorStore {
     newAnchor: "screen",
     editingText: null,
     stepRun: null,
+    translateRun: null,
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -806,6 +832,82 @@ export class EditorStore {
     }
     this.screen.prefetch([...new Set(ahead)]);
     this.cam?.prefetch([...new Set(camAhead)]);
+  }
+
+  // ------------------------------------------------------------------ caption translation (demand #8)
+
+  /** Caption language for the preview and the burned-in captions (null = source transcript); one undo step. */
+  setCaptionLanguage(language: string | null): void {
+    if ((this.history.doc.translations.language ?? null) === language) return;
+    const name = language ? this.history.doc.translations.tracks.find((t) => t.language === language)?.name ?? language : "source";
+    this.edit(`Captions: ${name}`, (p) => ({ ...p, translations: { ...p.translations, language } }));
+  }
+
+  /** Translate the transcript on-device (dev server: translate/lens-translate); adds one track per language, one undo step. */
+  async translateCaptions(langs: string[], select = true): Promise<void> {
+    if (this.s.translateRun && ["starting", "running"].includes(this.s.translateRun.state)) return;
+    this.set({ translateRun: { id: "", state: "starting", stage: "start", language: langs[0] ?? "", index: 0, languages: langs.length, done: 0, total: 0 } });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/translate${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ langs }) });
+    const j = await r.json();
+    if (!r.ok || j.state === "error") {
+      this.set({ translateRun: { id: "", state: "error", stage: "", language: "", index: 0, languages: langs.length, done: 0, total: 0, error: j.error } });
+      return;
+    }
+    const id = j.id as string;
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        const st = await (await fetch(`/api/translate/${id}${q}`)).json();
+        this.set({ translateRun: { id, state: st.state, stage: st.stage, language: st.language, index: st.index, languages: st.languages, done: st.done, total: st.total, error: st.error, seconds: st.seconds } });
+        if (st.state === "running") {
+          setTimeout(poll, 250);
+          return;
+        }
+        if (st.state === "done") {
+          const tracks = st.result.tracks as CaptionTrack[];
+          const names = tracks.map((t) => t.name ?? t.language).join(", ");
+          this.edit(`Translate captions to ${names}`, (p) => {
+            let tr = p.translations;
+            for (const t of tracks) tr = upsertTrack(tr, t);
+            return { ...p, translations: { ...tr, language: select ? tracks[0]!.language : tr.language } };
+          });
+          this.notify(`Translated ${tracks[0]?.segments.length ?? 0} segments to ${names}`);
+        }
+        resolve();
+      };
+      setTimeout(poll, 150);
+    });
+  }
+
+  /** Side-by-side editing: replace one segment's translation (re-timed by the engine), one undo step per commit. */
+  editTranslation(language: string, segmentId: string, text: string): void {
+    const tr = this.history.doc.translations.tracks.find((t) => t.language === language);
+    const seg = tr?.segments.find((s) => s.id === segmentId);
+    if (!tr || !seg || seg.text === text.replace(/\s+/g, " ").trim()) return;
+    this.edit(`Edit ${tr.name ?? language} caption`, (p) => ({
+      ...p,
+      translations: { ...p.translations, tracks: p.translations.tracks.map((t) => (t.language === language ? editSegment(t, segmentId, text) : t)) },
+    }));
+  }
+
+  removeTranslation(language: string): void {
+    const tr = this.history.doc.translations.tracks.find((t) => t.language === language);
+    if (!tr) return;
+    this.edit(`Remove ${tr.name ?? language} captions`, (p) => ({
+      ...p,
+      translations: { language: p.translations.language === language ? null : p.translations.language, tracks: p.translations.tracks.filter((t) => t.language !== language) },
+    }));
+  }
+
+  /** SRT or WebVTT of the captions in one language on the output clock (cuts, speed and slides applied). */
+  subtitleFile(language: string | null, kind: "srt" | "vtt"): { name: string; text: string } | null {
+    const b = this.s.bundle;
+    if (!b) return null;
+    const p = this.history.doc;
+    const proj = { ...p, captions: { ...p.captions, enabled: true }, translations: { ...p.translations, language } };
+    const plan = buildRenderPlan({ meta: b.meta, events: b.events, project: proj, words: b.transcript?.words ?? [], pauses: b.transcript?.pauses, onlyFrames: [0] });
+    const lang = language ?? (b.transcript?.language || "en");
+    return { name: `captions.${lang}.${kind}`, text: kind === "srt" ? toSrt(plan.subtitles) : toVtt(plan.subtitles, lang) };
   }
 
   // ------------------------------------------------------------------ files

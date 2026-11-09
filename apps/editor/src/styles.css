@@ -516,3 +516,16 @@ select {
 /* four left tabs (Transcript, Privacy, Steps, Brand) fit the column */
 .left-tabs { overflow: hidden; gap: 2px; padding: 8px 6px 0; }
 .left-tabs button { flex: 1 1 auto; min-width: 0; padding: 7px 4px 8px; gap: 4px; white-space: nowrap; font-size: 11.5px; }
+
+/* caption translation (demand #8) */
+.tr-translate { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.tr-translate select { width: 100%; }
+.tr-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+.tr-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow: auto; margin-top: 6px; }
+.tr-head { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding-left: 44px; }
+.tr-row { display: grid; grid-template-columns: 40px 1fr 1fr; gap: 6px; align-items: start; position: relative; }
+.tr-time { background: none; border: 0; padding: 4px 0; cursor: pointer; text-align: left; }
+.tr-src { font-size: 12px; color: var(--text-2); line-height: 1.35; padding: 4px 0; }
+.tr-text { font: 12.5px/1.35 var(--sans, inherit); color: var(--text); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 6px; resize: vertical; min-height: 38px; }
+.tr-text[dir="rtl"] { font-family: "Lens Noto Naskh Arabic", "Noto Naskh Arabic", serif; font-size: 14px; }
+.tr-edited { position: absolute; right: 4px; bottom: -2px; font-size: 10px; }

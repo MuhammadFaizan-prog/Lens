@@ -18,6 +18,7 @@ import { defaultPrivacy, validateKeys, validatePrivacy, type PrivacySettings } f
 import { normalizeAnnotation, normalizeSlide, validateAnnotations, type Annotation, type StepLabelSettings, type TextSlide } from "./annotations.js";
 import { defaultBrand, validateBrand, type BrandKit } from "./brand.js";
 import { isColorValue } from "./palette.js";
+import { validateTranslations, type TranslationSettings } from "./translation.js";
 import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
 
 /**
@@ -150,6 +151,11 @@ export interface ProjectConfig {
     wordHighlight: boolean;
     style: CaptionStyle;
   };
+  /**
+   * Caption translation (demand #8): one caption track per language (translated per segment by
+   * lens-translate, editable), and the language the preview and burned-in captions use.
+   */
+  translations: TranslationSettings;
   shortcuts: { enabled: boolean; displayMs: number };
   /**
    * Local speech-to-text (AI-01). Read by the render pipeline (compositor/pipeline.py), not by the
@@ -235,6 +241,8 @@ export interface CaptionStyle {
   /** Vertical center of the caption as a fraction of output height, used when position = custom. */
   y: number;
   maxWordsPerLine: number;
+  /** Most characters on one caption line (0 = no limit); a longer single word gets its own line. */
+  maxCharsPerLine: number;
   /** Font family, or "@font" / absent: the theme font. */
   font?: string;
 }
@@ -323,8 +331,10 @@ export function defaultProject(): ProjectConfig {
         position: "bottom",
         y: 0.88,
         maxWordsPerLine: 5,
+        maxCharsPerLine: 42,
       },
     },
+    translations: { language: null, tracks: [] },
     shortcuts: { enabled: true, displayMs: 1200 },
     transcription: { mode: "auto", track: null, model: "base.en", language: null },
     crop: null,
@@ -428,6 +438,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
+  if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
+  errs.push(...validateTranslations(p.translations));
   if (!isColorValue(p.captions.style.highlightColor) || !isColorValue(p.captions.style.textColor)) errs.push("caption colours must be #rrggbb or a theme slot (@highlight)");
   if (typeof p.background.inherit !== "boolean") errs.push("background.inherit must be true or false");
   errs.push(...validateTheme(p.theme));

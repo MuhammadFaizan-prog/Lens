@@ -24,7 +24,7 @@ from typing import Callable
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, features
 
 SS = 4  # supersampling for vector ops
 ROOT = Path(__file__).resolve().parents[2]
@@ -60,6 +60,7 @@ def set_fonts(fonts: list[dict] | None, asset_dir: str | Path | None) -> None:
     for f in fonts or []:
         _FAMILIES[f["family"]] = {False: str(resolve_asset(f["regular"], asset_dir)), True: str(resolve_asset(f["bold"], asset_dir))}
     text_font.cache_clear()
+    shaped_font.cache_clear()
 
 
 @lru_cache(maxsize=64)
@@ -71,6 +72,19 @@ def text_font(size: int, bold: bool, family: str | None = None):
             # BASIC layout: no kerning, the same advances the browser uses with fontKerning = none
             return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.BASIC)
     return ImageFont.load_default()
+
+
+@lru_cache(maxsize=16)
+def shaped_font(size: int, bold: bool, family: str):
+    """A plan font with complex-script shaping (demand #8: Arabic / Urdu caption words). RAQM layout
+    (HarfBuzz + FriBiDi): joining forms, marks, right-to-left glyph order, as the browser shapes it.
+    Callers turn kerning off (features=["-kern"]) to match the preview's fontKerning = none."""
+    fam = _FAMILIES.get(family)
+    if fam is None or not Path(fam[bold]).exists():
+        return text_font(size, bold, family)
+    if not features.check("raqm"):
+        raise RuntimeError("Pillow was built without libraqm; right-to-left captions need it (pip install pillow, with libfribidi)")
+    return ImageFont.truetype(fam[bold], size, layout_engine=ImageFont.Layout.RAQM)
 
 
 @lru_cache(maxsize=16)
