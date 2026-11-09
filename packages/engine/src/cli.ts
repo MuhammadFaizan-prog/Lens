@@ -3,14 +3,19 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseEventLog } from "./events.js";
 import { buildRenderPlan } from "./plan.js";
 import { resolveProject, ProjectValidationError } from "./project.js";
+import { applyPrivacyScan, privacyCounts, reviewPrivacy } from "./privacy.js";
 import { parseTranscript, TranscriptError } from "./transcript.js";
 import type { RecordingMeta } from "./types.js";
 
-const USAGE = `lens-plan --meta meta.json --events events.jsonl [--project project.json] [--words transcript.json] --out plan.json
+const USAGE = `lens-plan --meta meta.json --events events.jsonl [--project project.json] [--words transcript.json]
+          [--privacy-scan privacy.json [--accept-privacy]] [--project-out project.json] --out plan.json
 
 Builds a render plan (per-frame camera, cursor, clicks, layout, overlays) from a cursorless
 recording's metadata and its input-event log. The compositor renders the plan to video.
---words (alias --transcript) takes lens-transcribe output or a bare array of {text, startMs, endMs}.`;
+--words (alias --transcript) takes lens-transcribe output or a bare array of {text, startMs, endMs}.
+--privacy-scan merges a lens-redact scan into project.privacy (review states of items found again are
+kept); --accept-privacy accepts every detection, so each becomes a tracked mask. --project-out
+writes the resulting project. A warning is printed while detections are still pending review.`;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,7 +38,14 @@ function main(): number {
     const meta = JSON.parse(readFileSync(metaPath, "utf8")) as RecordingMeta;
     const events = parseEventLog(readFileSync(eventsPath, "utf8"));
     const projectPath = arg("project");
-    const project = resolveProject(projectPath ? JSON.parse(readFileSync(projectPath, "utf8")) : {});
+    let project = resolveProject(projectPath ? JSON.parse(readFileSync(projectPath, "utf8")) : {});
+    const scanPath = arg("privacy-scan");
+    if (scanPath) project = applyPrivacyScan(project, JSON.parse(readFileSync(scanPath, "utf8")), new Date().toISOString());
+    if (process.argv.includes("--accept-privacy")) project = reviewPrivacy(project, null, "accepted");
+    const projectOut = arg("project-out");
+    if (projectOut) writeFileSync(projectOut, JSON.stringify(project, null, 1));
+    const pc = privacyCounts(project);
+    if (pc.pending) console.error(`warning: ${pc.pending} privacy detection${pc.pending > 1 ? "s" : ""} not reviewed (still visible in the export)`);
     const wordsPath = arg("words") ?? arg("transcript");
     const transcript = wordsPath ? parseTranscript(JSON.parse(readFileSync(wordsPath, "utf8"))) : null;
     const plan = buildRenderPlan({ meta, events, project, words: transcript?.words ?? [], pauses: transcript?.pauses });

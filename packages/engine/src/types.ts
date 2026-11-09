@@ -129,6 +129,20 @@ export interface MaskRegion {
    * blur: Gaussian sigma in source px (default 12); pixelate: block size in source px (default 16).
    */
   strength?: number;
+  /**
+   * Tracked mask: the rect per source time, sorted by tMs (one key per source frame where the box
+   * moved; runs of identical rects keep only their first and last key). Between two keys the mask
+   * covers both rects (their union), so it is never behind the content whichever frame a renderer
+   * shows. Before the first / after the last key the end key holds. `rect` stays the first key's rect.
+   */
+  keys?: MaskKey[];
+  /** Set on masks created by accepting a privacy detection (privacy.detections[].id). */
+  privacyId?: string;
+}
+
+export interface MaskKey {
+  tMs: number;
+  rect: Rect;
 }
 
 /** Time range (source ms) overriding cursor behaviour and audio volume (CUR-01 / EDT-05/06). */

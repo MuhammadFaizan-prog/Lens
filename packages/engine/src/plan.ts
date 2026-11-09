@@ -101,7 +101,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   const crop: Rect = normalizeCrop(project.crop, fullMeta);
   const meta = cropMeta(fullMeta, crop);
   const events = cropEvents(rawEvents, crop);
-  const masks = project.masks.map((m) => ({ ...m, rect: cropRect(m.rect, crop) }));
+  const masks = project.masks.map((m) => ({ ...m, rect: cropRect(m.rect, crop), keys: m.keys?.map((k) => ({ tMs: k.tMs, rect: cropRect(k.rect, crop) })) }));
   const sourceAspect = meta.width / meta.height;
 
   // 1. Source-time tracks at output fps.

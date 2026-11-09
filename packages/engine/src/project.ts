@@ -14,6 +14,7 @@ import type {
 import { springFromSettle } from "./spring.js";
 import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
 import { DEFAULT_TAKES, type TakeSettings } from "./takes.js";
+import { defaultPrivacy, validateKeys, validatePrivacy, type PrivacySettings } from "./privacy.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -156,8 +157,10 @@ export interface ProjectConfig {
   };
   /** Source crop rect in source px (LOOK-14). Everything downstream works in cropped space. */
   crop: Rect | null;
-  /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05). */
+  /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05); tracked when they have keys. */
   masks: MaskRegion[];
+  /** Automatic privacy redaction (demand #3): the scan's detections and their review state. */
+  privacy: PrivacySettings;
   /** Per-segment overrides of cursor and audio volume, source time (CUR-01, EDT-05/06). */
   overrides: SegmentOverride[];
   audio: {
@@ -303,6 +306,7 @@ export function defaultProject(): ProjectConfig {
     transcription: { mode: "auto", track: null, model: "base.en", language: null },
     crop: null,
     masks: [],
+    privacy: defaultPrivacy(),
     overrides: [],
     audio: {
       tracks: [],
@@ -360,7 +364,10 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (!["spotlight", "blur", "pixelate"].includes(m.kind)) errs.push(`mask ${m.id} has unknown kind ${String(m.kind)}`);
     if (m.endMs <= m.startMs) errs.push(`mask ${m.id} ends before it starts`);
     if (!validRect(m.rect)) errs.push(`mask ${m.id} rect invalid`);
+    const ke = validateKeys(m.keys);
+    if (ke) errs.push(`mask ${m.id} ${ke}`);
   }
+  errs.push(...validatePrivacy(p.privacy));
   for (const o of p.overrides) {
     if (o.endMs <= o.startMs) errs.push("override ends before it starts");
     if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");

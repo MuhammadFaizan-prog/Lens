@@ -14,3 +14,4 @@ export * from "./crop.js";
 export * from "./masks.js";
 export * from "./audio.js";
 export * from "./takes.js";
+export * from "./privacy.js";
