@@ -661,3 +661,21 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .tl-label .lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
 .tl-label .mini-add, .tl-label .lane-toggle, .tl-label .dot, .tl-label .lane-count { flex: none; }
 .tl-label .lane-count + .mini-add { margin-left: 4px; }
+
+/* canvas layout (feat/canvas-layout): aspect picker, custom size, screen inspector */
+.aspect-select { display: inline-flex; align-items: center; gap: 6px; }
+.tb-select { background: var(--panel-3); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 3px 6px; font-size: 11.5px; }
+.custom-size { display: inline-flex; align-items: center; gap: 4px; }
+.custom-size .times { color: var(--muted); font-size: 11px; }
+.num-input { width: 64px; background: var(--panel-3); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.custom-size.compact .num-input { width: 56px; }
+.segmented.wrap { flex-wrap: wrap; }
+.segmented.wrap button { flex: 1 0 auto; min-width: 44px; }
+.screen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 4px 0; }
+.screen-grid label { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+.screen-grid .num-input { width: 100%; box-sizing: border-box; }
+.screen-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.canvas-overlay .co-screen .co-body { fill: rgba(255, 255, 255, 0.02); stroke-dasharray: 10 6; }
+.canvas-overlay .co-outline.co-screen { stroke: rgba(255, 255, 255, 0.18); }
+/* presses inside the screen card go through the pick (other objects win); only its handles grab directly */
+.canvas-overlay .co-screen .co-body { pointer-events: none; }

@@ -1,6 +1,7 @@
 import { defaultSlide } from "@lens/engine";
 import { store, useEditor, type AnnotationTool } from "../state/store";
 import { newId } from "../state/timelineOps";
+import { AspectSelect } from "./AspectPicker";
 
 const TOOLS: Array<{ id: AnnotationTool; label: string; key: string; glyph: string }> = [
   { id: "select", label: "Select", key: "V", glyph: "↖" },
@@ -37,6 +38,8 @@ export function AnnotationToolbar() {
       <button className="chip-btn" data-testid="add-slide" title="Insert a full-frame title card at the playhead" onClick={() => store.addSlide(defaultSlide(newId("slide"), Math.round(src)))}>
         + Text slide
       </button>
+      <span className="divider" />
+      <AspectSelect />
     </div>
   );
 }
