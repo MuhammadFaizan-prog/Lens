@@ -19,6 +19,10 @@ export interface Bundle {
   events: InputEvent[];
   project: ProjectConfig;
   transcript: Transcript | null;
+  /** A microphone track exists (in-app speech-to-text can run). */
+  hasMic?: boolean;
+  /** Fresh desktop recording with a mic: transcribe it once when the editor opens (Windows #5). */
+  autoTranscribe?: boolean;
   screen: TrackInfo;
   camera: TrackInfo | null;
 }
@@ -35,6 +39,8 @@ export async function fetchBundle(dir?: string): Promise<Bundle> {
     events: parseEventLog(j.events),
     project: resolveProject(j.project),
     transcript: j.transcript ? parseTranscript(j.transcript) : null,
+    hasMic: !!j.hasMic,
+    autoTranscribe: !!j.autoTranscribe,
     screen: j.screen,
     camera: j.camera,
   };

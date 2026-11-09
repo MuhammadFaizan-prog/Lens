@@ -10,6 +10,8 @@ import { Icon } from "./Icon";
  */
 export function TranscriptPanel() {
   const words = useEditor((s) => s.bundle?.transcript?.words);
+  const hasMic = useEditor((s) => !!s.bundle?.hasMic);
+  const run = useEditor((s) => s.transcribeRun);
   const cuts = useEditor((s) => s.plan?.cuts);
   const frame = useEditor((s) => s.frame);
   const plan = useEditor((s) => s.plan);
@@ -55,7 +57,19 @@ export function TranscriptPanel() {
     return (
       <aside className="transcript empty">
         <h2>Transcript</h2>
-        <p className="note">No transcript in this bundle. Run lens-transcribe on the mic track to edit by text.</p>
+        {run && (run.state === "starting" || run.state === "running") ? (
+          <p className="note" data-testid="transcribe-progress">Transcribing on this device… {run.done}%</p>
+        ) : (
+          <>
+            <p className="note">{hasMic ? "No transcript yet. Transcribe the mic track on this device (nothing is uploaded) to edit by text, cut fillers and add captions." : "This recording has no microphone track to transcribe."}</p>
+            {run?.state === "error" && <p className="note error" data-testid="transcribe-error">Transcription failed: {run.error}</p>}
+            {hasMic && (
+              <button className="primary" data-testid="transcribe" onClick={() => void store.transcribe()}>
+                Transcribe
+              </button>
+            )}
+          </>
+        )}
       </aside>
     );
   }

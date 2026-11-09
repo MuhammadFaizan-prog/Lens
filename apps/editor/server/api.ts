@@ -20,6 +20,8 @@
  *   POST /api/steps-export           { project, kind: demo|guide } -> { id }: interactive demo / step guide (compositor/export_steps.py)
  *   GET  /api/steps-export/:id       { state, error, result }
  *   GET  /api/steps-export/:id/file/<path>   a file of that export (index.html, demo.json, images/..., guide.pdf, ...)
+ *   POST /api/transcribe             in-app speech-to-text (whisper.cpp, base.en) on the mic track -> { id }; writes transcript.json
+ *   GET  /api/transcribe/:id         { state, done (percent), error, result (transcript) }
  *   POST /api/translate              { langs } -> { id }: translate/lens-translate on the bundle's transcript.json
  *   GET  /api/translate/:id          { state, language, index, languages, done, total, error, result: { tracks, stats } }
  *
@@ -35,6 +37,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { startJob } from "./jobs";
+import { transcribe } from "./stt";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
@@ -269,6 +272,38 @@ function startSteps(bundle: string): StepJob {
   return job;
 }
 
+interface TranscribeJob { id: string; state: "running" | "done" | "error"; done: number; error?: string; result?: unknown; startedAt: number; finishedAt?: number }
+const transcribeJobs = new Map<string, TranscribeJob>();
+
+/** The bundle's mic track (project.json audio tracks, else mic.wav) and its offset on the recording clock. */
+function micTrack(bundle: string): { file: string; offsetMs: number } | null {
+  const p = readJson(path.join(bundle, "project.json")) as { audio?: { tracks?: Array<{ kind?: string; path?: string; offsetMs?: number }> } } | null;
+  const t = p?.audio?.tracks?.find((x) => x.kind === "mic" && x.path) ?? p?.audio?.tracks?.find((x) => x.path);
+  if (t?.path && fs.existsSync(path.join(bundle, t.path))) return { file: path.join(bundle, t.path), offsetMs: t.offsetMs ?? 0 };
+  for (const f of ["mic.wav", "mic.webm"]) if (fs.existsSync(path.join(bundle, f))) return { file: path.join(bundle, f), offsetMs: 0 };
+  return null;
+}
+
+/** In-app speech-to-text (Windows #5): whisper.cpp + base.en on the mic track, written to transcript.json. */
+function startTranscribe(bundle: string, auto = false): TranscribeJob {
+  if (auto) {
+    fs.mkdirSync(path.join(bundle, ".lens-cache"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, ".lens-cache", "transcribe-auto"), new Date().toISOString());
+  }
+  const id = "w" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const job: TranscribeJob = { id, state: "running", done: 0, startedAt: Date.now() };
+  transcribeJobs.set(id, job);
+  const mic = micTrack(bundle);
+  if (!mic) return Object.assign(job, { state: "error" as const, error: "this recording has no microphone track", finishedAt: Date.now() });
+  transcribe(FFMPEG, mic.file, mic.offsetMs, (pct) => (job.done = pct))
+    .then((t) => {
+      fs.writeFileSync(path.join(bundle, "transcript.json"), JSON.stringify(t, null, 1));
+      Object.assign(job, { state: "done", done: 100, result: t, finishedAt: Date.now() });
+    })
+    .catch((e) => Object.assign(job, { state: "error", error: e instanceof Error ? e.message : String(e), finishedAt: Date.now() }));
+  return job;
+}
+
 const extracting = new Map<string, Promise<number>>();
 
 export function defaultBundle(): string {
@@ -377,6 +412,11 @@ async function loadBundle(dir: string) {
     events,
     project,
     transcript,
+    hasMic: !!micTrack(dir),
+    // a fresh desktop recording with a mic (recording.json autoTranscribe, written at Stop): the editor
+    // starts on-device speech-to-text once; the marker stops a failed run from repeating on every open
+    autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
+      && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
     screen: { ...probeVideo(path.join(dir, "screen.mp4")), frames: screenFrames },
     camera: hasCam ? { ...probeVideo(path.join(dir, "cam.mp4")), frames: camFrames } : null,
   };
@@ -605,6 +645,16 @@ export function apiMiddleware() {
           return fs.createReadStream(job.out).pipe(res);
         }
         return sendJson(res, { id: job.id, state: job.state, done: job.done, total: job.total, error: job.error, out: job.out,
+          seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if (url.pathname === "/api/transcribe" && req.method === "POST") {
+        const job = startTranscribe(bundle, url.searchParams.get("auto") === "1");
+        return sendJson(res, { id: job.id, state: job.state, error: job.error });
+      }
+      if ((m = /^\/api\/transcribe\/([a-z0-9]+)$/.exec(url.pathname))) {
+        const job = transcribeJobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such job" }, 404);
+        return sendJson(res, { id: job.id, state: job.state, done: job.done, error: job.error, result: job.state === "done" ? job.result : undefined,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       if (url.pathname === "/api/privacy/scan" && req.method === "POST") {

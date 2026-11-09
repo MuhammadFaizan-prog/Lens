@@ -202,6 +202,8 @@ export class Recording {
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
       displays: this.displays, captured: this.captured, counts: this.log?.counts, clickSources: this.clickSources, warnings: this.warnings,
+      // the editor transcribes the mic on-device the first time it opens this recording (Windows #5)
+      autoTranscribe: tracks.length > 0,
     }, null, 2));
     return { dir, durationMs };
   }

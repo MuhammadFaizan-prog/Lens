@@ -99,7 +99,18 @@ if (fs.existsSync(path.join(REPO, "assets", "fonts"))) fs.cpSync(path.join(REPO,
 // on-device models (git-ignored; fetched and SHA-256 checked by apps/editor/scripts/fetch-models.mjs):
 // RNNoise for export noise reduction (ffmpeg arnndn) and the others listed there
 execFileSync(process.execPath, [path.join(REPO, "apps", "editor", "scripts", "fetch-models.mjs")], { stdio: "inherit" });
-fs.cpSync(path.join(REPO, "assets", "models"), path.join(res, "lens", "assets", "models"), { recursive: true });
+// whisper.cpp CLI for speech-to-text (Windows #5): Windows uses the official release build fetched above;
+// the Linux test app builds it from source (scripts/build-whisper.sh). Only this target's CLI is shipped.
+if (LINUX_DIR) execFileSync("bash", [path.join(REPO, "apps", "editor", "scripts", "build-whisper.sh")], { stdio: "inherit" });
+const whisperPlat = path.join("whisper", PLAT);
+if (!fs.existsSync(path.join(REPO, "assets", "models", whisperPlat, LINUX_DIR ? "whisper-cli" : "whisper-cli.exe"))) throw new Error(`assets/models/${whisperPlat}: whisper-cli missing`);
+fs.cpSync(path.join(REPO, "assets", "models"), path.join(res, "lens", "assets", "models"), {
+  recursive: true,
+  filter: (f) => {
+    const rel = path.relative(path.join(REPO, "assets", "models"), f);
+    return !rel.endsWith(".sha256") && !(/^whisper[\\/][a-z0-9]+-[a-z0-9]+([\\/]|$)/.test(rel) && !rel.startsWith(whisperPlat));
+  },
+});
 
 // one icon (scripts/make-icon.mjs, 16/24/32/48/64/256) for the installer, the uninstaller and Lens.exe.
 // Installer and uninstaller must share it: NSIS patches the uninstaller icon into the exe header

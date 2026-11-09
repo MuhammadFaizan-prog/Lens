@@ -73,7 +73,7 @@ export async function* decode(ffmpeg: string, video: string, w: number, h: numbe
   const ch = fmt === "gray" ? 1 : 3;
   const n = w * h * ch;
   const p = spawn(ffmpeg, ["-v", "error", "-i", video, "-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", fmt, "-"], { stdio: ["ignore", "pipe", "ignore"] });
-  let buf = Buffer.alloc(0);
+  let buf: Buffer = Buffer.alloc(0);
   try {
     for await (const chunk of p.stdout as AsyncIterable<Buffer>) {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;

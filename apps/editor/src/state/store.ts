@@ -4,7 +4,7 @@
  * through useEditor(selector) so the preview can redraw at 60 fps without re-rendering React.
  */
 import { useSyncExternalStore } from "react";
-import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS } from "@lens/engine";
+import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS, parseTranscript } from "@lens/engine";
 import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
 import { setDemoHotspot } from "@lens/engine";
 import { ensurePlanAssets, setAssetBundle } from "../render/assets";
@@ -91,6 +91,8 @@ export interface EditorState {
   editingText: string | null;
   /** The step-label run in progress (or its last outcome). */
   stepRun: { id: string; state: "starting" | "running" | "done" | "error"; error?: string; seconds?: number } | null;
+  /** In-app speech-to-text (Windows #5); auto: started by itself on a new recording with a mic. */
+  transcribeRun: { id: string; state: "starting" | "running" | "done" | "error"; done: number; error?: string; seconds?: number; auto?: boolean } | null;
   /** Export dialog (format tabs); null = closed. */
   exportDialog: { tab: "video" | "demo" | "guide" } | null;
   /** Last interactive demo / step guide build per kind (demand #7). */
@@ -158,6 +160,7 @@ export class EditorStore {
     newAnchor: "screen",
     editingText: null,
     stepRun: null,
+    transcribeRun: null,
     exportDialog: null,
     stepsExport: {},
     translateRun: null,
@@ -213,6 +216,8 @@ export class EditorStore {
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
       if (def) this.notify(`New project: default preset ${def.name} applied`);
+      // a new recording with the mic on: transcribe it on-device right away (Windows #5)
+      if (bundle.autoTranscribe && !bundle.transcript) void this.transcribe(true);
     } catch (e) {
       this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
     }
@@ -697,6 +702,38 @@ export class EditorStore {
     const fn = (p: ProjectConfig) => ({ ...p, slides: p.slides.map((s, i) => (i === index ? { ...s, ...patch } : s)) });
     if (live) this.tweak("Edit slide", fn);
     else this.edit("Edit slide", fn);
+  }
+
+  /** Transcribe the mic track on-device (whisper.cpp, base.en); the words replace the bundle transcript. */
+  async transcribe(auto = false): Promise<void> {
+    if (this.s.transcribeRun && ["starting", "running"].includes(this.s.transcribeRun.state)) return;
+    this.set({ transcribeRun: { id: "", state: "starting", done: 0, auto } });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/transcribe${q}${auto ? (q ? "&" : "?") + "auto=1" : ""}`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok || j.state === "error") {
+      this.set({ transcribeRun: { id: "", state: "error", done: 0, error: j.error, auto } });
+      return;
+    }
+    const id = j.id as string;
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        const st = await (await fetch(`/api/transcribe/${id}${q}`)).json();
+        this.set({ transcribeRun: { id, state: st.state, done: st.done, error: st.error, seconds: st.seconds, auto } });
+        if (st.state === "running") {
+          setTimeout(poll, 400);
+          return;
+        }
+        if (st.state === "done" && this.s.bundle) {
+          const transcript = parseTranscript(st.result);
+          this.set({ bundle: { ...this.s.bundle, transcript } });
+          this.rebuild(this.history.doc);
+          this.notify(`Transcribed ${transcript.words.length} words`);
+        }
+        resolve();
+      };
+      setTimeout(poll, 200);
+    });
   }
 
   /** Draft step labels from the clicks + on-device OCR (dev server: lens-redact steps), as one undo step. */
