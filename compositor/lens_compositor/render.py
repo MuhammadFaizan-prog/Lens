@@ -7,7 +7,7 @@ compare the two. Order of passes per frame:
   background -> shadow -> screen (source crop, camera transform, motion blur)
   -> masks (spotlight / blur / pixelate) -> click effects -> screen-anchored annotations
   -> cursor (with motion blur) -> rounded mask -> webcam (crop, mirror) -> frame-anchored annotations
-  -> shortcut pill -> caption (styled, word highlight) -> text slide
+  -> shortcut pill -> caption (styled, word highlight) -> brand watermark -> text slide
 
 Then audio (see audio.py) is muxed as AAC, or the video is converted to a palette GIF.
 
@@ -29,7 +29,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .annotations import draw_items
+from . import annotations as ann
+from .annotations import draw_items, image_premul, resolve_asset, set_fonts, text_font
 from .audio import build_audio, export_gif, mux_audio
 
 FONT_CANDIDATES = [
@@ -278,6 +279,24 @@ class RenderOptions:
     #: when set, each finished frame (uint8 BGR, H x W x 3) goes here and nothing is encoded or
     #: written (golden / parity tests compare pixels before the lossy YUV encode)
     frame_sink: Optional[Callable[[int, np.ndarray], None]] = None
+    #: folder that relative logo / font paths in the plan resolve against (default: the plan's folder)
+    asset_dir: Optional[str] = None
+
+
+def draw_watermark(out: np.ndarray, wm: dict, asset_dir) -> None:
+    """Brand logo watermark (demand #9): premultiplied, area-resampled to its whole-pixel rect, at its opacity."""
+    path = resolve_asset(wm["path"], asset_dir)
+    if not path.exists():
+        return
+    x, y, w, h = int(wm["x"]), int(wm["y"]), int(wm["w"]), int(wm["h"])
+    pre = image_premul(str(path), w, h) * float(wm.get("opacity", 1))
+    H, W = out.shape[:2]
+    xa, ya, xb, yb = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
+    if xb <= xa or yb <= ya:
+        return
+    src = pre[ya - y:yb - y, xa - x:xb - x]
+    a = src[..., 3:4] / 255.0
+    out[ya:yb, xa:xb] = out[ya:yb, xa:xb] * (1 - a) + src[..., 2::-1]
 
 
 # ---------------------------------------------------------------- masks (TXT-04/05)
@@ -354,7 +373,8 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     if not words:
         return
     size = max(10, int(round(cs.get("fontSize", H * 0.04))))
-    font = _font(size)
+    # theme / brand font (demand #9): same BASIC-layout file the preview loads; default unchanged
+    font = text_font(size, True, cs["font"]) if cs.get("font") else _font(size)
     space = d.textlength(" ", font=font)
     lines, i = [], 0
     for n in cap["lines"]:
@@ -417,6 +437,10 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     cap_style = style.get("captions", {"fontSize": H * 0.04})
     cam_src = FrameSource(camera_path) if camera_path else None
     bg = make_background(style, W, H)
+    asset_dir = opts.asset_dir or str(Path(plan_path).resolve().parent)
+    ann.ASSET_DIR[0] = Path(asset_dir)
+    set_fonts(plan.get("fonts"), asset_dir)
+    watermark = plan.get("watermark")
     mb = style["motionBlur"]
     frame_ms = 1000 / fps
     font_pill = _font(max(14, int(H * 0.032)))
@@ -582,10 +606,14 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
             pil = Image.alpha_composite(pil, layer).convert("RGB")
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
 
+        # Brand watermark above the caption (slides cover it).
+        if watermark:
+            draw_watermark(out, watermark, asset_dir)
+
         # Text slide: full frame, over everything, cross-faded by its opacity.
         if f.get("slide"):
             sl = f["slide"]
-            draw_items(out, [{"ops": sl["ops"], "opacity": sl["opacity"], "shadow": None}], lambda px, py: (px, py), 1.0)
+            draw_items(out, [{"ops": sl["ops"], "opacity": sl["opacity"], "shadow": None}], lambda px, py: (px, py), 1.0, background=bg)
 
         final = np.clip(out, 0, 255).astype(np.uint8)
         if sink:

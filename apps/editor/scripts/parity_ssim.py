@@ -48,6 +48,7 @@ def main() -> int:
     ap.add_argument("--frames", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--diff-dir")
+    ap.add_argument("--assets", help="bundle folder that logo / font paths in the plan resolve against")
     a = ap.parse_args()
     frames = [int(x) for x in a.frames.split(",")]
     want = set(frames)
@@ -59,7 +60,7 @@ def main() -> int:
 
     # Compare against the compositor's frames before the YUV encode, so the score measures the
     # renderers and not x264 / swscale rounding (which shifts some channels by ~3-4 levels).
-    render(a.plan, a.screen, "unused.mp4", a.camera, RenderOptions(max_frames=max(frames) + 1, audio=False, frame_sink=keep))
+    render(a.plan, a.screen, "unused.mp4", a.camera, RenderOptions(max_frames=max(frames) + 1, audio=False, frame_sink=keep, asset_dir=a.assets))
     rows = []
     for i in frames:
         web = cv2.imread(str(Path(a.pngs) / f"frame-{i}.png"), cv2.IMREAD_COLOR)

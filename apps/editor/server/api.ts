@@ -272,7 +272,7 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
   const job: ExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now() };
   jobs.set(id, job);
   const args = [path.join(ROOT, "compositor", "render.py"), "--plan", path.join(dir, "plan.json"), "--screen", path.join(bundle, "screen.mp4"),
-    "--out", out, "--preset", "veryfast", "--progress"];
+    "--out", out, "--preset", "veryfast", "--progress", "--assets", bundle];
   if (project.camera.enabled && fs.existsSync(path.join(bundle, "cam.mp4"))) args.push("--camera", path.join(bundle, "cam.mp4"));
   const py = spawn("python3", args, { cwd: ROOT });
   let err = "";

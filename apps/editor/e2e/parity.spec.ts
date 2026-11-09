@@ -33,7 +33,7 @@ async function parityRun(page: import("@playwright/test").Page, OUT: string, FRA
   }
   const bundle = await (await page.request.get(`/api/bundle${q}`)).json();
   const args = [path.join(EDITOR, "scripts", "parity_ssim.py"), "--plan", path.join(OUT, "plan.json"), "--screen", path.join(bundle.dir, "screen.mp4"),
-    "--pngs", OUT, "--frames", FRAMES.join(","), "--out", path.join(OUT, "ssim.json"), "--diff-dir", path.join(OUT, "diff")];
+    "--pngs", OUT, "--frames", FRAMES.join(","), "--out", path.join(OUT, "ssim.json"), "--diff-dir", path.join(OUT, "diff"), "--assets", bundle.dir];
   if (plan.frames.some((f) => f.layout.camera) && bundle.camera) args.push("--camera", path.join(bundle.dir, "cam.mp4"));
   execFileSync("python3", args, { stdio: "inherit", timeout: 240_000 });
   const res = JSON.parse(fs.readFileSync(path.join(OUT, "ssim.json"), "utf8")) as { frames: Array<{ frame: number; ssim: number }>; mean: number; min: number };

@@ -5,8 +5,10 @@ their animation state and their geometry, tessellated into ops:
 
   fill    closed polygon, colour, alpha
   stroke  polyline (open or closed), width, round caps and joins, colour, alpha
-  text    a text box: wrapped lines (no kerning, DejaVu Sans / Bold), alignment, optional rounded
-          backing, and a visible-character count for the typewriter animation
+  text    a text box: wrapped lines (no kerning, DejaVu Sans / Bold or the op's font family),
+          alignment, optional rounded backing, and a visible-character count for the typewriter
+  image   an image file (brand logo) in a whole-pixel box, alpha-composited (premultiplied, area resample)
+  background  the plan's backdrop over the whole frame (brand intro / outro cards)
 
 This module maps the points (screen anchor: through the camera; frame anchor: as is), rasterises
 each item into its own layer (vector ops 4x supersampled, then area-averaged), adds the item's drop
@@ -25,6 +27,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 SS = 4  # supersampling for vector ops
+ROOT = Path(__file__).resolve().parents[2]
+SYSTEM_FONT_DIRS = ["/usr/share/fonts/truetype/dejavu", "/Library/Fonts"]
 
 FONT_FILES = {
     True: ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/DejaVuSans-Bold.ttf"],
@@ -32,13 +36,71 @@ FONT_FILES = {
 }
 
 
+# family -> {bold: path}; set per render from plan["fonts"] (demand #9 brand / preset fonts)
+_FAMILIES: dict[str, dict[bool, str]] = {}
+
+
+def resolve_asset(ref: str, asset_dir: str | Path | None) -> Path:
+    """'builtin:<file>' -> Lens's assets/fonts, 'system:<file>' -> the OS font dirs, else relative to asset_dir."""
+    if ref.startswith("builtin:"):
+        return ROOT / "assets" / "fonts" / ref[len("builtin:"):]
+    if ref.startswith("system:"):
+        name = ref[len("system:"):]
+        for d in SYSTEM_FONT_DIRS:
+            if (Path(d) / name).exists():
+                return Path(d) / name
+        return Path(SYSTEM_FONT_DIRS[0]) / name
+    p = Path(ref)
+    return p if p.is_absolute() or asset_dir is None else Path(asset_dir) / p
+
+
+def set_fonts(fonts: list[dict] | None, asset_dir: str | Path | None) -> None:
+    """Register the plan's font families (family, regular, bold) for text ops and captions."""
+    _FAMILIES.clear()
+    for f in fonts or []:
+        _FAMILIES[f["family"]] = {False: str(resolve_asset(f["regular"], asset_dir)), True: str(resolve_asset(f["bold"], asset_dir))}
+    text_font.cache_clear()
+
+
 @lru_cache(maxsize=64)
-def text_font(size: int, bold: bool):
-    for p in FONT_FILES[bold]:
+def text_font(size: int, bold: bool, family: str | None = None):
+    fam = _FAMILIES.get(family) if family else None
+    cands = ([fam[bold], fam[not bold]] if fam else []) + FONT_FILES[bold]
+    for p in cands:
         if Path(p).exists():
             # BASIC layout: no kerning, the same advances the browser uses with fontKerning = none
             return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.BASIC)
     return ImageFont.load_default()
+
+
+@lru_cache(maxsize=16)
+def _image_rgba(path: str) -> np.ndarray:
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise FileNotFoundError(f"image not found: {path}")
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
+    elif img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    if img.dtype != np.uint8:
+        img = (img / 257).astype(np.uint8)
+    return img
+
+
+@lru_cache(maxsize=16)
+def image_premul(path: str, w: int, h: int) -> np.ndarray:
+    """The image resampled to w x h: premultiplied RGBA float32 0..255 (area-averaged when shrinking)."""
+    img = _image_rgba(path).astype(np.float32)
+    a = img[..., 3:4] / 255.0
+    pre = np.concatenate([img[..., 2::-1] * a, img[..., 3:4]], axis=2)  # BGRA -> premultiplied RGBA
+    ih, iw = pre.shape[:2]
+    interp = cv2.INTER_AREA if (w <= iw and h <= ih) else cv2.INTER_CUBIC
+    out = cv2.resize(pre, (w, h), interpolation=interp)
+    return np.clip(out, 0, 255)
+
+
+#: asset folder for image ops (set per render: the plan's folder, or --assets)
+ASSET_DIR: list[Path | None] = [None]
 
 
 def py_round(v: float) -> int:
@@ -55,7 +117,7 @@ def hex_rgb(h: str) -> tuple[int, int, int]:
 def layout_text(op: dict, scale: float) -> dict:
     """Lines, widths and metrics of a text op at output scale `scale` (font px = round(size * scale))."""
     size = max(6, py_round(op["size"] * scale))
-    font = text_font(size, bool(op.get("bold", True)))
+    font = text_font(size, bool(op.get("bold", True)), op.get("font"))
     wbox = op["w"] * scale
     lines: list[str] = []
     for para in str(op["text"]).split("\n"):
@@ -141,9 +203,11 @@ def _rounded_rect_pts(x: float, y: float, w: float, h: float, r: float) -> np.nd
     return np.array(pts, np.float64)
 
 
-def draw_items(dst: np.ndarray, items: list[dict], to_px: Callable[[float, float], tuple[float, float]], k: float, opacity_mul: float = 1.0) -> None:
+def draw_items(dst: np.ndarray, items: list[dict], to_px: Callable[[float, float], tuple[float, float]], k: float, opacity_mul: float = 1.0,
+               background: np.ndarray | None = None) -> None:
     """Draw annotation frames (or a slide) onto dst (float32 BGR, H x W x 3) in place.
-    to_px maps an item's coordinates to dst px; k scales its widths and sizes."""
+    to_px maps an item's coordinates to dst px; k scales its widths and sizes. background (float32
+    BGR, same size as dst) is what a "background" op paints."""
     H, W = dst.shape[:2]
     for it in items:
         ops = it["ops"]
@@ -160,6 +224,14 @@ def draw_items(dst: np.ndarray, items: list[dict], to_px: Callable[[float, float
                 mapped.append(("v", o, p))
                 x0, y0 = min(x0, p[:, 0].min() - pad), min(y0, p[:, 1].min() - pad)
                 x1, y1 = max(x1, p[:, 0].max() + pad), max(y1, p[:, 1].max() + pad)
+            elif o["op"] == "background":
+                mapped.append(("b", o, None))
+                x0, y0, x1, y1 = 0, 0, W, H
+            elif o["op"] == "image":
+                ix, iy = to_px(o["x"], o["y"])
+                mapped.append(("i", o, (ix, iy)))
+                x0, y0 = min(x0, ix), min(y0, iy)
+                x1, y1 = max(x1, ix + o["w"] * k), max(y1, iy + o["h"] * k)
             else:
                 tx, ty = to_px(o["x"], o["y"])
                 g = text_geometry(o, tx, ty, k)
@@ -181,6 +253,24 @@ def draw_items(dst: np.ndarray, items: list[dict], to_px: Callable[[float, float
         layer = np.zeros((lh, lw, 4), np.float32)  # premultiplied RGBA 0..255
         # 2. ops in order
         for kind, o, g in mapped:
+            if kind == "b":
+                if background is not None:
+                    layer[..., :3] = background[ly0:ly1, lx0:lx1, ::-1]
+                    layer[..., 3] = 255.0
+                continue
+            if kind == "i":
+                iw, ih = max(1, int(round(o["w"] * k))), max(1, int(round(o["h"] * k)))
+                ox, oy = int(round(g[0])) - lx0, int(round(g[1])) - ly0
+                path = str(resolve_asset(o["path"], ASSET_DIR[0]))
+                if not Path(path).exists():
+                    continue
+                pre = image_premul(path, iw, ih) * float(o.get("alpha", 1))
+                xa, ya, xb, yb = max(0, ox), max(0, oy), min(lw, ox + iw), min(lh, oy + ih)
+                if xb > xa and yb > ya:
+                    src = pre[ya - oy:yb - oy, xa - ox:xb - ox]
+                    a = src[..., 3:4] / 255.0
+                    layer[ya:yb, xa:xb] = layer[ya:yb, xa:xb] * (1 - a) + src
+                continue
             if kind == "v":
                 p = g - np.array([lx0, ly0])
                 if o["op"] == "fill":

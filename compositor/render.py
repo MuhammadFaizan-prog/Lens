@@ -21,13 +21,14 @@ def main() -> int:
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--max-frames", type=int)
     ap.add_argument("--progress", action="store_true", help="print 'progress <done> <total>' lines to stderr")
+    ap.add_argument("--assets", help="folder relative logo / font paths resolve against (default: the plan's folder)")
     a = ap.parse_args()
 
     def report(done: int, total: int) -> None:
         if done == total or done % 5 == 0:
             print(f"progress {done} {total}", file=sys.stderr, flush=True)
 
-    opts = RenderOptions(crf=a.crf, preset=a.preset, max_frames=a.max_frames, progress=report if a.progress else None)
+    opts = RenderOptions(crf=a.crf, preset=a.preset, max_frames=a.max_frames, progress=report if a.progress else None, asset_dir=a.assets)
     info = render(a.plan, a.screen, a.out, a.camera, opts)
     print(f"rendered {info['frames']} frames {info['width']}x{info['height']}@{info['fps']} -> {info['out']}")
     return 0
