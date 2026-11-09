@@ -193,11 +193,15 @@ def label_click(gray: np.ndarray, click: Click, ocr_both: tuple[list[OcrWord], l
         if d <= 40 and d < best_d:
             best, best_d = c, d
     if best is None:
-        return {"label": "Click here", "target": "", "verb": "Click", "confidence": 0.0}
+        return {"label": "Click here", "target": "", "verb": "Click", "confidence": 0.0, "box": None}
     text = _clean(best.words)
     verb = "Open" if _is_nav(best, ctrls, text, click, gray.shape[0]) else "Click"
     conf = float(np.mean([w.conf for w in best.words])) / 100.0 * (1.0 if inside else 0.6)
-    return {"label": f"{verb} {text}", "target": text, "verb": verb, "confidence": round(conf, 3)}
+    # the control's box: its text padded the way the click test above pads it (roughly a button)
+    x, y, w, h = best.box
+    px, py = 0.6 * h + 6, 0.9 * h + 4
+    box = {"x": round(x - px, 1), "y": round(y - py, 1), "w": round(w + 2 * px, 1), "h": round(h + 2 * py, 1)}
+    return {"label": f"{verb} {text}", "target": text, "verb": verb, "confidence": round(conf, 3), "box": box}
 
 
 def step_labels(video: str, events: str, lead_ms: float = 80.0, workers: int = 2) -> dict:

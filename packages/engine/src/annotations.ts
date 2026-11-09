@@ -125,6 +125,8 @@ export interface StepDraft {
   verb: string;
   confidence: number;
   state: "pending" | "accepted" | "dismissed";
+  /** The clicked control's box in source px (the read text padded to roughly a button), when one was found. */
+  box?: { x: number; y: number; w: number; h: number } | null;
 }
 
 export interface StepLabelSettings {

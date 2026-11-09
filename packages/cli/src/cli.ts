@@ -20,6 +20,9 @@ export const USAGE = `lens <command> [options]            (every command: --json
   plan [--out plan.json] [--language es|source]
   export [--format mp4|gif|srt|vtt] [--out file] [--language es] [--crf n] [--x264-preset p]
   render ...                           same as export
+  export demo [--out folder]           interactive click-through demo (one self-contained index.html)
+  export guide [--out folder]          step guide: guide.md + guide.html + guide.pdf
+  demo hotspot <step-id> [--x px --y px] [--tooltip text] [--clear]   hotspot editor
   frame [--frame n | --at 1.5s] [--out frame.png]       one output frame as PNG
   transcribe [--force] [--model m] [--track id]
   translate --to es[,fr,...] [--select es|source] [--no-download]
@@ -39,7 +42,7 @@ export const USAGE = `lens <command> [options]            (every command: --json
 Times: ms, "1.5s", "800ms" or "m:ss". --root (or $LENS_ROOT) refuses every path outside it.
 Exit codes: 0 ok, 1 failed, 2 usage, 3 not found, 4 invalid, 5 outside root, 6 conflict.`;
 
-const BOOL = new Set(["json", "force", "create", "no-download", "help", "progress"]);
+const BOOL = new Set(["json", "force", "create", "no-download", "help", "progress", "clear"]);
 
 export interface Parsed {
   pos: string[];
@@ -94,6 +97,9 @@ const KNOWN: Record<string, string[]> = {
   "project new": ["from", "screen", "meta", "events", "cam", "mic", "transcript", "project-file", "force"],
   plan: ["out", "language"],
   export: ["format", "out", "language", "crf", "x264-preset"],
+  "export demo": ["out"],
+  "export guide": ["out"],
+  "demo hotspot": ["x", "y", "tooltip", "clear"],
   frame: ["frame", "at", "out", "language"],
   transcribe: ["force", "model", "track"],
   translate: ["to", "select", "no-download"],
@@ -139,6 +145,14 @@ export async function dispatch(p: Parsed, ctx: ops.Ctx): Promise<[string, unknow
       return ["plan", ops.plan(ctx, dir, { out: str(f, "out"), language: str(f, "language") })];
     case "export":
     case "render":
+      if (c1 === "demo" || c1 === "guide" || str(f, "format") === "demo" || str(f, "format") === "guide") {
+        const kind = c1 ?? str(f, "format")!;
+        const { format: _fmt, ...rest2 } = f;
+        if (c1 && _fmt !== undefined && _fmt !== c1) throw usage(`export ${c1} does not take --format ${String(_fmt)}`);
+        checkFlags(`export ${kind}`, rest2);
+        if (rest.length) throw usage(`export ${kind} takes no further arguments`);
+        return [`export ${kind}`, await ops.exportSteps(ctx, dir, { kind, out: str(f, "out") })];
+      }
       checkFlags("export", f);
       if (c1) throw usage(`${c0} takes no arguments (use --format / --out)`);
       return [c0, await ops.exportProject(ctx, dir, { format: str(f, "format"), out: str(f, "out"), language: str(f, "language"), crf: num(f, "crf"), x264Preset: str(f, "x264-preset") })];
@@ -195,6 +209,12 @@ export async function dispatch(p: Parsed, ctx: ops.Ctx): Promise<[string, unknow
       if (Object.values(opts).every((v) => v === undefined)) throw usage("brand set needs at least one of --primary --accent --font --name --logo --watermark --json-value");
       return ["brand set", ops.brandSet(ctx, dir, opts)];
     }
+    case "demo": {
+      sub("demo", ["hotspot"]);
+      checkFlags("demo hotspot", f);
+      if (rest.length !== 1) throw usage("demo hotspot needs one step id");
+      return ["demo hotspot", ops.demoHotspot(ctx, dir, { step: rest[0]!, x: num(f, "x"), y: num(f, "y"), tooltip: str(f, "tooltip"), clear: f.clear === true })];
+    }
     case "get":
       checkFlags("get", f);
       if (rest.length) throw usage("get takes one pointer");
@@ -232,10 +252,11 @@ export async function dispatch(p: Parsed, ctx: ops.Ctx): Promise<[string, unknow
   }
 }
 
-const GROUPS = ["project", "takes", "privacy", "steps", "preset", "brand", "zoom", "cut", "annotate"];
+const GROUPS = ["project", "takes", "privacy", "steps", "preset", "brand", "zoom", "cut", "annotate", "demo"];
 function commandName(argv: string[]): string {
   try {
     const { pos } = parseArgs(argv);
+    if ((pos[0] === "export" || pos[0] === "render") && (pos[1] === "demo" || pos[1] === "guide")) return `${pos[0]} ${pos[1]}`;
     return GROUPS.includes(pos[0] ?? "") && pos[1] ? `${pos[0]} ${pos[1]}` : pos[0] ?? "";
   } catch {
     return "";
@@ -270,5 +291,9 @@ export async function main(argv: string[], out = process.stdout, err = process.s
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
+  // exitCode, not process.exit(): exit() drops whatever is still queued for a piped stdout (a privacy
+  // scan's --json result is > 64 KB and was cut off mid-line when read through a pipe)
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
 }

@@ -20,6 +20,7 @@ export const TOOLS = {
   translate: ["translate/lens-translate"],
   redact: ["redact/lens-redact"],
   steps: ["redact/lens-redact", "steps"],
+  stepsExport: ["compositor/export_steps.py"],
 } as const;
 export type ToolName = keyof typeof TOOLS;
 

@@ -20,6 +20,7 @@ import { defaultBrand, validateBrand, type BrandKit } from "./brand.js";
 import { isColorValue } from "./palette.js";
 import { validateTranslations, type TranslationSettings } from "./translation.js";
 import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
+import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -198,6 +199,8 @@ export interface ProjectConfig {
   theme: ThemeSettings;
   /** Brand kit: colours, logo watermark, fonts, intro / outro cards (demand #9). */
   brand: BrandKit;
+  /** Interactive demo + step guide export (demand #7, docs/InteractiveDemo.md). */
+  demo: DemoSettings;
 }
 
 export type ZoomPresetName = "calm" | "default" | "punchy";
@@ -353,6 +356,7 @@ export function defaultProject(): ProjectConfig {
     export: { gif: { fps: 15, width: 640, loop: true } },
     theme: defaultTheme(),
     brand: defaultBrand(),
+    demo: defaultDemo(),
   };
 }
 
@@ -444,6 +448,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (typeof p.background.inherit !== "boolean") errs.push("background.inherit must be true or false");
   errs.push(...validateTheme(p.theme));
   errs.push(...validateBrand(p.brand));
+  errs.push(...validateDemo(p.demo));
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");
   if (errs.length) throw new ProjectValidationError(errs.join("; "));

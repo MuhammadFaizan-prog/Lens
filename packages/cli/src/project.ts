@@ -29,6 +29,9 @@ import {
   reviewPrivacy,
   reviewSteps,
   slugify,
+  DemoExportError,
+  setDemoHotspot,
+  stepsExportInput,
   toSrt,
   toVtt,
   TranscriptError,
@@ -387,6 +390,58 @@ export async function renderFrame(ctx: Ctx, dirArg: string | undefined, o: { fra
   fs.rmSync(planFile, { force: true });
   const png = fs.readFileSync(out);
   return { project: l.dir, frame: n, timeMs: Math.round((n * 1000) / full.output.fps), out, width: full.output.width, height: full.output.height, sha256: sha256(png), bytes: png.length };
+}
+
+// ------------------------------------------------------------------ interactive demo / step guide (demand #7)
+
+export const STEPS_KINDS = ["demo", "guide"] as const;
+export type StepsKind = (typeof STEPS_KINDS)[number];
+
+/**
+ * Interactive click-through demo (self-contained index.html) or step guide (Markdown + HTML + PDF)
+ * from the accepted step labels. Output: a folder (default <project>/exports/<name>-<kind>/).
+ */
+export async function exportSteps(ctx: Ctx, dirArg: string | undefined, o: { kind: string; out?: string }) {
+  const l = load(ctx, dirArg);
+  if (!STEPS_KINDS.includes(o.kind as StepsKind)) throw usage(`unknown export kind ${o.kind} (demo, guide)`);
+  const kind = o.kind as StepsKind;
+  checkStoredPaths(ctx, l.dir, l.project);
+  let input;
+  try {
+    input = stepsExportInput({ meta: l.meta, events: l.events, project: l.project });
+  } catch (e) {
+    if (e instanceof DemoExportError) throw notFound(e.message);
+    engineError(e);
+  }
+  const out = ctx.sandbox.resolve(o.out ?? path.join(l.dir, "exports", `${path.basename(l.dir)}-${kind}`), { what: "--out" });
+  if (fs.existsSync(out) && !fs.statSync(out).isDirectory()) throw usage(`--out ${o.out} is a file; give a folder`);
+  fs.mkdirSync(out, { recursive: true });
+  const work = workDir(l, "steps-export");
+  const planFile = path.join(work, `plan-${kind}.json`);
+  const manifestFile = path.join(work, `manifest-${kind}.json`);
+  fs.writeFileSync(planFile, JSON.stringify(input.plan));
+  fs.writeFileSync(manifestFile, JSON.stringify(input.manifest));
+  const run = await mustRun("stepsExport", ["--manifest", manifestFile, "--plan", planFile, "--screen", path.join(l.dir, "screen.mp4"), "--out", out, "--kind", kind, "--assets", l.dir], { onStderr: ctx.progress });
+  const res = JSON.parse(run.stdout.trim().split("\n").pop() ?? "{}") as Record<string, unknown>;
+  const files = kind === "demo" ? ["index.html", "demo.json"] : ["guide.md", "guide.html", "guide.pdf", "guide.json"];
+  return {
+    project: l.dir,
+    kind,
+    out,
+    steps: input.manifest.steps.map((s) => ({ n: s.n, id: s.stepId, label: s.label, clickMs: s.clickMs })),
+    files: files.map((f) => path.join(out, f)),
+    ...(kind === "demo" ? { demo: res.demo } : { guide: res.guide }),
+    renderMs: run.ms,
+  };
+}
+
+/** Hotspot editor from the command line: move a step's hotspot (source px) or change its tooltip; clear = back to the click and label. */
+export function demoHotspot(ctx: Ctx, dirArg: string | undefined, o: { step: string; x?: number; y?: number; tooltip?: string; clear?: boolean }) {
+  const l = load(ctx, dirArg);
+  if (!l.project.stepLabels.drafts.some((d) => d.id === o.step)) throw notFound(`unknown step id ${o.step}`);
+  const patch = o.clear ? null : { ...(o.x !== undefined ? { x: o.x } : {}), ...(o.y !== undefined ? { y: o.y } : {}), ...(o.tooltip !== undefined ? { tooltip: o.tooltip } : {}) };
+  if (patch && !Object.keys(patch).length) throw usage("demo hotspot needs --x / --y / --tooltip or --clear");
+  return save(ctx, l, setDemoHotspot(l.project, o.step, patch));
 }
 
 // ------------------------------------------------------------------ transcribe / translate

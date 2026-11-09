@@ -96,6 +96,18 @@ export const TOOLS: Tool[] = [
     run: (a, s) => ops.exportProject(s.ctx, dirOf(a, s), a as ops.ExportOptions),
   },
   {
+    name: "export_demo",
+    description: "Export an interactive click-through demo from the accepted step labels: one self-contained index.html (a still per click, pulsing hotspot, tooltip with the step label, next / back / keys, progress bar, final call-to-action slide from project.demo.cta, brand styles, privacy masks applied). Default output folder: <project>/exports/<name>-demo/.",
+    inputSchema: S.obj({ project, out: S.str("output folder inside the root") }),
+    run: (a, s) => ops.exportSteps(s.ctx, dirOf(a, s), { kind: "demo", out: a.out as string | undefined }),
+  },
+  {
+    name: "export_guide",
+    description: "Export a step-by-step guide from the accepted step labels as Markdown, HTML and PDF: numbered steps, each with a cropped screenshot around the click, a highlight box around the clicked control, and the label. Default output folder: <project>/exports/<name>-guide/.",
+    inputSchema: S.obj({ project, out: S.str("output folder inside the root") }),
+    run: (a, s) => ops.exportSteps(s.ctx, dirOf(a, s), { kind: "guide", out: a.out as string | undefined }),
+  },
+  {
     name: "render_frame",
     description: "Render one output frame exactly as the export draws it and return it as a PNG image, so you can see the effect of an edit. Give frame (output frame index) or atMs (output time).",
     inputSchema: S.obj({ project, frame: S.int("output frame index", { minimum: 0 }), atMs: S.num("output time in ms", { minimum: 0 }), out: S.str("also keep the PNG here (inside the root)"), language: S.str("caption language") }),
