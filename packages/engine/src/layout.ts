@@ -5,18 +5,20 @@ const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
 /** Output pixel size for an aspect ratio. resolution is the short side (the height for 16:9). */
 export function outputSize(aspect: string, resolution: number): { width: number; height: number } {
-  const [aw, ah] = aspect.split(":").map(Number) as [number, number];
+  let [aw, ah] = aspect.split(":").map(Number) as [number, number];
+  // "auto" (or anything unparsable) without a source to follow: 16:9 (canvasSize handles auto)
+  if (!(aw > 0 && ah > 0)) [aw, ah] = [16, 9];
   if (aw >= ah) return { width: even((resolution * aw) / ah), height: even(resolution) };
   return { width: even(resolution), height: even((resolution * ah) / aw) };
 }
 
 /**
- * Canvas size of a project (feat/canvas-layout): a custom W x H in px (output.size) wins; aspect
+ * Canvas size of a project (feat/canvas-layout): a custom W x H in px (output.size {w, h}) wins; aspect
  * "auto" follows the (user-cropped) source, `source` w x h; otherwise outputSize(aspect, resolution).
  */
 export function canvasSize(output: ProjectConfig["output"], source: { width: number; height: number }): { width: number; height: number } {
   const sz = output.size;
-  if (sz && sz.width > 0 && sz.height > 0) return { width: even(sz.width), height: even(sz.height) };
+  if (sz && sz.w > 0 && sz.h > 0) return { width: even(sz.w), height: even(sz.h) };
   if (output.aspect === "auto") {
     const r = source.width / Math.max(1, source.height);
     const res = output.resolution;

@@ -21,6 +21,7 @@ import { isColorValue } from "./palette.js";
 import { validateTranslations, type TranslationSettings } from "./translation.js";
 import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
+import type { CardTransform } from "./layout.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -30,8 +31,16 @@ import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 export interface ProjectConfig {
   version: 1;
   output: {
-    /** Aspect ratio as w:h, e.g. "16:9", "1:1", "9:16", "4:5", "4:3". */
+    /**
+     * Aspect ratio as w:h, e.g. "16:9", "1:1", "9:16", "4:5", "4:3", or "auto": the canvas follows
+     * the (user-cropped) recording's own shape, resolution being its short side.
+     */
     aspect: string;
+    /**
+     * Custom canvas size in output px (16..8192 each side, rounded to even). Wins over aspect and
+     * resolution when set. Absent / null = aspect x resolution.
+     */
+    size?: { w: number; h: number } | null;
     /** Height of the output for 16:9, or the short side for other aspects. */
     resolution: 360 | 480 | 720 | 1080 | 1440 | 2160;
     fps: 24 | 30 | 60;
@@ -201,6 +210,13 @@ export interface ProjectConfig {
   };
   /** Source crop rect in source px (LOOK-14). Everything downstream works in cropped space. */
   crop: Rect | null;
+  /**
+   * Free placement of the screen card (feat/canvas-layout): top-left and size as fractions of the
+   * canvas width / height. Absent / null = today's placement (the source fitted in the padding).
+   * A card whose shape differs from the crop trims the crop, centred (cardCrop), never stretches.
+   * Fill mode and its pan-follow are off while a card is set.
+   */
+  card?: CardTransform | null;
   /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05); tracked when they have keys. */
   masks: MaskRegion[];
   /** Automatic privacy redaction (demand #3): the scan's detections and their review state. */
@@ -422,7 +438,14 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
   if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
   if (p.version !== 1) errs.push(`unsupported project version ${String(p.version)}`);
-  if (!/^\d+:\d+$/.test(p.output.aspect)) errs.push(`output.aspect must look like 16:9, got ${p.output.aspect}`);
+  if (p.output.aspect !== "auto" && !(/^\d+:\d+$/.test(p.output.aspect) && p.output.aspect.split(":").every((v) => Number(v) > 0)))
+    errs.push(`output.aspect must look like 16:9 or be auto, got ${p.output.aspect}`);
+  const osz = p.output.size;
+  if (osz !== undefined && osz !== null && !(isPlainObject(osz) && [osz.w, osz.h].every((v) => Number.isFinite(v) && v >= 16 && v <= 8192)))
+    errs.push("output.size must be {w, h} with each side within 16..8192 px");
+  const cd = p.card;
+  if (cd !== undefined && cd !== null && !(isPlainObject(cd) && [cd.x, cd.y, cd.w, cd.h].every(Number.isFinite) && cd.w > 0 && cd.h > 0 && cd.w <= 4 && cd.h <= 4 && Math.abs(cd.x) <= 4 && Math.abs(cd.y) <= 4))
+    errs.push("card must be {x, y, w, h} canvas fractions with 0 < w, h <= 4 and |x|, |y| <= 4");
   if (![24, 30, 60].includes(p.output.fps)) errs.push("output.fps must be 24, 30 or 60");
   if (p.frame.padding < 0 || p.frame.padding > 0.4) errs.push("frame.padding must be within 0..0.4");
   if (p.zoom.minScale < 1 || p.zoom.maxScale < p.zoom.minScale) errs.push("zoom scale range invalid");
