@@ -308,6 +308,19 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
+    // a just-added zoom (Z / Zoom "+") waits for a click to aim it: a click on its own (follow-cursor)
+    // rectangle aims it too, instead of starting a move
+    const st = store.get();
+    if (o.kind === "zoom" && st.zoomPlacing && st.selection?.track === "zoom" && st.plan) {
+      const fr = st.plan.frames[st.frame];
+      if (fr) {
+        const q = spaceOf(st.plan, zoomEditFrame(st.plan, fr), "screen").fromOut(toOut(e));
+        const idx = st.selection.index;
+        store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
+      }
+      store.setZoomPlacing(false);
+      return;
+    }
     canvasFocus = true;
     store.pause();
     store.beginGesture();

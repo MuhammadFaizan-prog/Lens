@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
+import { addZoomAtPlayhead, deleteSelection, Timeline } from "./components/Timeline";
 import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./components/CanvasOverlay";
-import { deleteSelection, Timeline } from "./components/Timeline";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { StepsPanel } from "./components/StepsPanel";
@@ -291,6 +291,10 @@ function useKeys() {
           else if (k === "ArrowRight") store.step(n);
           break;
         }
+        case "z":
+        case "Z":
+          e.preventDefault();
+          addZoomAtPlayhead();
           break;
         case "Home":
           store.step(-1e9);
@@ -314,6 +318,7 @@ function useKeys() {
           break;
         case "Escape":
           if (ui.get().fullscreen) ui.setFullscreen(false);
+          store.setZoomPlacing(false);
           store.selectCanvas(null);
           store.select(null);
           store.selectWords([]);

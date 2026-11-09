@@ -318,10 +318,10 @@ export function Timeline() {
               {ADDABLE.includes(t.kind) && (
                 <button
                   className="mini-add"
-                  title={t.kind === "audio" ? "Add a volume segment at playhead" : `Add ${t.label.toLowerCase()} at playhead`}
+                  title={t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
                   aria-label={`Add ${t.kind}`}
                   data-testid={`add-${t.kind}`}
-                  onClick={() => (create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
+                  onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
                 >
                   <Icon name="plus" size={12} />
                 </button>
@@ -533,6 +533,16 @@ export function createBlock(track: TrackKind, t: number): number {
   }
 }
 
+/** Z / Zoom lane "+": a manual zoom at the playhead; the next click on the preview aims it (fixed point). */
+export function addZoomAtPlayhead(): void {
+  const s = store.get();
+  const t = s.plan?.frames[s.frame]?.src ?? 0;
+  const i = createBlock("zoom", t);
+  if (i >= 0) {
+    store.setZoomPlacing(true);
+    store.notify("Zoom added: click the preview to aim it (Esc to keep following the cursor)");
+  }
+}
 
 export function deleteSelection(): boolean {
   const sel = store.get().selection;

@@ -97,6 +97,8 @@ export interface EditorState {
   stepsExport: Partial<Record<"demo" | "guide", StepsExportRun>>;
   /** The caption translation run in progress (or its last outcome), demand #8. */
   translateRun: TranslateRunState | null;
+  /** A just-added zoom waits for a click on the preview to aim it (Z / Zoom lane "+"). */
+  zoomPlacing: boolean;
   /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
   canvasSel: "logo" | "webcam" | "caption" | null;
 }
@@ -163,6 +165,7 @@ export class EditorStore {
     exportDialog: null,
     stepsExport: {},
     translateRun: null,
+    zoomPlacing: false,
     canvasSel: null,
   };
   private listeners = new Set<Listener>();
@@ -337,11 +340,15 @@ export class EditorStore {
   }
 
   select(sel: Selection | null): void {
-    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel });
+    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
   }
 
   selectCanvas(which: EditorState["canvasSel"]): void {
     this.set({ canvasSel: which, selection: which ? null : this.s.selection });
+  }
+
+  setZoomPlacing(on: boolean): void {
+    this.set({ zoomPlacing: on });
   }
 
   /** Make auto zooms editable (see freezeAutoZooms); returns the index of `seg` after freezing. */

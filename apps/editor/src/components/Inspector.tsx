@@ -57,7 +57,20 @@ function SelectionCard() {
     const z = project.zoom.segments[sel.index];
     if (!z) return null;
     range = z;
-    body = <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />;
+    const meta = store.get().bundle?.meta;
+    body = (
+      <>
+        <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />
+        <Segmented
+          label="Target"
+          value={z.focus === "follow" ? "follow" : "fixed"}
+          testId="sel-zoom-mode"
+          options={[{ value: "follow", label: "Follow cursor" }, { value: "fixed", label: "Fixed point" }]}
+          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", sel.index, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
+        />
+        <p className="note">{z.focus === "follow" ? "Follows the cursor. Drag the rectangle on the preview to pin it to a point." : `Fixed on ${Math.round(z.focus.x)}, ${Math.round(z.focus.y)} px. Drag the rectangle to move it, its corners to change the zoom.`}</p>
+      </>
+    );
   } else if (sel.track === "speed") {
     const s = project.edits.speed[sel.index];
     if (!s) return null;

@@ -38,6 +38,28 @@ describe("normalized overlay coords (Windows bug #12)", () => {
   });
 });
 
+describe("zoom rect <-> engine target (Windows bug #14)", () => {
+  const W = 1280, H = 720;
+  it("round-trips focus and scale for a target the camera can centre", () => {
+    const r = zoomRect({ x: 900, y: 250 }, 2, W, H);
+    expect(r).toEqual({ x: 580, y: 70, w: 640, h: 360 });
+    const t = zoomTarget(r, W, H);
+    expect(t.focus).toEqual({ x: 900, y: 250 });
+    expect(t.scale).toBe(2);
+  });
+  it("clamps like the engine camera so the rect shows what the export shows", () => {
+    const r = zoomRect({ x: 1270, y: 5 }, 2, W, H);
+    expect(r.x + r.w).toBe(W);
+    expect(r.y).toBe(0);
+    expect(clampZoomCentre({ x: 1270, y: 5 }, 2, W, H)).toEqual({ x: 960, y: 180 });
+  });
+  it("a resized rect sets the scale (screen width / rect width), bounded", () => {
+    expect(zoomTarget({ x: 0, y: 0, w: 320, h: 180 }, W, H).scale).toBe(4);
+    expect(zoomTarget({ x: 0, y: 0, w: 100, h: 56 }, W, H, 1, 4).scale).toBe(4);
+    expect(zoomTarget({ x: 0, y: 0, w: 2000, h: 1125 }, W, H).scale).toBe(1);
+  });
+});
+
 describe("responsive layout (Windows bug #11)", () => {
   it("keeps the centre column usable at 1024 and the stage at 640 tall", () => {
     for (const [vw, vh] of [[1024, 640], [1280, 720], [1366, 768], [3840, 2160]] as Array<[number, number]>) {
