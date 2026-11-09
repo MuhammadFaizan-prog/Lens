@@ -46,7 +46,11 @@ jobs:
           ls -la out/desktop
           sudo apt-get install -y -q 7zip
           7z l -tNsis out/desktop/Lens-Setup-*.exe | grep -E "Uninstall Lens.exe|app-64.7z"
-          7z l out/desktop/Lens-Setup-*.exe | grep -E "resources/ffmpeg/ffmpeg.exe|prebuilds/win32-x64/uiohook-napi.node|resources/app.asar$"
+          7z e -so -tNsis out/desktop/Lens-Setup-*.exe '$PLUGINSDIR/app-64.7z' > "$RUNNER_TEMP/app-64.7z"
+          7z l "$RUNNER_TEMP/app-64.7z" > "$RUNNER_TEMP/app.txt"
+          for f in resources/ffmpeg/ffmpeg.exe resources/app.asar.unpacked/node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node resources/app.asar resources/app-update.yml resources/editor/index.html Lens.exe; do
+            grep -F " $f" "$RUNNER_TEMP/app.txt" || { echo "missing $f"; exit 1; }
+          done
           sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
       - name: Upload to the release
         env:
