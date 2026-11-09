@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { startJob } from "./jobs";
 import { transcribe } from "./stt";
+import { detectSilencesSync, type Range } from "./silence";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
@@ -304,6 +305,29 @@ function startTranscribe(bundle: string, auto = false): TranscribeJob {
   return job;
 }
 
+/**
+ * Measured silences on the mic track, on the recording clock (Windows #17: "Shorten pauses" works with
+ * no transcript). Cached in .lens-cache/silences.json, keyed by the mic file's size, mtime and offset.
+ */
+function micSilences(bundle: string): Range[] {
+  const mic = micTrack(bundle);
+  if (!mic) return [];
+  const st = fs.statSync(mic.file);
+  const key = `${path.basename(mic.file)}:${st.size}:${st.mtimeMs}:${mic.offsetMs}:v1`;
+  const cache = path.join(bundle, ".lens-cache", "silences.json");
+  const c = readJson(cache) as { key?: string; silences?: Range[] } | null;
+  if (c?.key === key && Array.isArray(c.silences)) return c.silences;
+  let silences: Range[] = [];
+  try {
+    silences = detectSilencesSync(FFMPEG, mic.file, { minMs: 300 }).silences.map((r) => ({ startMs: r.startMs + mic.offsetMs, endMs: r.endMs + mic.offsetMs }));
+  } catch {
+    return [];
+  }
+  fs.mkdirSync(path.dirname(cache), { recursive: true });
+  fs.writeFileSync(cache, JSON.stringify({ key, silences }));
+  return silences;
+}
+
 const extracting = new Map<string, Promise<number>>();
 
 export function defaultBundle(): string {
@@ -413,6 +437,8 @@ async function loadBundle(dir: string) {
     project,
     transcript,
     hasMic: !!micTrack(dir),
+    /** Measured silences on the mic (pauses for Cleanup when there is no transcript). */
+    silences: micSilences(dir),
     // a fresh desktop recording with a mic (recording.json autoTranscribe, written at Stop): the editor
     // starts on-device speech-to-text once; the marker stops a failed run from repeating on every open
     autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
@@ -460,7 +486,7 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const job: ExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now() };
@@ -499,7 +525,7 @@ function startExportBrowser(bundle: string, rawProject: unknown): BrowserExportJ
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses });
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
   const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT);
   jobs.set(id, job);
   return job;

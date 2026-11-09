@@ -23,6 +23,8 @@ export interface Bundle {
   hasMic?: boolean;
   /** Fresh desktop recording with a mic: transcribe it once when the editor opens (Windows #5). */
   autoTranscribe?: boolean;
+  /** Measured silences on the mic track, recording clock (Cleanup pauses without a transcript, Windows #17). */
+  silences?: Array<{ startMs: number; endMs: number }>;
   screen: TrackInfo;
   camera: TrackInfo | null;
 }
@@ -41,13 +43,19 @@ export async function fetchBundle(dir?: string): Promise<Bundle> {
     transcript: j.transcript ? parseTranscript(j.transcript) : null,
     hasMic: !!j.hasMic,
     autoTranscribe: !!j.autoTranscribe,
+    silences: Array.isArray(j.silences) ? j.silences : [],
     screen: j.screen,
     camera: j.camera,
   };
 }
 
-export function buildPlan(b: Pick<Bundle, "meta" | "events" | "transcript">, project: ProjectConfig): RenderPlan {
-  return buildRenderPlan({ meta: b.meta, events: b.events, project, words: b.transcript?.words ?? [], pauses: b.transcript?.pauses });
+/** Pauses Cleanup may shorten: the transcript's measured pauses, else the mic's measured silences. */
+export function planPauses(b: Pick<Bundle, "transcript" | "silences">): Array<{ startMs: number; endMs: number }> | undefined {
+  return b.transcript?.pauses ?? (b.silences?.length ? b.silences : undefined);
+}
+
+export function buildPlan(b: Pick<Bundle, "meta" | "events" | "transcript" | "silences">, project: ProjectConfig): RenderPlan {
+  return buildRenderPlan({ meta: b.meta, events: b.events, project, words: b.transcript?.words ?? [], pauses: planPauses(b) });
 }
 
 let fontReady: Promise<void> | null = null;

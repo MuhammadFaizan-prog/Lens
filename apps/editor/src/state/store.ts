@@ -16,7 +16,7 @@ import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
-import { buildPlan, fetchBundle, type Bundle } from "./bundle";
+import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
 import { frameForSource, freezeAutoZooms, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
 
 export interface Selection {
@@ -952,7 +952,7 @@ export class EditorStore {
     if (!b) return null;
     const p = this.history.doc;
     const proj = { ...p, captions: { ...p.captions, enabled: true }, translations: { ...p.translations, language } };
-    const plan = buildRenderPlan({ meta: b.meta, events: b.events, project: proj, words: b.transcript?.words ?? [], pauses: b.transcript?.pauses, onlyFrames: [0] });
+    const plan = buildRenderPlan({ meta: b.meta, events: b.events, project: proj, words: b.transcript?.words ?? [], pauses: planPauses(b), onlyFrames: [0] });
     const lang = language ?? (b.transcript?.language || "en");
     return { name: `captions.${lang}.${kind}`, text: kind === "srt" ? toSrt(plan.subtitles) : toVtt(plan.subtitles, lang) };
   }

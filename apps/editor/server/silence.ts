@@ -3,7 +3,7 @@
  * Used by speech-to-text (pauses in transcript.json, word ends trimmed back to where the sound stops)
  * and by Cleanup's "Shorten pauses", which must work without any transcript (Windows #5 / #17).
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 export interface Range { startMs: number; endMs: number }
 
@@ -30,17 +30,32 @@ export function parseSilencedetect(stderr: string, durationMs: number): Range[] 
  * the track: noiseDb is clamped to at least 12 dB under the track's speech level (its 95th-percentile
  * RMS), so a quiet mic still separates speech from room tone.
  */
+const levelArgs = (input: string) => ["-hide_banner", "-nostats", "-i", input, "-vn", "-af", "aformat=channel_layouts=mono,aresample=8000,asetnsamples=400,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level", "-f", "null", "-"];
+const detectArgs = (input: string, noiseDb: number, minMs: number) => ["-hide_banner", "-nostats", "-i", input, "-vn", "-af", `aformat=channel_layouts=mono,silencedetect=noise=${noiseDb.toFixed(1)}dB:d=${(minMs / 1000).toFixed(3)}`, "-f", "null", "-"];
+
 export async function detectSilences(ffmpeg: string, input: string, opts: { minMs?: number; noiseDb?: number } = {}): Promise<{ silences: Range[]; durationMs: number; noiseDb: number }> {
   const minMs = opts.minMs ?? 300;
-  const level = await speechLevelDb(ffmpeg, input);
+  const level = parseLevel(await ffmpegStderr(ffmpeg, levelArgs(input)));
   const noiseDb = Math.min(opts.noiseDb ?? -40, level.speechDb - 12);
-  const err = await ffmpegStderr(ffmpeg, ["-hide_banner", "-nostats", "-i", input, "-vn", "-af", `aformat=channel_layouts=mono,silencedetect=noise=${noiseDb.toFixed(1)}dB:d=${(minMs / 1000).toFixed(3)}`, "-f", "null", "-"]);
+  const err = await ffmpegStderr(ffmpeg, detectArgs(input, noiseDb, minMs));
   return { silences: parseSilencedetect(err, level.durationMs), durationMs: level.durationMs, noiseDb };
 }
 
-/** 95th-percentile 50 ms RMS (dBFS) and the duration of an audio file. */
-async function speechLevelDb(ffmpeg: string, input: string): Promise<{ speechDb: number; durationMs: number }> {
-  const err = await ffmpegStderr(ffmpeg, ["-hide_banner", "-nostats", "-i", input, "-vn", "-af", "aformat=channel_layouts=mono,aresample=8000,asetnsamples=400,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level", "-f", "null", "-"]);
+/** detectSilences for synchronous callers (export start); same result. */
+export function detectSilencesSync(ffmpeg: string, input: string, opts: { minMs?: number; noiseDb?: number } = {}): { silences: Range[]; durationMs: number; noiseDb: number } {
+  const minMs = opts.minMs ?? 300;
+  const run = (args: string[]) => {
+    const r = spawnSync(ffmpeg, args, { windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+    if (r.status !== 0) throw new Error(`ffmpeg exited ${r.status}: ${String(r.stderr).trim().split("\n").slice(-2).join(" ")}`);
+    return String(r.stderr);
+  };
+  const level = parseLevel(run(levelArgs(input)));
+  const noiseDb = Math.min(opts.noiseDb ?? -40, level.speechDb - 12);
+  return { silences: parseSilencedetect(run(detectArgs(input, noiseDb, minMs)), level.durationMs), durationMs: level.durationMs, noiseDb };
+}
+
+/** 95th-percentile 50 ms RMS (dBFS) and the duration, from the astats pass's stderr. */
+function parseLevel(err: string): { speechDb: number; durationMs: number } {
   const vals = [...err.matchAll(/RMS_level=(-?[\d.]+|-inf)/g)].map((m) => (m[1] === "-inf" ? -120 : Number(m[1]))).filter(Number.isFinite);
   const d = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(err);
   const durationMs = d ? (Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3])) * 1000 : vals.length * 50;

@@ -369,6 +369,15 @@ function LanguagesSection({ p }: { p: ProjectConfig }) {
 function AudioTab({ p }: { p: ProjectConfig }) {
   const tr = p.audio.tracks[0];
   const cl = p.edits.cleanup;
+  const cleanupCuts = useEditor((s) => s.plan?.cleanupCuts ?? []);
+  const cleanupN = cleanupCuts.length;
+  const cleanupMs = cleanupCuts.reduce((a, c) => a + c.endMs - c.startMs, 0);
+  const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
+  const hasMic = useEditor((s) => !!s.bundle?.hasMic);
+  const hasSilences = useEditor((s) => (s.bundle?.silences?.length ?? 0) > 0);
+  /** Cleanup is on while either switch is on (one undoable edit; the cuts show on the Cuts lane). */
+  const setCleanup = (label: string, sel: { removeFillers: boolean; shortenPauses: boolean }) =>
+    store.edit(label, (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, ...sel, enabled: sel.removeFillers || sel.shortenPauses } } }));
   const setTrack = (label: string, patch: Partial<NonNullable<typeof tr>>, live = false) => {
     const fn = (q: ProjectConfig) => ({ ...q, audio: { ...q.audio, tracks: q.audio.tracks.map((x, i) => (i === 0 ? { ...x, ...patch } : x)) } });
     if (live) store.tweak(label, fn);
@@ -389,10 +398,18 @@ function AudioTab({ p }: { p: ProjectConfig }) {
         <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
       </Section>
       <Section title="Cleanup">
-        <Toggle label="Auto cleanup from transcript" value={cl.enabled} testId="cleanup" onChange={(v) => store.edit("Cleanup", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, enabled: v } } }))} />
-        <Toggle label="Remove fillers" value={cl.removeFillers} onChange={(v) => store.edit("Remove fillers", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, removeFillers: v } } }))} />
-        <Toggle label="Shorten pauses" value={cl.shortenPauses} onChange={(v) => store.edit("Shorten pauses", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, shortenPauses: v } } }))} />
-        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+        {/* Windows #17: the two toggles are the switches (each turns cleanup on); pauses come from the mic's
+            measured silences, so they work with no transcript; fillers need the transcript's words */}
+        <Toggle label="Remove fillers" value={cl.enabled && cl.removeFillers} testId="cleanup-fillers" onChange={(v) => setCleanup("Remove fillers", { removeFillers: v, shortenPauses: cl.enabled && cl.shortenPauses })} />
+        <Toggle label="Shorten pauses" value={cl.enabled && cl.shortenPauses} testId="cleanup-pauses" onChange={(v) => setCleanup("Shorten pauses", { shortenPauses: v, removeFillers: cl.enabled && cl.removeFillers })} />
+        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} testId="cleanup-maxpause" onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+        {cl.enabled && (
+          <p className="note" data-testid="cleanup-summary">
+            {cleanupN} cut{cleanupN === 1 ? "" : "s"} on the Cuts lane{cleanupN ? ` (${(cleanupMs / 1000).toFixed(1)} s removed)` : ""}; Ctrl+Z undoes.
+            {cl.removeFillers && !hasWords && (hasMic ? " Fillers need a transcript: Transcribe it on the Transcript tab." : " Fillers need a transcript.")}
+            {cl.shortenPauses && !hasWords && !hasSilences && " No microphone track to find pauses in."}
+          </p>
+        )}
       </Section>
     </>
   );

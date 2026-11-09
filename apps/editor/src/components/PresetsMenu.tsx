@@ -9,6 +9,7 @@ import { applyPreset, buildRenderPlan, PRESET_SECTIONS, resolveProject, SECTION_
 import { ensurePlanAssets } from "../render/assets";
 import { PlanRenderer } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
+import { planPauses } from "../state/bundle";
 import { store, useEditor } from "../state/store";
 import { Icon } from "./Icon";
 
@@ -24,7 +25,7 @@ async function renderThumb(canvas: HTMLCanvasElement, preset: Preset): Promise<b
   const t = s.plan.frames[s.frame]?.t ?? 0;
   const project = resolveProject(applyPreset(s.project, preset));
   const i = Math.round((t * project.output.fps) / 1000);
-  const plan = buildRenderPlan({ meta: b.meta, events: b.events, project, words: b.transcript?.words ?? [], pauses: b.transcript?.pauses, onlyFrames: [i] });
+  const plan = buildRenderPlan({ meta: b.meta, events: b.events, project, words: b.transcript?.words ?? [], pauses: planPauses(b), onlyFrames: [i] });
   await ensurePlanAssets(plan);
   const f = plan.frames[0]!;
   const scr = await store.screen.load(store.screen.indexAt(f.src));
