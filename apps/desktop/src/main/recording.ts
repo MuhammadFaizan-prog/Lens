@@ -35,6 +35,11 @@ export interface StartInfo {
    * "always" = the user asked for the system cursor; capture = the API that took the frames and the
    * cursor setting Chromium reported for the track.
    */
+  /** Webcam / system-audio recorders (Windows #7), started with the screen. */
+  webcam?: { mime: string; start: number } | null;
+  system?: { mime: string; start: number } | null;
+  /** Custom mode: the area to keep, in capture px (written as the project's crop). */
+  crop?: { x: number; y: number; w: number; h: number } | null;
   cursor?: { requested: "never" | "always"; reported: string | null; api: "getDisplayMedia" | "getUserMedia" };
 }
 
@@ -65,6 +70,8 @@ export class Recording {
   readonly dir: string;
   private videoFd: number | null = null;
   private audioFd: number | null = null;
+  private camFd: number | null = null;
+  private sysFd: number | null = null;
   private eventsFd: number | null = null;
   private log: EventLogWriter | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -91,6 +98,8 @@ export class Recording {
     this.displays = displayGeoms();
     this.captured = captured;
     if (info.mic) this.audioFd = fs.openSync(path.join(this.dir, "mic.webm"), "w");
+    if (info.webcam) this.camFd = fs.openSync(path.join(this.dir, "cam.webm"), "w");
+    if (info.system) this.sysFd = fs.openSync(path.join(this.dir, "system.webm"), "w");
     if (!captured) this.warnings.push("window capture: cursor and clicks are logged in the coordinates of the display under the cursor, not the window (docs/Desktop.md)");
     this.eventsFd = fs.openSync(path.join(this.dir, "events.jsonl"), "w");
     const fd = this.eventsFd;
@@ -160,12 +169,12 @@ export class Recording {
     });
   }
 
-  private writeChunk(kind: "video" | "audio", buf: Buffer): void {
-    const fd = kind === "video" ? this.videoFd : this.audioFd;
+  private writeChunk(kind: "video" | "audio" | "camera" | "system", buf: Buffer): void {
+    const fd = kind === "video" ? this.videoFd : kind === "audio" ? this.audioFd : kind === "camera" ? this.camFd : this.sysFd;
     if (fd !== null) fs.writeSync(fd, buf);
   }
 
-  chunk(kind: "video" | "audio", data: ArrayBuffer | Uint8Array): void {
+  chunk(kind: "video" | "audio" | "camera" | "system", data: ArrayBuffer | Uint8Array): void {
     this.writeChunk(kind, Buffer.from(data instanceof Uint8Array ? data : new Uint8Array(data)));
   }
 
@@ -178,7 +187,7 @@ export class Recording {
     for (const [ev, fn] of this.listeners) this.hook?.removeListener(ev, fn);
     this.listeners = [];
     if (this.info) this.log?.end(this.stopEpoch - this.info.videoStart);
-    for (const k of ["videoFd", "audioFd", "eventsFd"] as const) {
+    for (const k of ["videoFd", "audioFd", "camFd", "sysFd", "eventsFd"] as const) {
       const fd = this[k];
       if (fd !== null) fs.closeSync(fd);
       this[k] = null;
@@ -208,13 +217,30 @@ export class Recording {
       await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "mic.webm"), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")]);
       tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: Math.round((info.mic.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
     }
+    const nonEmpty = (f: string) => fs.existsSync(path.join(dir, f)) && fs.statSync(path.join(dir, f)).size > 0;
+    if (info.system && nonEmpty("system.webm")) {
+      onProgress?.("system audio");
+      await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "system.webm"), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "system.wav")]);
+      tracks.push({ id: "system", kind: "system", path: "system.wav", offsetMs: Math.round((info.system.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
+    }
+    let webcam = false;
+    if (info.webcam && nonEmpty("cam.webm")) {
+      onProgress?.("camera");
+      // on the screen's clock: a camera that started late is padded with its first frame, an early one trimmed
+      const lagS = (info.webcam.start - info.videoStart) / 1000;
+      const vf = [lagS > 0 ? `tpad=start_mode=clone:start_duration=${lagS.toFixed(3)}` : null, "tpad=stop_mode=clone:stop_duration=600"].filter(Boolean).join(",");
+      await run(ffmpeg, ["-v", "error", "-y", ...(lagS < 0 ? ["-ss", (-lagS).toFixed(3)] : []), "-i", path.join(dir, "cam.webm"), "-map", "0:v:0", "-vf", vf,
+        "-fps_mode", "cfr", "-r", String(info.fps), "-t", (durationMs / 1000).toFixed(3), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(dir, "cam.mp4")]);
+      webcam = true;
+    }
+    const crop = info.crop && info.crop.w > 0 && info.crop.h > 0 ? info.crop : null;
     const pixelRatio = this.captured ? this.captured.scaleFactor * (info.capture.width / (this.captured.physical?.width ?? this.captured.bounds.width * this.captured.scaleFactor)) : 1;
     fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width: info.capture.width, height: info.capture.height, fps: info.fps, durationMs, pixelRatio: Math.round(pixelRatio * 1000) / 1000 }));
     // Windows #9: Chromium (Electron 38) does not implement getDisplayMedia's cursor: "never" yet, so the
     // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
     // and export never show two cursors; it turns on by itself once the capture really excludes it.
     const baked = cursorBaked(info.cursor);
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}) }, null, 2));
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,

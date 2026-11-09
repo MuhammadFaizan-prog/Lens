@@ -39,5 +39,5 @@ await build({ ...common, entryPoints: [path.join(ROOT, "src/preload.ts")], outfi
 await build({ ...common, entryPoints: [path.join(ROOT, "src/renderer/recorder.ts")], outfile: path.join(DIST, "renderer/recorder.js"), platform: "browser", format: "iife" });
 // app icon (window, tray; the .ico also goes into Lens.exe): dist/icons/lens.ico + lens-<n>.png
 writeIcons(path.join(DIST, "icons"));
-for (const f of ["recorder.html", "recorder.css"]) fs.copyFileSync(path.join(ROOT, "src/renderer", f), path.join(DIST, "renderer", f));
+for (const f of ["recorder.html", "recorder.css", "region.html", "teleprompter.html"]) fs.copyFileSync(path.join(ROOT, "src/renderer", f), path.join(DIST, "renderer", f));
 console.log("built", path.relative(process.cwd(), DIST));

@@ -3,7 +3,10 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("lensDesktop", {
   sources: () => ipcRenderer.invoke("lens:sources"),
-  captureSource: (id: string) => ipcRenderer.invoke("lens:capture-source", id),
+  captureSource: (id: string, opts?: unknown) => ipcRenderer.invoke("lens:capture-source", id, opts),
+  pickRegion: (displayId?: string) => ipcRenderer.invoke("lens:pick-region", displayId),
+  teleprompter: () => ipcRenderer.invoke("lens:teleprompter"),
+  regionDone: (r: unknown) => ipcRenderer.send("lens:region-done", r),
   status: () => ipcRenderer.invoke("lens:status"),
   begin: () => ipcRenderer.invoke("lens:begin"),
   started: (info: unknown) => ipcRenderer.invoke("lens:started", info),

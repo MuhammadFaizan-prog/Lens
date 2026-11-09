@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Lens region</title>
+    <style>
+      html, body { margin: 0; height: 100%; cursor: crosshair; user-select: none; font-family: system-ui, "Segoe UI", sans-serif; }
+      body { background: rgba(8, 10, 16, 0.35); }
+      #box { position: fixed; border: 2px dashed #6f8cff; background: rgba(43, 92, 255, 0.12); box-shadow: 0 0 0 9999px rgba(8, 10, 16, 0.35); display: none; }
+      #tip { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); background: #0f1115; color: #e8e9ee; font-size: 13px; padding: 8px 14px; border-radius: 8px; }
+      #size { position: fixed; background: #2b5cff; color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 4px; display: none; }
+    </style>
+  </head>
+  <body data-testid="region-overlay">
+    <div id="tip">Drag the area to record · Enter or release to confirm · Esc to cancel</div>
+    <div id="box"></div>
+    <div id="size"></div>
+    <script>
+      const box = document.getElementById("box");
+      const size = document.getElementById("size");
+      let a = null;
+      let r = null;
+      const done = (v) => window.lensDesktop.regionDone(v);
+      addEventListener("keydown", (e) => {
+        if (e.key === "Escape") done(null);
+        if (e.key === "Enter" && r) done(r);
+      });
+      addEventListener("mousedown", (e) => {
+        a = { x: e.clientX, y: e.clientY };
+        r = null;
+      });
+      addEventListener("mousemove", (e) => {
+        if (!a) return;
+        const x = Math.min(a.x, e.clientX), y = Math.min(a.y, e.clientY);
+        r = { x, y, w: Math.abs(e.clientX - a.x), h: Math.abs(e.clientY - a.y) };
+        Object.assign(box.style, { display: "block", left: x + "px", top: y + "px", width: r.w + "px", height: r.h + "px" });
+        Object.assign(size.style, { display: "block", left: x + "px", top: Math.max(0, y - 22) + "px" });
+        size.textContent = Math.round(r.w * devicePixelRatio) + " x " + Math.round(r.h * devicePixelRatio);
+      });
+      addEventListener("mouseup", () => {
+        a = null;
+        if (r && r.w > 8 && r.h > 8) done(r);
+      });
+    </script>
+  </body>
+</html>

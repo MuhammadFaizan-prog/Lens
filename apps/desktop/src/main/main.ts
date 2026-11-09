@@ -139,8 +139,10 @@ function toggle(): void {
 
 function createRecorder(): void {
   recorderWin = new BrowserWindow({
-    width: 420,
-    height: 560,
+    width: 900,
+    height: 600,
+    minWidth: 720,
+    minHeight: 520,
     x: process.env.LENS_E2E ? 0 : undefined,
     y: process.env.LENS_E2E ? 0 : undefined,
     resizable: true,
@@ -203,6 +205,7 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
  * honours it) unless "Show system cursor" is ticked.
  */
 let captureSourceId: string | null = null;
+let captureSystemAudio = false;
 function installDisplayMediaHandler(): void {
   session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
     const want = captureSourceId;
@@ -211,16 +214,83 @@ function installDisplayMediaHandler(): void {
       .getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false })
       .then((all) => {
         const s = all.find((x) => x.id === want);
-        if (s) callback({ video: s });
+        // system audio = Windows loopback (Chromium supports it there only)
+        if (s) callback(captureSystemAudio && process.platform === "win32" ? { video: s, audio: "loopback" } : { video: s });
         else callback({});
       })
       .catch(() => callback({}));
   });
 }
 
+/**
+ * Custom mode (Windows #7): a frameless, transparent overlay over the chosen display; the user drags
+ * the area to record (Esc cancels). Resolves with the area as fractions of the display.
+ */
+let regionWin: BrowserWindow | null = null;
+function pickRegion(displayId?: string): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  regionWin?.destroy();
+  const d = screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) ?? screen.getPrimaryDisplay();
+  const win = new BrowserWindow({
+    ...d.bounds, frame: false, transparent: true, resizable: false, movable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false,
+    title: "Lens region", webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: false },
+  });
+  regionWin = win;
+  // the recorder steps aside while the area is dragged, and comes back with the result
+  const hadRecorder = !!recorderWin?.isVisible();
+  recorderWin?.hide();
+  win.setContentProtection(true);
+  void win.loadFile(rendererFile("region.html"));
+  win.once("ready-to-show", () => {
+    win.show();
+    win.focus();
+  });
+  return new Promise((resolve) => {
+    const done = (_e: unknown, r: { x: number; y: number; w: number; h: number } | null) => {
+      ipcMain.removeAllListeners("lens:region-done");
+      if (!win.isDestroyed()) win.destroy();
+      if (regionWin === win) regionWin = null;
+      if (hadRecorder) showRecorder();
+      resolve(r ? { x: r.x / d.bounds.width, y: r.y / d.bounds.height, w: r.w / d.bounds.width, h: r.h / d.bounds.height } : null);
+    };
+    let settled = false;
+    const once = (e: unknown, r: { x: number; y: number; w: number; h: number } | null) => {
+      if (settled) return;
+      settled = true;
+      done(e, r);
+    };
+    ipcMain.removeAllListeners("lens:region-done");
+    ipcMain.on("lens:region-done", once);
+    win.on("closed", () => once(null, null));
+  });
+}
+
+/** Teleprompter: an always-on-top script window kept out of the capture (setContentProtection; Windows / macOS). */
+let prompterWin: BrowserWindow | null = null;
+function toggleTeleprompter(): { open: boolean } {
+  if (prompterWin && !prompterWin.isDestroyed()) {
+    prompterWin.close();
+    prompterWin = null;
+    return { open: false };
+  }
+  const wa = screen.getPrimaryDisplay().workArea;
+  prompterWin = new BrowserWindow({
+    width: 520, height: 260, x: wa.x + Math.round((wa.width - 520) / 2), y: wa.y + 24, alwaysOnTop: true, title: "Lens Teleprompter", icon: appIcon(), backgroundColor: "#0f1115", autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, sandbox: true },
+  });
+  prompterWin.setContentProtection(true);
+  void prompterWin.loadFile(rendererFile("teleprompter.html"));
+  const me = prompterWin;
+  me.on("closed", () => {
+    if (prompterWin === me) prompterWin = null;
+  });
+  if (process.env.LENS_E2E) (globalThis as Record<string, unknown>).lensPrompter = me;
+  return { open: true };
+}
+
 function registerIpc(): void {
-  ipcMain.handle("lens:capture-source", (_e, id: string) => {
+  ipcMain.handle("lens:capture-source", (_e, id: string, opts?: { systemAudio?: boolean }) => {
     captureSourceId = id;
+    captureSystemAudio = !!opts?.systemAudio;
     return { ok: true };
   });
   ipcMain.handle("lens:sources", async () => {
@@ -247,7 +317,9 @@ function registerIpc(): void {
     rec.start(info, captured);
     return { ok: true };
   });
-  ipcMain.on("lens:chunk", (_e, kind: "video" | "audio", data: ArrayBuffer) => rec?.chunk(kind, data));
+  ipcMain.handle("lens:pick-region", (_e, displayId?: string) => pickRegion(displayId));
+  ipcMain.handle("lens:teleprompter", () => toggleTeleprompter());
+  ipcMain.on("lens:chunk", (_e, kind: "video" | "audio" | "camera" | "system", data: ArrayBuffer) => rec?.chunk(kind, data));
   ipcMain.handle("lens:stop", async (_e, opts?: { stopAt?: number }) => {
     const r = rec;
     if (!r) throw new Error("not recording");
