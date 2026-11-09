@@ -8,17 +8,24 @@
  * (Shift = 10 px), Del to remove. Everything is stored in the space it lives in: masks and zoom
  * targets in source px (they follow the recording through zooms and aspect changes), the logo,
  * webcam and caption as fractions of the output frame.
+ *
+ * The screen card itself (feat/canvas-layout) is the "screen" object: picked lowest (every other
+ * object wins), draggable from the first press, corner handles resize it (Shift keeps the aspect,
+ * Alt resizes about the centre) and it snaps to the frame's thirds and centre lines. It is stored as
+ * project.card (canvas fractions); a free shape trims the source, never stretches.
  */
 import { useEffect, useRef, useState } from "react";
+import { cardRect, validCard } from "@lens/engine";
 import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
 import { captionBox } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
 import { store, useEditor } from "../state/store";
 import { updateBlock } from "../state/timelineOps";
-import { centre, clampedNormCentre, moveBox, resizeBox, snapBox, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
+import { centre, clampedNormCentre, moveBox, resizeBoxFrom, snapBox, snapLines, snapPoint, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
+import { cardFit, setCardRect } from "../state/layoutOps";
 import { spaceOf } from "./AnnotationOverlay";
 
-export type CanvasKind = "mask" | "logo" | "webcam" | "caption" | "zoom";
+export type CanvasKind = "screen" | "mask" | "logo" | "webcam" | "caption" | "zoom";
 
 export interface CanvasObj {
   kind: CanvasKind;
@@ -56,6 +63,11 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
   const zoomSel = sel?.track === "zoom" ? project.zoom.segments[sel.index] : undefined;
   const f = zoomSel ? zoomEditFrame(plan, f0) : f0;
   const sp = spaceOf(plan, f, "screen");
+  // the screen card first: picked lowest, so masks, webcam, caption, logo and zoom targets win
+  const sb = screenBox(plan, f, project);
+  if (sb) {
+    out.push({ kind: "screen", index: 0, box: sb, keepAspect: false, label: "screen", apply: (b) => (p) => setCardRect(p, b, { width: W, height: H }) });
+  }
   const toBox = (r: { x: number; y: number; w: number; h: number }): Box => {
     const a = sp.toOut({ x: r.x, y: r.y });
     const b = sp.toOut({ x: r.x + r.w, y: r.y + r.h });
@@ -160,6 +172,22 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
   return out;
 }
 
+/**
+ * The screen card's box on this frame (output px), or null when the frame's layout does not use the
+ * card (split / fullscreen webcam, a hidden screen). Fill mode with no card covers the whole canvas.
+ */
+export function screenBox(plan: RenderPlan, f: PlanFrame, project: ProjectConfig): Box | null {
+  if (!(f.layout.screenOpacity > 0.5)) return null;
+  const out = { width: plan.output.width, height: plan.output.height };
+  if (project.output.fit === "fill" && !validCard(project.card)) return { x: 0, y: 0, w: out.width, h: out.height };
+  const [, , cw, ch] = plan.source.crop;
+  const r = cardRect(out, cw / Math.max(1, ch), project);
+  const [x, y, w, h] = f.layout.screen;
+  const tol = 2;
+  if (Math.abs(x - r.x) > tol || Math.abs(y - r.y) > tol || Math.abs(w - r.w) > tol || Math.abs(h - r.h) > tol) return null;
+  return r;
+}
+
 /** Output box -> source rect without rounding (zoom targets keep sub-pixel precision). */
 function fromBoxF(sp: ReturnType<typeof spaceOf>, b: Box): Box {
   const a = sp.fromOut({ x: b.x, y: b.y });
@@ -175,6 +203,16 @@ function selectedKey(): { kind: CanvasKind; index: number } | null {
   return null;
 }
 
+interface Drag {
+  mode: "move" | Corner;
+  start: Vec2;
+  orig: CanvasObj;
+  moved: boolean;
+}
+
+/** The drag in progress (module-level so a pick from the annotation layer can start one). */
+let activeDrag: Drag | null = null;
+
 function selectObj(o: CanvasObj): void {
   if (o.kind === "mask") store.select({ track: "mask", index: o.index });
   else if (o.kind === "zoom") store.select({ track: "zoom", index: o.index });
@@ -189,7 +227,7 @@ export function canvasHasFocus(): boolean {
 }
 
 /** Pick an overlay under output point p (called by the annotation layer when no annotation is hit). */
-export function pickCanvasObject(p: Vec2): boolean {
+export function pickCanvasObject(p: Vec2, startDrag = true): boolean {
   const s = store.get();
   const plan = s.plan;
   const f = plan?.frames[s.frame];
@@ -197,8 +235,16 @@ export function pickCanvasObject(p: Vec2): boolean {
   const objs = canvasObjects(plan, f, s.project);
   for (let i = objs.length - 1; i >= 0; i--) {
     const b = objs[i]!.box;
-    if (p.x >= b.x - 4 && p.x <= b.x + b.w + 4 && p.y >= b.y - 4 && p.y <= b.y + b.h + 4) {
-      selectObj(objs[i]!);
+    const o = objs[i]!;
+    const pad = o.kind === "screen" ? 0 : 4;
+    if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) {
+      selectObj(o);
+      // the screen card drags from the first press (no select-then-drag)
+      if (o.kind === "screen" && startDrag) {
+        store.pause();
+        store.beginGesture();
+        activeDrag = { mode: "move", start: p, orig: o, moved: false };
+      }
       return true;
     }
   }
@@ -225,15 +271,13 @@ export function removeCanvasSelection(): boolean {
   if (which === "logo") store.edit("Hide logo watermark", (p) => ({ ...p, brand: { ...p.brand, logo: { ...p.brand.logo, watermark: false } } }));
   else if (which === "webcam") store.edit("Hide webcam", (p) => ({ ...p, camera: { ...p.camera, enabled: false } }));
   else if (which === "caption") store.edit("Captions off", (p) => ({ ...p, captions: { ...p.captions, enabled: false } }));
+  else if (which === "screen") {
+    // the screen cannot be deleted: Del puts the card back to Fit
+    store.edit("Fit screen", cardFit);
+    return true;
+  }
   store.selectCanvas(null);
   return true;
-}
-
-interface Drag {
-  mode: "move" | Corner;
-  start: Vec2;
-  orig: CanvasObj;
-  moved: boolean;
 }
 
 export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
@@ -243,7 +287,6 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
   useEditor((s) => s.selection);
   useEditor((s) => s.canvasSel);
   const svg = useRef<SVGSVGElement>(null);
-  const drag = useRef<Drag | null>(null);
   const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
   const f = plan?.frames[frame];
   const W = plan?.output.width ?? 1280;
@@ -256,30 +299,40 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
-      const d = drag.current;
+      const d = activeDrag;
       if (!d) return;
-      const p = toOut(e);
+      let p = toOut(e);
       if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < 2) return;
       d.moved = true;
       const o = d.orig;
       let b: Box;
       let g = { gx: [] as number[], gy: [] as number[] };
+      const thr = 8 * (W / Math.max(1, cssW));
+      const isScreen = o.kind === "screen";
       if (d.mode === "move") {
         b = moveBox(o.box, o.kind === "caption" ? 0 : p.x - d.start.x, p.y - d.start.y);
         if (!e.altKey) {
-          const sn = snapBox(b, W, H, 8 * (W / Math.max(1, cssW)));
+          const sn = snapBox(b, W, H, thr, isScreen);
           b = o.kind === "caption" ? { ...sn.box, x: o.box.x } : sn.box;
           g = { gx: o.kind === "caption" ? [] : sn.gx, gy: sn.gy };
         }
-      } else b = resizeBox(o.box, d.mode, p, o.keepAspect, 8);
+      } else if (isScreen) {
+        // screen card: Shift keeps the aspect, Alt resizes about the centre; the free corner snaps
+        if (!e.shiftKey) {
+          const sp = snapPoint(p, snapLines(W, H, true), thr);
+          p = sp.p;
+          g = { gx: sp.gx, gy: sp.gy };
+        }
+        b = resizeBoxFrom(o.box, d.mode, p, e.shiftKey, 16, e.altKey);
+      } else b = resizeBoxFrom(o.box, d.mode, p, o.keepAspect, 8);
       if (o.kind === "caption" && d.mode !== "move") b = { ...b, y: o.box.y + (o.box.h - b.h) / 2 }; // scale about its centre line
       setGuides(g);
       store.preview(o.apply(b));
     };
     const up = () => {
-      const d = drag.current;
+      const d = activeDrag;
       if (!d) return;
-      drag.current = null;
+      activeDrag = null;
       setGuides({ gx: [], gy: [] });
       store.endGesture(d.mode === "move" ? `Move ${d.orig.label}` : `Resize ${d.orig.label}`);
     };
@@ -324,7 +377,7 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
     canvasFocus = true;
     store.pause();
     store.beginGesture();
-    drag.current = { mode, start: toOut(e), orig: o, moved: false };
+    activeDrag = { mode, start: toOut(e), orig: o, moved: false };
   };
 
   return (

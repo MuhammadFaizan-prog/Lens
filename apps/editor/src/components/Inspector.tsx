@@ -9,6 +9,7 @@ import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
 import { AspectRow } from "./AspectPicker";
+import { ScreenSection } from "./ScreenSection";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -168,6 +169,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
         <Slider label="Softness" value={p.frame.shadow.blur} min={0} max={120} step={1} format={px} onChange={(v) => t("Shadow softness", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, blur: v } } }))} />
         <Slider label="Lift" value={p.frame.shadow.offsetY} min={0} max={60} step={1} format={px} onChange={(v) => t("Shadow offset", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, offsetY: v } } }))} />
       </Section>
+      <ScreenSection />
       <Section title="Output">
         <AspectRow />
         <Segmented label="Screen" value={p.output.fit ?? "fit"} testId="output-fit" options={[{ value: "fit", label: "Fit" }, { value: "fill", label: "Fill & follow" }]}
