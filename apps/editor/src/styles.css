@@ -559,3 +559,7 @@ select {
 .hs-stage img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hs-dot { position: absolute; width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%; border: 3px solid var(--accent); background: rgba(94, 234, 212, 0.3); box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.5); cursor: grab; padding: 0; }
 .hs-dot:active { cursor: grabbing; }
+
+/* desktop update banner in the header (Windows #21) */
+.update-banner { display: flex; align-items: center; gap: 10px; margin: 0 auto; padding: 4px 6px 4px 12px; border-radius: 8px; background: #17305f; color: #dfe8ff; font-size: 12px; white-space: nowrap; }
+.update-banner .btn { padding: 3px 10px; font-size: 12px; }

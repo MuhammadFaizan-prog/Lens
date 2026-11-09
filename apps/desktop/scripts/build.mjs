@@ -36,6 +36,7 @@ await build({
   banner: { js: 'const __lensMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
 });
 await build({ ...common, entryPoints: [path.join(ROOT, "src/preload.ts")], outfile: path.join(DIST, "preload.cjs"), platform: "node", format: "cjs", external: ["electron"] });
+await build({ ...common, entryPoints: [path.join(ROOT, "src/editorPreload.ts")], outfile: path.join(DIST, "editorPreload.cjs"), platform: "node", format: "cjs", external: ["electron"] });
 await build({ ...common, entryPoints: [path.join(ROOT, "src/renderer/recorder.ts")], outfile: path.join(DIST, "renderer/recorder.js"), platform: "browser", format: "iife" });
 // app icon (window, tray; the .ico also goes into Lens.exe): dist/icons/lens.ico + lens-<n>.png
 writeIcons(path.join(DIST, "icons"));

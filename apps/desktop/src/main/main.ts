@@ -53,6 +53,8 @@ let hookError: string | null = null;
 const editorWindows: BrowserWindow[] = [];
 const updates = new UpdateController((st) => {
   recorderWin?.webContents.send("lens:update", st);
+  // the editor header shows the same banner (Windows #21)
+  for (const w of editorWindows) if (!w.isDestroyed()) w.webContents.send("lens:update", { ...st, current: app.getVersion() });
   updateTray();
   buildAppMenu();
 });
@@ -67,6 +69,15 @@ function updateLabel(st: UpdateState): string {
   }
 }
 
+/** About: the version and the update state, with "Check for updates" (Windows #21). */
+async function showAbout(): Promise<void> {
+  const st = updates.state;
+  const line = st.status === "none" ? "Lens is up to date." : st.status === "available" ? `Version ${st.version} is available.` : st.status === "downloaded" ? `Version ${st.version} is ready: restart to update.` : st.status === "disabled" ? "Updates are off in this build." : st.status === "error" ? `Last update check failed: ${st.message}` : "";
+  const buttons = st.status === "available" ? ["Download update", "OK"] : st.status === "downloaded" ? ["Restart to update", "OK"] : ["Check for updates", "OK"];
+  const r = await dialog.showMessageBox({ type: "info", title: "About Lens", message: `Lens v${app.getVersion()}`, detail: line, buttons, defaultId: 1, cancelId: 1, noLink: true });
+  if (r.response === 0 && st.status !== "disabled") updateAction();
+}
+
 function updateAction(): void {
   const st = updates.state;
   if (st.status === "available") void updates.download();
@@ -78,7 +89,7 @@ function updateAction(): void {
 function buildAppMenu(): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { label: "Lens", submenu: [{ label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() }, { type: "separator" }, { role: "quit" }] },
+      { label: "Lens", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() }, { type: "separator" }, { role: "quit" }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
@@ -120,16 +131,17 @@ function updateTray(): void {
   if (!tray) return;
   const recording = !!rec;
     tray.setToolTip(recording ? `Lens: recording (${keyLabel(hotkey)} to stop)` : `Lens: ready (${keyLabel(hotkey)} to record)`);
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
+  const trayItems: Electron.MenuItemConstructorOptions[] = [
       { label: recording ? "Stop recording" : "Start recording", accelerator: hotkey, click: () => toggle() },
       { label: "Show recorder", click: () => showRecorder() },
       { label: "Settings…", click: () => openSettings() },
+      { label: "About Lens", click: () => void showAbout() },
       { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() },
       { type: "separator" },
       { label: "Quit Lens", click: () => app.quit() },
-    ]),
-  );
+  ];
+  tray.setContextMenu(Menu.buildFromTemplate(trayItems));
+  if (process.env.LENS_E2E) (globalThis as Record<string, unknown>).lensTrayItems = trayItems.map((i) => i.label ?? "-");
 }
 
 /**
@@ -209,7 +221,7 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
     icon: appIcon(),
     backgroundColor: "#0f1115",
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true },
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, "editorPreload.cjs") },
   });
   editorWindows.push(win);
   win.on("closed", () => editorWindows.splice(editorWindows.indexOf(win), 1));
@@ -511,6 +523,9 @@ app.whenReady().then(async () => {
   applyLoginItem();
   buildAppMenu();
   updates.init();
+  // re-check when a Lens window gains focus, at most every 15 min (an app open for days sees a release)
+  app.on("browser-window-focus", () => updates.checkIfStale());
+  if (process.env.LENS_E2E) (globalThis as Record<string, unknown>).lensUpdates = updates;
   if (process.env.LENS_OPEN_BUNDLE) await openEditor(process.env.LENS_OPEN_BUNDLE);
 });
 
