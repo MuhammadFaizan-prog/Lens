@@ -30,12 +30,18 @@ const COLLAPSED_H = 30;
 function annLabel(a: { stepId?: string; text?: string; kind: string }): string {
   return `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`;
 }
-const ADDABLE = ["zoom", "cut", "speed", "mask", "annotation", "caption", "audio"];
+/** Label of a 3D block: its template's name ("user:<id>" for a saved one). */
+function m3dLabel(id: string, templates: Array<{ id: string; name: string; user?: boolean }>): string {
+  const bare = id.startsWith("user:") ? id.slice(5) : id;
+  return `3D · ${templates.find((t) => t.id === bare && !!t.user === id.startsWith("user:"))?.name ?? bare}`;
+}
+const ADDABLE = ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "audio"];
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
   { kind: "takes", label: "Alt takes" },
   { kind: "speed", label: "Speed" },
+  { kind: "motion3d", label: "3D" },
   { kind: "mask", label: "Masks" },
   { kind: "annotation", label: "Annotations" },
   { kind: "caption", label: "Captions" },
@@ -73,6 +79,7 @@ export function Timeline() {
   const bundle = useEditor((s) => s.bundle);
   const frame = useEditor((s) => s.frame);
   const selection = useEditor((s) => s.selection);
+  const templates = useEditor((s) => s.motion3dTemplates);
   const audition = useEditor((s) => s.audition);
   const playing = useEditor((s) => s.playing);
   const duration = bundle?.meta.durationMs ?? 1;
@@ -120,7 +127,7 @@ export function Timeline() {
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         t.push(b.startMs, b.endMs);
@@ -319,10 +326,10 @@ export function Timeline() {
               {ADDABLE.includes(t.kind) && (
                 <button
                   className="mini-add"
-                  title={t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
+                  title={t.kind === "motion3d" ? "Add a 3D motion at playhead" : t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
                   aria-label={`Add ${t.kind}`}
                   data-testid={`add-${t.kind}`}
-                  onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
+                  onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : t.kind === "motion3d" ? store.addMotion3d() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
                 >
                   <Icon name="plus" size={12} />
                 </button>
@@ -398,6 +405,9 @@ export function Timeline() {
             </div>
             <div className="lane" data-testid="lane-speed" onPointerDown={scrubLane} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
+            </div>
+            <div className="lane lane-motion3d" data-testid="lane-motion3d" onPointerDown={scrubLane} onDoubleClick={(e) => store.addMotion3d("tilt-in", msOf(laneX(e.clientX)))}>
+              {project.motion3d.map((m, i) => block("motion3d", i, m, m3dLabel(m.template, templates), m.hold ? "hold" : "", `block-motion3d-${m.id}`))}
             </div>
             <div className="lane" data-testid="lane-mask" onPointerDown={scrubLane} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
               {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}

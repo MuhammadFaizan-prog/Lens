@@ -18,7 +18,10 @@ import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
 import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
-import { frameForSource, freezeAutoZooms, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
+import { addBlock, createRange, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
+import * as m3dLib from "./motion3dLib";
+import { addKeyAt, applyTemplate, deleteKey, keyCount, keyPose, mapSegment, setKeyPose, type Axis3D } from "./motion3dOps";
+import { templateFromSegment, type Motion3DSegment, type Motion3DTemplate, type Pose3D } from "@lens/engine";
 
 export interface Selection {
   track: TrackKind;
@@ -104,6 +107,10 @@ export interface EditorState {
   zoomPlacing: boolean;
   /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
   canvasSel: "logo" | "webcam" | "caption" | null;
+  /** Selected keyframe of the selected 3D motion block (0 = from, n + 1 = to; see motion3dOps). */
+  m3dKey: number;
+  /** Built-in 3D motion templates followed by the user's saved ones. */
+  motion3dTemplates: Motion3DTemplate[];
 }
 
 export interface TranslateRunState {
@@ -171,6 +178,8 @@ export class EditorStore {
     translateRun: null,
     zoomPlacing: false,
     canvasSel: null,
+    m3dKey: 0,
+    motion3dTemplates: m3dLib.allMotion3dTemplates(),
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -346,7 +355,8 @@ export class EditorStore {
   }
 
   select(sel: Selection | null): void {
-    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
+    const same = sel && this.s.selection && sel.track === this.s.selection.track && sel.index === this.s.selection.index;
+    this.set({ m3dKey: same ? this.s.m3dKey : 0, selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
   }
 
   selectCanvas(which: EditorState["canvasSel"]): void {
@@ -449,6 +459,148 @@ export class EditorStore {
 
   applyPreset(name: ZoomPresetName): void {
     this.edit(`Zoom preset ${name}`, (p) => applyZoomPreset(p, name));
+  }
+
+  // ------------------------------------------------------------------ 3D motion (feat/motion-3d)
+
+  private durationMs(): number {
+    return this.s.bundle?.meta.durationMs ?? Math.max(60_000, ...this.history.doc.motion3d.map((m) => m.endMs + 10_000));
+  }
+
+  /** Source time under the playhead. */
+  playheadSrc(): number {
+    return this.s.plan?.frames[this.s.frame]?.src ?? 0;
+  }
+
+  refreshMotion3dTemplates(): void {
+    this.set({ motion3dTemplates: m3dLib.allMotion3dTemplates() });
+  }
+
+  /** The selected 3D block, or null. */
+  selectedMotion3d(): { index: number; seg: Motion3DSegment } | null {
+    const sel = this.s.selection;
+    if (sel?.track !== "motion3d") return null;
+    const seg = this.history.doc.motion3d[sel.index];
+    return seg ? { index: sel.index, seg } : null;
+  }
+
+  /** Add a 3D block from a template at srcMs (default: playhead), selected. Returns its index or -1. */
+  addMotion3d(templateId = "tilt-in", srcMs = this.playheadSrc()): number {
+    const t = m3dLib.findMotion3dTemplate(templateId) ?? m3dLib.findMotion3dTemplate("tilt-in")!;
+    const blocks = this.history.doc.motion3d;
+    const duration = this.durationMs();
+    let at = Math.max(0, srcMs);
+    let r = null as { startMs: number; endMs: number } | null;
+    for (let k = 0; k < 50 && !r; k++) {
+      r = createRange(blocks, at, t.durationMs, duration, MIN_BLOCK_MS.motion3d);
+      const inside = blocks.find((b) => at >= b.startMs && at < b.endMs);
+      if (!r && inside) at = inside.endMs;
+      else break;
+    }
+    if (!r) {
+      this.notify("No room for a 3D block there");
+      return -1;
+    }
+    const range = { startMs: Math.round(r.startMs), endMs: Math.round(r.endMs) };
+    let index = -1;
+    this.edit(`Add 3D ${t.name}`, (p) => {
+      const out = addBlock(p, "motion3d", range, undefined, undefined, t);
+      index = out.index;
+      return out.project;
+    });
+    if (index >= 0) this.select({ track: "motion3d", index });
+    return index;
+  }
+
+  /** Patch a 3D block's settings (easing, perspective, hold, ...): one undo step, or a live slider tweak. */
+  updateMotion3d(index: number, patch: Partial<Motion3DSegment>, live = false, label = "Edit 3D motion"): void {
+    const fn = (p: ProjectConfig) => mapSegment(p, index, (s) => {
+      const out = { ...s, ...patch };
+      for (const k of Object.keys(patch) as Array<keyof Motion3DSegment>) if (patch[k] === undefined) delete out[k];
+      return out;
+    });
+    if (live) this.tweak(label, fn);
+    else this.edit(label, fn);
+  }
+
+  deleteMotion3d(index: number): void {
+    this.edit("Delete 3D motion", (p) => ({ ...p, motion3d: p.motion3d.filter((_, j) => j !== index) }));
+    this.set({ selection: null, m3dKey: 0 });
+  }
+
+  /** Replace a block's motion with a template's (keeps its start). */
+  applyMotion3dTemplate(index: number, templateId: string): void {
+    const t = m3dLib.findMotion3dTemplate(templateId);
+    const seg = this.history.doc.motion3d[index];
+    if (!t || !seg) return;
+    const next = this.history.doc.motion3d.filter((m, j) => j !== index && m.startMs >= seg.endMs).reduce((lo, m) => Math.min(lo, m.startMs), Infinity);
+    // the template's length, up to the next 3D block or the end of the recording
+    const maxEnd = Math.min(this.durationMs(), next);
+    this.edit(`3D template ${t.name}`, (p) => mapSegment(p, index, (s) => applyTemplate(s, t, maxEnd)));
+    this.set({ m3dKey: 0 });
+  }
+
+  selectMotion3dKey(k: number): void {
+    const s = this.selectedMotion3d();
+    if (!s) return;
+    this.set({ m3dKey: Math.max(0, Math.min(keyCount(s.seg) - 1, k)) });
+  }
+
+  /** Edit the pose of keyframe k (default: the selected one) of block index. */
+  setMotion3dPose(index: number, patch: Partial<Pose3D>, live = false, k = this.s.m3dKey): void {
+    const fn = (p: ProjectConfig) => mapSegment(p, index, (s) => setKeyPose(s, k, patch));
+    if (live) this.tweak("Edit 3D pose", fn);
+    else this.edit("Edit 3D pose", fn);
+  }
+
+  /** Add a keyframe at srcMs (default: playhead) inside block index and select it. False when there is no room. */
+  addMotion3dKey(index: number, srcMs = this.playheadSrc()): boolean {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg) return false;
+    if (seg.easing === "loop") {
+      this.notify("Loop easing swings between the first and last pose: keyframes are not used");
+      return false;
+    }
+    const res = addKeyAt(seg, srcMs);
+    if (!res) {
+      this.notify("Move the playhead inside the 3D block, away from its other keyframes, to add one");
+      return false;
+    }
+    this.edit("Add 3D keyframe", (p) => mapSegment(p, index, () => res.seg));
+    this.set({ m3dKey: res.key });
+    return true;
+  }
+
+  deleteMotion3dKey(index: number, k = this.s.m3dKey): void {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg || k <= 0 || k >= keyCount(seg) - 1) return;
+    this.edit("Delete 3D keyframe", (p) => mapSegment(p, index, (s) => deleteKey(s, k)));
+    this.set({ m3dKey: Math.max(0, k - 1) });
+  }
+
+  /** Alt+Arrow: turn the selected keyframe of the selected 3D block about an axis. False when no 3D block is selected. */
+  nudgeMotion3d(axis: Axis3D, deg: number): boolean {
+    const s = this.selectedMotion3d();
+    if (!s) return false;
+    const cur = keyPose(s.seg, this.s.m3dKey)[axis];
+    this.tweak("Nudge 3D rotation", (p) => mapSegment(p, s.index, (x) => setKeyPose(x, this.s.m3dKey, { [axis]: Math.round(cur + deg) })));
+    return true;
+  }
+
+  /** Save block index as a user template (localStorage). Returns the stored template. */
+  saveMotion3dTemplate(index: number, name: string): Motion3DTemplate | null {
+    const seg = this.history.doc.motion3d[index];
+    const n = name.trim();
+    if (!seg || !n) return null;
+    const t = m3dLib.saveMotion3dTemplate(templateFromSegment(seg, n, n));
+    this.refreshMotion3dTemplates();
+    this.notify(`Saved 3D template ${t.name}`);
+    return t;
+  }
+
+  deleteMotion3dTemplate(id: string): void {
+    m3dLib.deleteMotion3dTemplate(id);
+    this.refreshMotion3dTemplates();
   }
 
   // ------------------------------------------------------------------ style presets + brand kit (demand #9)
