@@ -128,7 +128,10 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
     const c = merge(d.captions, s.captions);
     // colours come from the palette so the brand kit can still override them
     if (!isColorToken(c.style.highlightColor)) c.style.highlightColor = "@highlight";
-    p.captions = c;
+    // hand-written cues and word corrections are content, not style: they stay
+    delete c.cues;
+    delete c.wordEdits;
+    p.captions = { ...c, ...(p.captions.cues ? { cues: p.captions.cues } : {}), ...(p.captions.wordEdits ? { wordEdits: p.captions.wordEdits } : {}) };
   }
   if (want.has("audio") && s.audio) {
     p.audio = { ...p.audio, noiseReduction: merge(d.audio.noiseReduction, s.audio.noiseReduction), loudness: merge(d.audio.loudness, s.audio.loudness) };
@@ -201,7 +204,7 @@ export function presetFromProject(project: ProjectConfig, name: string, opts: { 
       zoom,
       cursor: p.cursor,
       webcam: pickWebcam(p.camera),
-      captions: { ...p.captions, style },
+      captions: (({ cues: _c, wordEdits: _w, ...rest }) => ({ ...rest, style }))(p.captions),
       audio: { noiseReduction: p.audio.noiseReduction, loudness: p.audio.loudness },
       annotations: { styles: clone(p.theme.annotationStyles) },
     },

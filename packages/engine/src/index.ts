@@ -24,3 +24,4 @@ export * from "./theme.js";
 export * from "./translation.js";
 export * from "./demo.js";
 export * from "./demoExport.js";
+export * from "./captionsManual.js";

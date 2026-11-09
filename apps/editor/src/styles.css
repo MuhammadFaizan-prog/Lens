@@ -601,7 +601,18 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 @media (max-width: 1360px) { .top-actions .btn-label { display: none; } .top-actions .btn { padding: 0 9px; } }
 .preview-zoom { width: auto; }
 .preview-zoom button { padding: 3px 8px; font-size: 11.5px; flex: none; }
+.cue-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.cue-text { width: 100%; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 4px 7px; font: inherit; user-select: text; resize: vertical; margin-top: 6px; }
+.cue-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.cue-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.cue-list li.on .cue-input { border-color: var(--caption); }
+.cue-time { background: none; border: none; color: var(--muted); font: 11px var(--mono); cursor: pointer; padding: 0; }
+.cue-input { min-width: 0; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 3px 6px; font: inherit; font-size: 12px; user-select: text; }
+.block-caption.manual { background: var(--caption); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35); }
+.block-caption.auto-cap { opacity: 0.75; }
 .block-volume { background: var(--audio); top: 3px; height: 18px; opacity: 0.9; }
+.word-input { background: var(--panel-3); border: 1px solid var(--accent-2); border-radius: 4px; color: var(--text); font: inherit; padding: 0 3px; user-select: text; }
+.word-edited { text-decoration: underline dotted; }
 /* on-canvas overlays (Windows bugs #12 / #14) */
 .canvas-overlay { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .canvas-overlay .co-outline { fill: none; stroke: rgba(255, 255, 255, 0.35); stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; stroke-width: 1; }

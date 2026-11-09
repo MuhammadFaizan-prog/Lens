@@ -1,6 +1,7 @@
 import { buildAudioPlan, type AudioPlan } from "./audio.js";
 import { effectiveZoomSegments } from "./autozoom.js";
 import { activeSegment, buildCameraTrack, lerpCamera, zoomBlendTrack, type CameraSample } from "./camera.js";
+import { applyWordEdits, mergeCaptionCues } from "./captionsManual.js";
 import { stepSpring, type SpringState } from "./spring.js";
 import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalizeCrop, zoomableEvents } from "./crop.js";
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
@@ -178,12 +179,13 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const clickList = clickEffects(events).filter((c) => insideCrop(c, crop));
   const shortcuts = project.shortcuts.enabled ? shortcutOverlays(events, project.shortcuts.displayMs) : [];
   // Words removed by any cut (transcript deletions, manual cuts, cleanup) never appear in captions.
-  const shownWords = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
+  const shownWords = captionWords(applyWordEdits(words, project.captions.wordEdits), cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !insideRanges(allCuts, (w.startMs + w.endMs) / 2));
   // Translated captions (demand #8): the selected language's track, re-timed onto the speech that survives the cuts.
   const track = project.translations.language ? project.translations.tracks.find((tr) => tr.language === project.translations.language) : undefined;
   const capWords = track ? trackWords(track, words.length ? words : null, allCuts) : shownWords;
   const capChars = project.captions.style.maxCharsPerLine;
-  const captions = project.captions.enabled ? captionBlocks(capWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, capChars) : [];
+  // hand-written cues (Windows bug #15) replace the transcript blocks they overlap
+  const captions = project.captions.enabled ? mergeCaptionCues(captionBlocks(capWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, capChars), project.captions.cues) : [];
   const capRtl = !!track?.rtl;
   const capFonts = track && captions.some((b) => b.words.some((w) => hasArabicScript(w.text))) ? [ARABIC_FONT] : [];
 
@@ -236,7 +238,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       },
       masks: masksAt(masks, src),
       shortcut: sc ? sc.label : null,
-      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight, capChars, capRtl) : null,
+      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
     });

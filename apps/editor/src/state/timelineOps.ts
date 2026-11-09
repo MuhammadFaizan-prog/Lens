@@ -8,14 +8,14 @@
  */
 import { defaultSlide, mergeRanges, normalizeAnnotation, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
 
-export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "volume";
+export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume";
 
 export interface Range {
   startMs: number;
   endMs: number;
 }
 
-export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, volume: 200 };
+export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200 };
 
 /** Index into p.overrides of the i-th volume segment (overrides also hold cursor-only ranges). */
 export function volumeIndex(p: ProjectConfig, i: number): number {
@@ -111,6 +111,8 @@ export function blocksOf(p: ProjectConfig, track: TrackKind): Range[] {
     case "slide":
       // slides are points in source time; as ranges they are zero-length
       return p.slides.map((s) => ({ startMs: s.atMs, endMs: s.atMs }));
+    case "caption":
+      return p.captions.cues ?? [];
     case "volume":
       return p.overrides.filter((o) => o.volume !== undefined);
   }
@@ -143,6 +145,8 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
       return { ...p, annotations: p.annotations.map((a, j) => (j === i ? { ...a, ...patch } : a)) };
     case "slide":
       return { ...p, slides: p.slides.map((s, j) => (j === i ? { ...s, ...(patch.startMs !== undefined ? { atMs: patch.startMs } : {}) } : s)) };
+    case "caption":
+      return { ...p, captions: { ...p.captions, cues: (p.captions.cues ?? []).map((c, j) => (j === i ? { ...c, ...patch } : c)) } };
     case "volume": {
       const k = volumeIndex(p, i);
       return { ...p, overrides: p.overrides.map((o, j) => (j === k ? { ...o, ...patch } : o)) };
@@ -168,6 +172,8 @@ export function deleteBlock(p: ProjectConfig, track: TrackKind, i: number): Proj
     }
     case "slide":
       return { ...p, slides: p.slides.filter((_, j) => j !== i) };
+    case "caption":
+      return { ...p, captions: { ...p.captions, cues: (p.captions.cues ?? []).filter((_, j) => j !== i) } };
     case "volume": {
       const k = volumeIndex(p, i);
       return { ...p, overrides: p.overrides.filter((_, j) => j !== k) };
@@ -213,6 +219,12 @@ export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 19
     case "slide": {
       const s = defaultSlide(newId("slide"), r.startMs);
       return { project: { ...p, slides: [...p.slides, s] }, index: p.slides.length };
+    }
+    case "caption": {
+      // a hand-written caption (works with no transcript); turning captions on so it shows
+      const c = { id: newId("cue"), startMs: r.startMs, endMs: r.endMs, text: "Caption" };
+      const cues = [...(p.captions.cues ?? []), c].sort((a, b) => a.startMs - b.startMs);
+      return { project: { ...p, captions: { ...p.captions, enabled: true, cues } }, index: cues.indexOf(c) };
     }
     case "volume": {
       const o = { startMs: r.startMs, endMs: r.endMs, volume: 0.5 };

@@ -162,6 +162,13 @@ export interface ProjectConfig {
     /** Highlight the word being spoken (AI-03 word-by-word). */
     wordHighlight: boolean;
     style: CaptionStyle;
+    /**
+     * Captions written by hand (Windows bug #15), source time. Each cue is one caption block; transcript
+     * blocks that overlap a cue are replaced by it. Works with no transcript at all.
+     */
+    cues?: CaptionCue[];
+    /** Inline corrections of transcript words: word index -> new text ("" hides the word in captions). */
+    wordEdits?: Record<string, string>;
   };
   /**
    * Caption translation (demand #8): one caption track per language (translated per segment by
@@ -242,6 +249,13 @@ export function zoomPreset(name: ZoomPresetName): Pick<ProjectConfig["zoom"], "d
 /** Return a copy of the project with a zoom preset applied (manual segments and auto on/off kept). */
 export function applyZoomPreset(p: ProjectConfig, name: ZoomPresetName): ProjectConfig {
   return { ...p, zoom: { ...p.zoom, ...zoomPreset(name) } };
+}
+
+export interface CaptionCue {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
 }
 
 export interface CaptionStyle {
@@ -455,6 +469,11 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.output.fit !== undefined && p.output.fit !== "fit" && p.output.fit !== "fill") errs.push("output.fit must be fit or fill");
   const cp = p.camera.position;
   if (cp && !(Number.isFinite(cp.x) && Number.isFinite(cp.y))) errs.push("camera.position must be {x, y} fractions");
+  for (const c of p.captions.cues ?? []) {
+    if (!c || typeof c.id !== "string" || typeof c.text !== "string" || !Number.isFinite(c.startMs) || !(c.endMs > c.startMs)) errs.push("captions.cues must be [{id, startMs, endMs > startMs, text}]");
+  }
+  if (p.captions.wordEdits !== undefined && (typeof p.captions.wordEdits !== "object" || p.captions.wordEdits === null || Object.values(p.captions.wordEdits).some((v) => typeof v !== "string")))
+    errs.push("captions.wordEdits must map word indices to text");
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));

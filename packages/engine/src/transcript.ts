@@ -187,6 +187,10 @@ export interface CaptionBlock {
   endMs: number;
   text: string;
   words: Word[];
+  /** A hand-written cue (captions.cues): shown as one block, no word highlight. */
+  manual?: boolean;
+  /** The cue's id when manual. */
+  cueId?: string;
 }
 
 /**

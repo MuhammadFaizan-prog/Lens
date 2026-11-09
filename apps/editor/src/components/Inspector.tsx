@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
-import { deleteSelection } from "./Timeline";
+import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 
@@ -102,6 +102,22 @@ function SelectionCard() {
           <Slider label="Height" value={m.rect.h} min={10} max={store.get().bundle?.meta.height ?? 1080} step={2} format={px} onChange={(v) => tweak("Mask size", { rect: { ...m.rect, h: v } })} />
           </>
         )}
+      </>
+    );
+  } else if (sel.track === "caption") {
+    const c = (project.captions.cues ?? [])[sel.index];
+    if (!c) return null;
+    range = c;
+    const playSrc = store.get().plan?.frames[store.get().frame]?.src;
+    body = (
+      <>
+        <textarea className="cue-text" data-testid="sel-cue-text" defaultValue={c.text} key={c.id + c.text} rows={2}
+          onKeyDown={(e) => e.stopPropagation()}
+          onBlur={(e) => { const t = e.target.value.replace(/\s+/g, " ").trim(); if (t !== c.text) store.updateCue(c.id, { text: t }); }} />
+        <div className="cue-actions">
+          <button className="chip-btn" data-testid="sel-cue-split" title="Split at the playhead" onClick={() => store.splitCueAt(c.id, playSrc)}>Split</button>
+          <button className="chip-btn" data-testid="sel-cue-merge" title="Merge with the next caption" onClick={() => store.mergeCueWithNext(c.id)}>Merge next</button>
+        </div>
       </>
     );
   } else if (sel.track === "volume") {
@@ -258,6 +274,7 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
   const cs = p.captions.style;
   const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style) } } }));
   return (
+    <>
     <Section title="Captions" aside={!hasWords ? <span className="stat">no transcript</span> : undefined}>
       <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
       <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
@@ -271,7 +288,50 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
       <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
     </Section>
+    <ManualCaptions p={p} />
+    </>
   );
+}
+
+/** Hand-written captions (Windows bug #15): add at the playhead, edit, retime, split, merge, import / export. */
+function ManualCaptions({ p }: { p: ProjectConfig }) {
+  const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  const sel = useEditor((s) => s.selection);
+  const cues = p.captions.cues ?? [];
+  const file = useRef<HTMLInputElement>(null);
+  const playSrc = () => store.get().plan?.frames[store.get().frame]?.src ?? 0;
+  return (
+    <Section title="Your captions" aside={<span className="stat">{cues.length}</span>}>
+      <div className="cue-actions">
+        <button className="btn" data-testid="cue-add" onClick={() => createBlock("caption", playSrc())}>+ Caption at playhead</button>
+        <input ref={file} type="file" accept=".srt,.vtt,text/vtt" hidden data-testid="cue-import-input" onChange={async (e) => { const f = e.target.files?.[0]; if (f) store.importSubtitles(await f.text(), cues.length === 0 || confirmReplace()); if (file.current) file.current.value = ""; }} />
+        <button className="btn ghost" data-testid="cue-import" onClick={() => file.current?.click()}>Import SRT / VTT</button>
+      </div>
+      {cues.length === 0 && <p className="note">Works without a transcript: add a caption, type its text, drag its edges on the Captions lane to time it.</p>}
+      <ol className="cue-list" data-testid="cue-list">
+        {cues.map((c, i) => (
+          <li key={c.id} className={sel?.track === "caption" && sel.index === i ? "on" : ""} data-testid={`cue-row-${i}`}>
+            <button className="cue-time" title="Select and jump" onClick={() => { store.select({ track: "caption", index: i }); store.seekSource(c.startMs); }}>
+              {timecode(c.startMs, fps)}
+            </button>
+            <input className="cue-input" data-testid={`cue-text-${i}`} defaultValue={c.text} key={c.id + c.text}
+              onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={(e) => { const t = e.target.value.replace(/\s+/g, " ").trim(); if (t !== c.text) store.updateCue(c.id, { text: t }); }} />
+            <button className="mini-reset" title="Delete caption" aria-label="Delete caption" onClick={() => store.deleteCue(c.id)}>×</button>
+          </li>
+        ))}
+      </ol>
+    </Section>
+  );
+}
+
+function confirmReplace(): boolean {
+  // Electron has no window.confirm in some builds: default to appending when it is missing
+  try {
+    return typeof window.confirm === "function" ? window.confirm("Replace your captions with the imported ones? (Cancel appends)") : false;
+  } catch {
+    return false;
+  }
 }
 
 function download(name: string, text: string): void {

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { isFiller } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { timecode } from "../state/timelineOps";
@@ -17,6 +17,8 @@ export function TranscriptPanel() {
   const fillersList = useEditor((s) => s.project.edits.cleanup.fillers);
   const takesCfg = useEditor((s) => s.project.edits.takes);
   const audition = useEditor((s) => s.audition);
+  const wordEdits = useEditor((s) => s.project.captions.wordEdits);
+  const [editing, setEditing] = useState<number | null>(null);
   const fps = plan?.output.fps ?? 30;
   const src = plan?.frames[frame]?.src ?? 0;
 
@@ -142,6 +144,17 @@ export function TranscriptPanel() {
                   </button>
                 );
               })}
+              {editing === i ? (
+                <WordEditor
+                  initial={wordEdits?.[String(i)] ?? w.text}
+                  onDone={(v) => {
+                    setEditing(null);
+                    if (v === null) return;
+                    const t = v.replace(/\s+/g, " ").trim();
+                    store.setWordEdit(i, t === w.text ? null : t);
+                  }}
+                />
+              ) : (
               <button
                 role="listitem"
                 className={`word ${st.deleted && !st.altTake ? "deleted" : ""} ${st.altTake ? "alt-take" : ""} ${st.keptTake ? "take-kept" : ""} ${st.filler ? "filler" : ""} ${selSet.has(i) ? "sel" : ""} ${i === activeIdx ? "active" : ""}`}
@@ -149,14 +162,46 @@ export function TranscriptPanel() {
                 data-start={w.startMs}
                 title={`${timecode(w.startMs, fps)}${st.filler ? " · filler" : ""}${st.altTake ? " · alt take (not used)" : st.deleted ? " · cut" : ""}`}
                 onClick={(e) => onWord(i, e)}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  setEditing(i);
+                }}
               >
-                {w.text}
+                {wordEdits?.[String(i)] !== undefined ? <span className="word-edited" title={`was “${w.text}”`}>{wordEdits[String(i)] || "∅"}</span> : w.text}
               </button>
+              )}
             </span>
           );
         })}
       </div>
-      <p className="tr-hint">Click to jump · Shift-click to select · Del cuts · ⌘/Ctrl-click to add</p>
+      <p className="tr-hint">Click to jump · Double-click to fix a word · Shift-click to select · Del cuts · ⌘/Ctrl-click to add</p>
     </aside>
+  );
+}
+
+/** Inline word correction: Enter keeps, Esc cancels, empty hides the word from captions. */
+function WordEditor({ initial, onDone }: { initial: string; onDone: (v: string | null) => void }) {
+  const [v, setV] = useState(initial);
+  const done = useRef(false);
+  const finish = (x: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(x);
+  };
+  return (
+    <input
+      className="word-input"
+      data-testid="word-input"
+      autoFocus
+      value={v}
+      size={Math.max(3, v.length + 1)}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => finish(v)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(v);
+        else if (e.key === "Escape") finish(null);
+      }}
+    />
   );
 }

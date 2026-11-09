@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { captionBlocks, captionWords } from "@lens/engine";
+import { applyWordEdits, captionBlocks, captionWords, mergeCaptionCues } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import {
   addBlock,
@@ -21,7 +21,7 @@ import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 
 const LABEL_W = 132;
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, volume: 2000 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
 const SLIDE_ROW_H = 18;
 const COLLAPSED_H = 30;
@@ -30,7 +30,7 @@ const COLLAPSED_H = 30;
 function annLabel(a: { stepId?: string; text?: string; kind: string }): string {
   return `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`;
 }
-const ADDABLE = ["zoom", "cut", "speed", "mask", "annotation", "audio"];
+const ADDABLE = ["zoom", "cut", "speed", "mask", "annotation", "caption", "audio"];
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
@@ -113,13 +113,14 @@ export function Timeline() {
     const words = bundle?.transcript?.words ?? [];
     const cl = project.edits.cleanup;
     const cuts = plan?.cuts ?? [];
-    const kept = captionWords(words, cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !cuts.some((c) => (w.startMs + w.endMs) / 2 >= c.startMs && (w.startMs + w.endMs) / 2 < c.endMs));
-    return captionBlocks(kept, project.captions.maxWordsPerBlock, project.captions.maxBlockMs);
-  }, [bundle, plan?.cuts, project.edits.cleanup, project.captions.maxWordsPerBlock, project.captions.maxBlockMs]);
+    const kept = captionWords(applyWordEdits(words, project.captions.wordEdits), cl.enabled && cl.removeFillers, cl.fillers).filter((w) => !cuts.some((c) => (w.startMs + w.endMs) / 2 >= c.startMs && (w.startMs + w.endMs) / 2 < c.endMs));
+    // transcript blocks that a hand-written cue replaces are not shown (the cue is, as an editable block)
+    return mergeCaptionCues(captionBlocks(kept, project.captions.maxWordsPerBlock, project.captions.maxBlockMs), project.captions.cues).filter((b) => !b.manual);
+  }, [bundle, plan?.cuts, project.edits.cleanup, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, project.captions.cues, project.captions.wordEdits]);
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "mask", "annotation", "volume"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         t.push(b.startMs, b.endMs);
@@ -430,13 +431,19 @@ export function Timeline() {
                 </div>
               ))}
             </div>
-            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} onPointerDown={scrubLane}>
+            <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} data-testid="lane-caption" onPointerDown={scrubLane} onDoubleClick={(e) => create("caption", msOf(laneX(e.clientX)))}>
+              {(project.captions.cues ?? []).map((c, i) => block("caption", i, c, c.text || "(empty)", "manual", `block-caption-${c.id}`))}
               {captionBlockList.map((b, i) => (
                 <div
                   key={`cap-${i}`}
-                  className="block block-caption"
+                  className="block block-caption auto-cap"
+                  data-testid={`caption-auto-${i}`}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    store.cueFromBlock(b.startMs, b.endMs, b.text);
+                  }}
                   style={{ left: xOf(b.startMs), width: Math.max(4, xOf(b.endMs) - xOf(b.startMs)) }}
-                  title={b.text}
+                  title={`${b.text} · double-click to edit as a caption`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     store.seekSource(b.startMs);

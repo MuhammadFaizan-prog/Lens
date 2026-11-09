@@ -9,6 +9,7 @@ import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine
 import { setDemoHotspot } from "@lens/engine";
 import { ensurePlanAssets, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
+import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
 import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
 import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
 import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
@@ -349,6 +350,86 @@ export class EditorStore {
 
   setZoomPlacing(on: boolean): void {
     this.set({ zoomPlacing: on });
+  }
+
+  // ------------------------------------------------------------------ hand-written captions (Windows bug #15)
+
+  private cueList(): CaptionCue[] {
+    return this.history.doc.captions.cues ?? [];
+  }
+
+  private setCues(label: string, fn: (cues: CaptionCue[]) => CaptionCue[]): void {
+    this.edit(label, (p) => ({ ...p, captions: { ...p.captions, enabled: true, cues: fn(p.captions.cues ?? []).sort((a, b) => a.startMs - b.startMs) } }));
+  }
+
+  updateCue(id: string, patch: Partial<CaptionCue>, label = "Edit caption"): void {
+    this.setCues(label, (cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  deleteCue(id: string): void {
+    this.setCues("Delete caption", (cs) => cs.filter((c) => c.id !== id));
+    this.set({ selection: null });
+  }
+
+  /** Split a cue at the playhead (or its middle when the playhead is outside it). */
+  splitCueAt(id: string, srcMs?: number): void {
+    const c = this.cueList().find((x) => x.id === id);
+    if (!c) return;
+    const t = srcMs !== undefined && srcMs > c.startMs + 50 && srcMs < c.endMs - 50 ? srcMs : (c.startMs + c.endMs) / 2;
+    const parts = splitCue(c, t, [c.id, `${c.id}-b${Date.now().toString(36)}`]);
+    if (!parts) return;
+    this.setCues("Split caption", (cs) => cs.flatMap((x) => (x.id === id ? parts : [x])));
+  }
+
+  /** Merge a cue with the next one in time. */
+  mergeCueWithNext(id: string): void {
+    const cs = [...this.cueList()].sort((a, b) => a.startMs - b.startMs);
+    const i = cs.findIndex((x) => x.id === id);
+    if (i < 0 || i >= cs.length - 1) {
+      this.notify("No next caption to merge with");
+      return;
+    }
+    const m = mergeCues(cs[i]!, cs[i + 1]!);
+    const drop = cs[i + 1]!.id;
+    this.setCues("Merge captions", (all) => all.filter((x) => x.id !== drop).map((x) => (x.id === id ? m : x)));
+  }
+
+  /** Turn an auto caption block into an editable cue (same timing and text). */
+  cueFromBlock(startMs: number, endMs: number, text: string): void {
+    const c: CaptionCue = { id: `cue-${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`, startMs: Math.round(startMs), endMs: Math.round(endMs), text };
+    this.setCues("Edit caption", (cs) => [...cs.filter((x) => !(x.startMs < c.endMs && c.startMs < x.endMs)), c]);
+    const i = this.cueList().findIndex((x) => x.id === c.id);
+    this.select({ track: "caption", index: i });
+  }
+
+  /** Import SRT / VTT: cue times are on the output clock, mapped back to source time through the plan. */
+  importSubtitles(text: string, replace = true): number {
+    let n = 0;
+    const plan = this.s.plan;
+    const toSrc = (ms: number) => {
+      if (!plan || !plan.frames.length) return ms;
+      const i = Math.max(0, Math.min(plan.frames.length - 1, Math.round((ms * plan.output.fps) / 1000)));
+      const f = plan.frames[i]!;
+      return f.src + (ms - f.t); // sub-frame remainder
+    };
+    const cues = parseSubtitles(text, () => `cue-${Date.now().toString(36)}${n++}`).map((c) => ({ ...c, startMs: Math.round(toSrc(c.startMs)), endMs: Math.round(toSrc(c.endMs)) })).filter((c) => c.endMs > c.startMs);
+    if (!cues.length) {
+      this.notify("No captions found in that file");
+      return 0;
+    }
+    this.setCues(`Import ${cues.length} captions`, (cs) => (replace ? cues : [...cs, ...cues]));
+    this.notify(`Imported ${cues.length} captions`);
+    return cues.length;
+  }
+
+  /** Inline correction of transcript word i ("" hides it in captions; null restores the recognised text). */
+  setWordEdit(i: number, text: string | null): void {
+    this.edit("Edit word", (p) => {
+      const we = { ...(p.captions.wordEdits ?? {}) };
+      if (text === null) delete we[String(i)];
+      else we[String(i)] = text;
+      return { ...p, captions: { ...p.captions, wordEdits: we } };
+    });
   }
 
   /** Make auto zooms editable (see freezeAutoZooms); returns the index of `seg` after freezing. */
