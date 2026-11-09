@@ -21,7 +21,7 @@ import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 
 const LABEL_W = 132;
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
 const SLIDE_ROW_H = 18;
 const COLLAPSED_H = 30;
