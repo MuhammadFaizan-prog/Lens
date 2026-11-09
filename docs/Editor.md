@@ -24,7 +24,7 @@ symlinked to `~/.cache/ms-playwright/ffmpeg-<rev>/ffmpeg-linux` works.
 
 ### Running the e2e on a small machine
 
-The suite is 16 tests (parity 1, editor 14, demo 1) and runs with `workers: 1`, `fullyParallel:
+The suite is 18 tests (parity 1, editor 14, demo 1, takes 2) and runs with `workers: 1`, `fullyParallel:
 false`, one reused server (`reuseExistingServer`). On the 2-core sandbox with ~1 GB free, a default
 headless Chromium (~900 MB over 8 processes) plus the export's compositor (~430 MB: Python 180, x264
 110, two decoders) got the Playwright worker OOM-killed, so by default (`LENS_E2E_LOWMEM=0` turns it
@@ -41,6 +41,8 @@ npx playwright test e2e/parity.spec.ts
 npx playwright test e2e/editor.spec.ts --grep-invert "export renders"
 npx playwright test e2e/editor.spec.ts -g "export renders"
 npx playwright test e2e/demo.spec.ts
+npx playwright test e2e/takes.spec.ts -g "swap take"     # multi-take, on apps/editor/sample-takes
+npx playwright test e2e/takes.spec.ts -g "mark retake"
 ```
 
 Don't run pytest at the same time.
@@ -64,6 +66,12 @@ The timeline is in **source** time (the engine's edit data is), with cuts shaded
 scrubber are in **output** frames. Editing a live auto zoom first "freezes" the current auto zooms
 into the project (`auto: true` segments with `zoom.auto` off, which the engine already uses as-is),
 so the planner does not put a moved zoom back; turning Auto zoom on again regenerates them.
+
+Multi-take (`docs/Takes.md`): the **Alt takes** lane shows each retake group's takes (kept solid,
+rejected hatched and struck through); clicking a rejected take keeps it, ▶ plays an A/B preview of a
+take from a trial plan without touching history. The transcript strikes through rejected-take words
+and offers take chips, Mark retake, a Takes toggle and Keep last / Keep best. The multi-take sample
+is `apps/editor/sample-takes` (`make_sample.py --takes`, generated on first open).
 
 Deleting transcript words adds cuts (`cutsForDeletedWords`) and, since this change, words inside
 any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every filler not already

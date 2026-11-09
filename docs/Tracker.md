@@ -28,6 +28,7 @@
 | Export colour: x264 encode converts RGB with the BT.709 matrix (limited range, accurate_rnd + full_chroma_int) and tags the stream bt709 / tv; the compositor's source decode uses the same swscale flags (matrix from the stream's tags) | done | pytest `test_export_colour.py`: 10 flat patches decoded as a BT.709 player decodes (what browsers do for HD) are within 2 levels (measured: worst channel 2.0, mean 0.7); the old untagged BT.601 encode measured 23 worst / 10.8 mean and the test asserts it was > 10; rendered export carries all four tags. e2e export test also asserts the tags |
 | Engine: zoom budget (max zooms/min, min hold, merge) + Calm / Default / Punchy presets | done | vitest; e2e (preset + budget re-plan the camera) |
 | Captions follow transcript cuts: words inside any cut are left out of captions | done | vitest (`zoombudget.test.ts` "captions follow transcript cuts"); `p1.test.ts` caption-highlight case rewritten, see below |
+| Multi-take with automatic best take (demand #1): retakes found in the transcript (fuzzy prefix alignment of word sequences + restart cues: phrases, long pause, filler, stutter, low confidence), groups of 2+ takes, keep last or best (completeness, fillers, pauses, confidence), rejected takes as reversible plan cuts that video, audio and captions follow; per-group choice, mark retake, not-a-retake; `edits.takes`; editor Alt takes lane, struck-through alt-take words, one-click swap, A/B preview, all undoable. See `docs/Takes.md` | done | vitest `takes.test.ts` (17): HELD_OUT word precision 0.957 / recall 1.000, group precision 0.933 / recall 1.000 (bounds 0.95 / 0.90 / 0.90 / 0.90), DEV 1.0 on all four, 0 groups on ~180 words of normal narration. pytest `test_takes.py`: espeak fumbles -> lens-transcribe -> render -> re-transcribe: WER 9.5% (2/21, bound 10%), fumble-only word gone, frames = plan, video 10466.7 / audio 10474.7 ms vs plan 10467.0 (bound 1 frame), sync median 20 ms / p90 41 ms (bounds 60 / 150), captions on 20/20 matched words. Playwright `takes.spec.ts` (2): swap changes kept take, transcript, plan and drawn pixels; A/B preview adds no undo step and ends by itself; undo restores take, frames, source time and pixels; mark retake + toggle undo |
 | Tauri app shell | not started | |
 | GPU renderer (wgpu) | not started | |
 
@@ -104,3 +105,35 @@ Editor tests, changes made while getting them to pass (2026-11-09):
    OOM killer (dmesg), none an assertion. Not proven: two consecutive clean full passes with the
    final code on this machine. pytest: 44 passed, 0 skipped, run alone (two earlier full runs were
    OOM-killed while another workspace's browsers spiked memory).
+
+Multi-take (demand #1), 2026-11-09. Bounds were written into `packages/engine/test/takes.corpus.ts`
+and `tests/test_takes.py` before the first measurement; none was changed.
+1. The test set has a DEV half (detector rules and constants set while looking at it) and a
+   HELD_OUT half written at the same time. First held-out run: word precision 0.946 and group
+   precision 0.867, both under bound (0.95 / 0.90). One of the two failures (h9, "Then uh we add
+   a mask over the | we add ...") was a bug: "then" fuzzy-matched "the" (edit distance 1 of 4), so
+   the restart was anchored one word early. Fix: words of three letters or fewer match only
+   exactly (`tokenSim`). After it: precision 0.957 / 0.933, recall 1.000 / 1.000, DEV unchanged at
+   1.0. Because this fix was found on the held-out set, those held-out numbers are optimistic. The
+   other failure (hn9, "This step is important. || This step is optional ...") is still detected as
+   a retake: two sentences with the same opening separated by a long pause are indistinguishable
+   from a restart by text and timing alone. It is counted in the numbers above.
+2. Pipeline WER measured 9.5% against the 10% bound: both errors are recogniser errors on kept
+   speech ("save" heard as "same", "Then" as "and"), not take cuts; the fumbled takes' audio was
+   entirely inside the take cuts. Whisper wrote the fumble "expert" as "export", so the test's
+   "fumble-only word not heard" check rests on "sorry".
+3. Editor bug found by the new e2e: Ctrl/Cmd-Z right after toggling a checkbox did nothing (the
+   key handler ignored every focused INPUT). Checkboxes and radios now pass modified keys through;
+   plain keys (Space) still go to the control.
+4. Runs on this machine: npm build + test green (engine 89, editor 18); pytest 45 passed run
+   alone; e2e one invocation per spec (the takes spec as two invocations): parity 1/1 (SSIM mean
+   0.98948, min 0.98311), editor 13/13 + export 1/1, demo 1/1, takes 2/2. Before that pass, the
+   takes spec's second test was SIGKILLed twice by the kernel OOM killer while the first test's
+   context was closing (dmesg: global OOM, Playwright `node` worker; not an assertion) and once
+   failed on assertion 3 above. The sandbox also restarted once mid-run (all packages re-provisioned
+   with `work/setup-env.sh`); every suite above was rerun after the restart.
+
+Multi-take, what is not done: no "Record another take" button (no native recorder yet), so takes
+are found within one recording; no real-voice testing; restarts that rephrase rather than repeat
+are not found (Mark retake covers them); no hallway test of time to a clean cut; cursor and zoom
+continuity across a take cut uses the ordinary cut path only (no snap/loop-to-start smoothing yet).

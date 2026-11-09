@@ -72,7 +72,8 @@ Audio, crop, masks, overrides and caption style live in `project.json`, for exam
              "startMs": 0, "endMs": 4000, "feather": 8, "fadeMs": 200, "strength": 12}],
   "overrides": [{"startMs": 5000, "endMs": 7000, "cursor": {"hidden": true}, "volume": 0.5}],
   "camera": {"enabled": true, "mirror": true, "crop": {"x": 160, "y": 0, "w": 960, "h": 720}, "zoomedSize": 0.6},
-  "edits": {"cleanup": {"enabled": true, "removeFillers": true, "shortenPauses": true, "maxPauseMs": 900, "keepPauseMs": 350}},
+  "edits": {"cleanup": {"enabled": true, "removeFillers": true, "shortenPauses": true, "maxPauseMs": 900, "keepPauseMs": 350},
+            "takes": {"enabled": true, "strategy": "last"}},
   "transcription": {"mode": "auto", "track": "mic", "model": "base.en"},
   "captions": {"enabled": true, "wordHighlight": true,
                "style": {"fontSize": 44, "position": "bottom", "maxWordsPerLine": 5, "highlightColor": "#ffd23f"}},
@@ -91,5 +92,7 @@ speech-to-text turns the mic track into word timings, so captions and filler/pau
 real audio (tested on synthetic espeak speech only). The live editor (`apps/editor`) previews the
 plan in the browser at parity with the reference compositor (SSIM-tested), with a timeline,
 inspector, transcript editing, Calm/Default/Punchy zoom presets with a zoom budget, and export.
+Multi-take: retakes are found in the transcript and the last (or best) take is kept, with an Alt
+takes lane to swap or A/B-preview takes (`edits.takes`, see `docs/Takes.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

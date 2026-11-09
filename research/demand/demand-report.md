@@ -78,6 +78,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Build size:** M. It needs project save (#9) and a transcript-alignment pass; the cut, speed and pause logic already exists.
 
+**Status (2026-11-09): built, first version.** Retake detection from the transcript, keep last / best take, reversible take cuts, Alt takes lane with one-click swap, A/B preview and undo, `edits.takes` (see `docs/Takes.md`). Measured on a held-out test set: word precision 0.957, recall 1.000; group precision 0.933, recall 1.000 (target ≥90% met). Pipeline on synthetic speech: re-transcribed export WER 9.5% vs the clean script. Not done: the *Record another take* button (needs native capture), real-voice testing, the hallway test.
+
 **How to test:** Run `research/harness/synth_session.py` to script a session that says each sentence 1–3 times with fumbles. Measure precision/recall of "kept the intended take" against ground truth (target ≥90%). In a 5-person hallway test, compare time to a clean cut against manual transcript editing.
 
 ---
@@ -576,7 +578,7 @@ Pricing and business-model findings are in their own section after #29.
 
 ## Top 10 at a glance
 
-1. **Multi-take + auto best-take** (M): the most-voted ask in the category (535 + 468 + 216 votes); nobody picks takes for you. Lens's transcript makes it feasible.
+1. **Multi-take + auto best-take** (M): the most-voted ask in the category (535 + 468 + 216 votes); nobody picks takes for you. Lens's transcript makes it feasible. *Built 2026-11-09 (docs/Takes.md); record-another-take button still needs native capture.*
 2. **Calm auto-zoom** (S–M): motion sickness and "constantly zooming" complaints in 4 communities. A zoom budget and comfort mode use Lens's existing spring camera.
 3. **Auto-redaction** (M): a clean browser profile is a manual step today; detect tokens, emails and notifications on-device.
 4. **Callouts + auto step labels** (M): 249 + 223 + 482 Screen Studio votes; Screen Studio still lacks arrows and text.
