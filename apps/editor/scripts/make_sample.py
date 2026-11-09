@@ -5,6 +5,7 @@
   python3 apps/editor/scripts/make_sample.py --takes [--out apps/editor/sample-takes]
   python3 apps/editor/scripts/make_sample.py --privacy [--out apps/editor/sample-privacy]
   python3 apps/editor/scripts/make_sample.py --annotations [--out apps/editor/sample-annotations]
+  python3 apps/editor/scripts/make_sample.py --brand [--out apps/editor/sample-brand]
 
 Writes a Lens bundle the editor opens by default:
   screen.mp4  cursorless fake-app recording (1280x720 @ 30 fps, 10 s) + meta.json + events.jsonl
@@ -164,6 +165,67 @@ def make_annotations(out: Path, force: bool) -> int:
     return 0
 
 
+def make_logo(path: Path) -> float:
+    """An original placeholder logo (Lens's own drawing): a two-ring mark and the word 'acme', with
+    anti-aliased alpha edges. Returns width / height."""
+    from PIL import Image, ImageDraw, ImageFont
+    w, h, ss = 300, 120, 4
+    img = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    cx, cy, r = 60 * ss, 60 * ss, 44 * ss
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(255, 255, 255, 235))
+    r2 = 26 * ss
+    d.ellipse((cx - r2 + 10 * ss, cy - r2, cx + r2 + 10 * ss, cy + r2), fill=(0, 0, 0, 0))
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 56 * ss)
+    tw = d.textlength("acme", font=font)
+    x0 = 116 * ss
+    d.text((x0 + (w * ss - 10 * ss - x0 - tw) / 2, 26 * ss), "acme", font=font, fill=(255, 255, 255, 255))
+    img = img.resize((w, h), Image.LANCZOS)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return w / h
+
+
+def brand_project(aspect: float) -> dict:
+    """The main sample's look with a brand kit on: violet primary, Inter, a logo watermark, intro and
+    outro cards; captions, a box, a badge and a lower-third that all inherit the brand colours."""
+    p = project()
+    p.pop("camera")
+    p.pop("audio")
+    p["background"] = {"blur": 0}  # inherits the brand backdrop
+    p["captions"]["style"]["highlightColor"] = "@highlight"
+    p["annotations"] = [
+        {"id": "box", "kind": "rect", "startMs": 1200, "endMs": 4200, "rect": {"x": 140, "y": 90, "w": 360, "h": 120}},
+        {"id": "badge", "kind": "badge", "startMs": 4600, "endMs": 8200, "at": {"x": 1100, "y": 560}, "text": "Save"},
+        {"id": "lower", "kind": "text", "role": "lower-third", "anchor": "frame", "startMs": 5600, "endMs": 9600, "rect": {"x": 0.08, "y": 0.66, "w": 0.6, "h": 0},
+         "text": "Acme Cloud \u00b7 Settings", "style": {"fontSize": 38, "strokeWidth": 8, "fill": "#11131a", "fillOpacity": 0.8, "radius": 8}},
+    ]
+    p["brand"] = {
+        "enabled": True, "name": "Acme Cloud",
+        "colors": {"primary": "#7c5cff", "accent": "#ffc94d", "background": {"mode": "derived", "colors": [], "angle": 135}},
+        "captionHighlight": "primary", "font": "Inter",
+        "logo": {"path": "brand/logo.png", "aspect": round(aspect, 4), "watermark": True, "corner": "bottom-right", "size": 0.12, "opacity": 0.8, "margin": 0.035},
+        "intro": {"enabled": True, "title": "Acme Cloud", "subtitle": "A two-minute product tour", "durationMs": 1500, "logo": True},
+        "outro": {"enabled": True, "title": "acme.dev", "subtitle": "Start free today", "durationMs": 1200, "logo": True},
+    }
+    return p
+
+
+def make_brand(out: Path, force: bool) -> int:
+    """The main sample's screen + transcript (no webcam / audio) with a brand kit (demand #9)."""
+    if (out / "project.json").exists() and (out / "screen.mp4").exists() and not force:
+        print(f"sample exists: {out}")
+        return 0
+    out.mkdir(parents=True, exist_ok=True)
+    synthesize(out, W, H, FPS, DUR)
+    (out / "transcript.json").write_text(json.dumps(transcript(), indent=1))
+    aspect = make_logo(out / "brand" / "logo.png")
+    (out / "project.json").write_text(json.dumps(brand_project(aspect), indent=2))
+    (out / "reference.png").unlink(missing_ok=True)
+    print(f"brand sample written: {out}")
+    return 0
+
+
 def project() -> dict:
     sx = W / 1920
     return {
@@ -193,7 +255,11 @@ def main() -> int:
     ap.add_argument("--takes", action="store_true", help="write the multi-take sample (default --out apps/editor/sample-takes)")
     ap.add_argument("--privacy", action="store_true", help="write the privacy-redaction sample (default --out apps/editor/sample-privacy)")
     ap.add_argument("--annotations", action="store_true", help="write the annotations sample (default --out apps/editor/sample-annotations)")
+    ap.add_argument("--brand", action="store_true", help="write the brand-kit sample (default --out apps/editor/sample-brand)")
     a = ap.parse_args()
+    if a.brand:
+        out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-brand"
+        return make_brand(out, a.force)
     if a.annotations:
         out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-annotations"
         return make_annotations(out, a.force)

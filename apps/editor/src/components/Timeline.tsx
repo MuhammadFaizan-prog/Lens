@@ -326,7 +326,11 @@ export function Timeline() {
               ) : null}
               <span className={`dot dot-${t.kind}`} />
               {t.label}
-              {t.kind === "annotation" && project.annotations.length > 0 && <span className="lane-count" data-testid="ann-lane-rows">{annExpanded ? `${annPack.rowCount} row${annPack.rowCount > 1 ? "s" : ""}` : project.annotations.length}</span>}
+              {t.kind === "annotation" && project.annotations.length > 0 && (
+                <span className="lane-count" data-testid="ann-lane-rows" title={annExpanded ? `${annPack.rowCount} row${annPack.rowCount > 1 ? "s" : ""}` : `${project.annotations.length} items, collapsed`}>
+                  {annExpanded ? annPack.rowCount : project.annotations.length}
+                </span>
+              )}
               {["zoom", "cut", "speed", "mask", "annotation"].includes(t.kind) && (
                 <button className="mini-add" title={`Add ${t.label.toLowerCase()} at playhead`} aria-label={`Add ${t.kind}`} data-testid={`add-${t.kind}`} onClick={() => create(t.kind as TrackKind, playSrc)}>
                   <Icon name="plus" size={12} />
@@ -414,8 +418,10 @@ export function Timeline() {
                 const row = annPack.rows[i]!;
                 if (!annExpanded) {
                   // collapsed: thin bars in their rows, no labels (hover for the title)
-                  const h = Math.max(2, Math.floor((COLLAPSED_H - 6) / annPack.rowCount) - 1);
-                  return block("annotation", i, a, label, `${a.stepId ? "step" : ""} mini`, `block-annotation-${a.id}`, { top: 3 + row * (h + 1), height: h });
+                  // rows share the summary row's height, so any number of rows fits inside it
+                  const step = (COLLAPSED_H - 6) / annPack.rowCount;
+                  const h = Math.max(1, Math.floor(step) - (step >= 3 ? 1 : 0));
+                  return block("annotation", i, a, label, `${a.stepId ? "step" : ""} mini`, `block-annotation-${a.id}`, { top: 3 + Math.floor(row * step), height: h });
                 }
                 const narrow = w < labelWidth(label);
                 return block("annotation", i, a, label, `${a.stepId ? "step" : ""}${narrow ? " narrow" : ""}`, `block-annotation-${a.id}`,

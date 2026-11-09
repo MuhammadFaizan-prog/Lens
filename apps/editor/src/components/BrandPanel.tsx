@@ -59,9 +59,9 @@ export function BrandPanel() {
           </label>
           <ColorInput label="Primary" value={b.colors.primary} testId="brand-primary" onChange={(v) => live("Brand primary", (x) => ({ ...x, colors: { ...x.colors, primary: v } }))} />
           <ColorInput label="Accent" value={b.colors.accent} testId="brand-accent" onChange={(v) => live("Brand accent", (x) => ({ ...x, colors: { ...x.colors, accent: v } }))} />
-          <Segmented label="Caption highlight" value={b.captionHighlight} options={[{ value: "primary", label: "Primary" }, { value: "accent", label: "Accent" }]} testId="brand-caption-highlight"
+          <Segmented label="Highlight" value={b.captionHighlight} options={[{ value: "primary", label: "Primary" }, { value: "accent", label: "Accent" }]} testId="brand-caption-highlight"
             onChange={(v) => store.editBrand("Caption highlight colour", (x) => ({ ...x, captionHighlight: v }))} />
-          <Segmented label="Backdrop" value={b.colors.background.mode} options={[{ value: "derived", label: "From primary", hint: "A deep gradient made from the primary colour" }, { value: "custom", label: "Custom" }]} testId="brand-bg-mode"
+          <Segmented label="Backdrop" value={b.colors.background.mode} options={[{ value: "derived", label: "Derived", hint: "A deep gradient made from the primary colour" }, { value: "custom", label: "Custom" }]} testId="brand-bg-mode"
             onChange={(v) => store.editBrand("Brand backdrop", (x) => ({ ...x, colors: { ...x.colors, background: { ...x.colors.background, mode: v, colors: x.colors.background.colors.length ? x.colors.background.colors : ["#141a3d", "#2c3c99"] } } }))} />
           {b.colors.background.mode === "custom" && (
             <>

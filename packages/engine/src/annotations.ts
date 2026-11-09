@@ -626,7 +626,8 @@ export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number
   const textColor = resolveColor(sl.textColor, pal);
   const ops: AnnOp[] = [sl.fill === "theme" ? { op: "background" } : { op: "fill", pts: [0, 0, W, 0, W, H, 0, H], color: resolveColor(sl.background, pal), alpha: 1 }];
   const hasSub = !!sl.subtitle.trim();
-  const titleY = hasSub ? H * 0.5 - ss * 0.9 : H * 0.5;
+  // with a subtitle: title above the centre, accent bar under the title's descenders, subtitle below
+  const titleY = hasSub ? H * 0.5 - ts * 0.45 : H * 0.5;
   if (sl.logo && sl.logo.path) {
     // logo centred above the title, whole pixels so preview and export sample it identically
     const lh = Math.round(Math.min(H * 0.16, W * 0.16 / Math.max(0.05, sl.logo.aspect)));
@@ -638,10 +639,10 @@ export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number
   if (sl.accent) {
     const bw = ts * 1.6;
     const bh = Math.max(3, ts * 0.09);
-    const by = hasSub ? H * 0.5 + ts * 0.05 : H * 0.5 + ts * 0.85;
+    const by = hasSub ? titleY + ts * 0.7 : H * 0.5 + ts * 0.85;
     ops.push({ op: "fill", pts: flat(roundRectPoints({ x: W / 2 - bw / 2, y: by, w: bw, h: bh }, bh / 2)), color: resolveColor(sl.accent, pal), alpha: 1 });
   }
-  if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(H * 0.5 + ts * 0.55 + ss * 0.6), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
+  if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(titleY + ts * 0.7 + Math.max(3, ts * 0.09) + ss * 1.05), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
   return { id: sl.id, opacity: r4(op), ops };
 }
 

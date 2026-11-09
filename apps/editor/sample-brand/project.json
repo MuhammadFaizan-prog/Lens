@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "output": {
+    "aspect": "16:9",
+    "resolution": 720,
+    "fps": 30
+  },
+  "background": {
+    "blur": 0
+  },
+  "edits": {
+    "cuts": [],
+    "speed": []
+  },
+  "masks": [
+    {
+      "id": "sidebar-blur",
+      "kind": "blur",
+      "rect": {
+        "x": 0,
+        "y": 53,
+        "w": 200,
+        "h": 413
+      },
+      "startMs": 0,
+      "endMs": 3200,
+      "feather": 10,
+      "fadeMs": 250,
+      "strength": 10
+    },
+    {
+      "id": "save-spotlight",
+      "kind": "spotlight",
+      "rect": {
+        "x": 1000,
+        "y": 566,
+        "w": 133,
+        "h": 66
+      },
+      "startMs": 5600,
+      "endMs": 7600,
+      "feather": 14,
+      "fadeMs": 300,
+      "strength": 0.55
+    }
+  ],
+  "captions": {
+    "enabled": true,
+    "wordHighlight": true,
+    "maxWordsPerBlock": 7,
+    "style": {
+      "fontSize": 46,
+      "highlightColor": "@highlight",
+      "position": "bottom",
+      "maxWordsPerLine": 5
+    }
+  },
+  "annotations": [
+    {
+      "id": "box",
+      "kind": "rect",
+      "startMs": 1200,
+      "endMs": 4200,
+      "rect": {
+        "x": 140,
+        "y": 90,
+        "w": 360,
+        "h": 120
+      }
+    },
+    {
+      "id": "badge",
+      "kind": "badge",
+      "startMs": 4600,
+      "endMs": 8200,
+      "at": {
+        "x": 1100,
+        "y": 560
+      },
+      "text": "Save"
+    },
+    {
+      "id": "lower",
+      "kind": "text",
+      "role": "lower-third",
+      "anchor": "frame",
+      "startMs": 5600,
+      "endMs": 9600,
+      "rect": {
+        "x": 0.08,
+        "y": 0.66,
+        "w": 0.6,
+        "h": 0
+      },
+      "text": "Acme Cloud \u00b7 Settings",
+      "style": {
+        "fontSize": 38,
+        "strokeWidth": 8,
+        "fill": "#11131a",
+        "fillOpacity": 0.8,
+        "radius": 8
+      }
+    }
+  ],
+  "brand": {
+    "enabled": true,
+    "name": "Acme Cloud",
+    "colors": {
+      "primary": "#7c5cff",
+      "accent": "#ffc94d",
+      "background": {
+        "mode": "derived",
+        "colors": [],
+        "angle": 135
+      }
+    },
+    "captionHighlight": "primary",
+    "font": "Inter",
+    "logo": {
+      "path": "brand/logo.png",
+      "aspect": 2.5,
+      "watermark": true,
+      "corner": "bottom-right",
+      "size": 0.12,
+      "opacity": 0.8,
+      "margin": 0.035
+    },
+    "intro": {
+      "enabled": true,
+      "title": "Acme Cloud",
+      "subtitle": "A two-minute product tour",
+      "durationMs": 1500,
+      "logo": true
+    },
+    "outro": {
+      "enabled": true,
+      "title": "acme.dev",
+      "subtitle": "Start free today",
+      "durationMs": 1200,
+      "logo": true
+    }
+  }
+}
