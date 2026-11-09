@@ -101,7 +101,7 @@ export class AudioEngine {
     const ctx = new OfflineAudioContext(1, x.length, 48000);
     const node = await createRnnoise(ctx);
     const buf = ctx.createBuffer(1, x.length, 48000);
-    buf.copyToChannel(x, 0);
+    buf.copyToChannel(x as Float32Array<ArrayBuffer>, 0);
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(node).connect(ctx.destination);
