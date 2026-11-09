@@ -205,6 +205,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** A Claude/Cursor agent runs 10 scripted tasks ("cut the intro, tighten pauses, zoom 1:30–2:20 to the sidebar"). Measure task success and edits that need a human fix. Post it in MCP directories and count installs per week.
 
+**Status (2026-11-09): built, first version (no recording).** `lens` CLI and `lens-mcp` MCP server (stdio, `@modelcontextprotocol/sdk`, MIT) over the same operations: project new / open / info, plan, export (mp4 / gif / srt / vtt), `render_frame` (the agent sees a PNG of what it changed), transcribe, translate, takes, privacy scan / review, step labels, presets, brand, JSON-pointer get / set, zoom / cut / annotate; every edit returns a machine-readable diff (JSON-pointer changes to the project) and is idempotent; MCP resources for the project JSON, transcript and preview frame; every path confined to an allowed root (no shell tool). `lens run demo.lens.yaml` replays a declarative edit list so a release pipeline can re-render. Tests: CLI 19 integration (every subcommand happy + error path, exit codes, JSON-shape snapshots), MCP 5 (open → zoom → render_frame changed by 40.6 levels → export 300/300 frames = plan; 14 escape attempts refused), script vs CLI 282/282 identical frames. Not done: `record(target)` / `stop()` (needs native capture), the 10-task agent study, MCP directory listing / install count. See `docs/Automation.md`.
+
 ---
 
 ## 7. One recording → video + clickable interactive demo + step guide — 225 · L

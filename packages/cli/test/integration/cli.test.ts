@@ -236,8 +236,13 @@ describe("root sandbox (CLI --root)", () => {
     const root = path.dirname(P);
     fails(["project", "open", sample(), "--root", root], 5, "outside_root");
     fails(["export", "--format", "srt", "--out", "../../escape.srt", "-C", P, "--root", root], 5, "outside_root");
-    fs.symlinkSync(path.dirname(root), path.join(root, "up"));
-    fails(["frame", "--frame", "0", "--out", "up/escape.png", "-C", P, "--root", root], 5, "outside_root");
+    const up = path.join(root, "up");
+    fs.symlinkSync(path.dirname(root), up);
+    try {
+      fails(["frame", "--frame", "0", "--out", "up/escape.png", "-C", P, "--root", root], 5, "outside_root");
+    } finally {
+      fs.unlinkSync(up); // a link to an ancestor is a loop for any file crawler
+    }
     fails(["set", "/audio/tracks/0/path", '"../../../../etc/passwd"', "-C", P, "--root", root], 5, "outside_root");
     expect(fs.existsSync(path.join(dir, "escape.srt"))).toBe(false);
   });

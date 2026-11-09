@@ -8,11 +8,13 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @lens/engine && npm run build -w @lens/editor",
-    "test": "npm test -w @lens/engine && npm test -w @lens/editor",
-    "typecheck": "npm run typecheck -w @lens/engine && npm run typecheck -w @lens/editor",
+    "build": "npm run build -w @lens/engine && npm run build -w @lens/cli && npm run build -w @lens/editor",
+    "test": "npm test -w @lens/engine && npm test -w @lens/cli && npm test -w @lens/editor",
+    "typecheck": "npm run typecheck -w @lens/engine && npm run typecheck -w @lens/cli && npm run typecheck -w @lens/editor",
     "e2e": "npm run e2e -w @lens/editor",
-    "plan": "node packages/engine/dist/cli.js"
+    "plan": "node packages/engine/dist/cli.js",
+    "test:cli": "npm run test:integration -w @lens/cli",
+    "lens": "node packages/cli/dist/cli.js"
   },
   "license": "UNLICENSED"
 }

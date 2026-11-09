@@ -14,6 +14,10 @@ See `docs/Rules.md`.
 ## Layout
 - `packages/engine/` TypeScript engine: events → cursor track, auto-zoom, camera, timeline,
   transcript editing, layouts → per-frame render plan (`lens-plan` CLI).
+- `packages/cli/` automation (`docs/Automation.md`): the `lens` CLI (every operation, `--json`,
+  exit codes, idempotent edits, `lens run script.lens.yaml` demo-as-code) and `lens-mcp`, an MCP
+  server (stdio) that lets an agent open, edit, preview (`render_frame`) and export projects inside
+  an allowed root.
 - `apps/editor/` live editor (React + TypeScript + Vite; the UI Tauri will wrap): Canvas2D preview
   driven by the render plan, transport, timeline, inspector, transcript editing, export. See
   `docs/Editor.md`.
@@ -38,6 +42,18 @@ npm install && npm run build && npm test        # engine + editor: typecheck, bu
 pip install opencv-python-headless numpy scipy pillow pytest faster-whisper ctranslate2 sentencepiece
 sudo apt install espeak-ng tesseract-ocr tesseract-ocr-spa   # test-only: synthetic speech + caption OCR
 python3 -m pytest                               # harness + compositor + STT + end-to-end
+```
+
+## Automation
+```bash
+npm run build
+node packages/cli/dist/cli.js project new demo --from apps/editor/sample
+node packages/cli/dist/cli.js zoom add --start 1.2s --end 3.8s --scale 2 --focus 400,300 -C demo --json
+node packages/cli/dist/cli.js frame --at 2s -C demo            # PNG of one output frame
+node packages/cli/dist/cli.js export --format mp4 -C demo       # or gif / srt / vtt
+node packages/cli/dist/cli.js run demo.lens.yaml                # declarative edits + exports
+node packages/cli/dist/mcp.js --root ~/LensProjects             # MCP server (Claude Desktop / Code config in docs/Automation.md)
+npm run test:cli                                                # CLI + MCP + script integration tests
 ```
 
 ## Editor
@@ -133,5 +149,9 @@ Caption translation: captions translated on-device into Spanish, French, German,
 one track per language, re-timed so word highlight still works, right-to-left captions shaped and
 ordered in preview and export, SRT / VTT per language; editor language switcher, Translate to… and
 side-by-side editing (`translations`, see `docs/Translation.md`).
+Automation: a `lens` CLI and an MCP server (`lens-mcp`) over the same operations (projects, plan,
+export mp4 / gif / srt / vtt, frame preview, transcribe, translate, takes, privacy, steps, presets,
+brand, JSON-pointer get / set, zoom / cut / annotate), sandboxed to a root, plus `.lens.yaml`
+demo-as-code scripts that re-render identically (`docs/Automation.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.
