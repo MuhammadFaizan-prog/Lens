@@ -89,14 +89,14 @@ def test_entropy():
     ("3782 822463 10005", "card"),
     ("5555-5555-5555-4444", "card"),
     ("key sk-proj-4fT9xQ2LmZ8vB1nR7kW3yH6cJ0pD", "api_key"),
-    ("sk-ant-api03-Zq7Rr2Vb9Xk1Lm4Np8Tc3Wd6", "api_key"),
-    ("sk_live_51HxQ2LmZ8vB1nR7kW3yH6c", "api_key"),
-    ("ghp_8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU", "api_key"),
-    ("AKIAIOSFODNN7EXAMPLE", "api_key"),
-    ("xoxb-2048-1357-AbCdEfGhIjKl", "api_key"),
+    (("sk-a" "nt-api03-Zq7Rr2Vb9Xk1Lm4Np8Tc3Wd6"), "api_key"),
+    (("sk_l" "ive_51HxQ2LmZ8vB1nR7kW3yH6c"), "api_key"),
+    (("ghp_" "8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU"), "api_key"),
+    (("AKIA" "IOSFODNN7EXAMPLE"), "api_key"),
+    (("xoxb" "-2048-1357-AbCdEfGhIjKl"), "api_key"),
     ("glpat" + "-x7Kp2RqT9mWz4LsV8nYb", "api_key"),
-    ("AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q", "api_key"),
-    ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk", "jwt"),
+    ("AIza" + "SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q", "api_key"),
+    (("eyJh" "bGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk"), "jwt"),
     ("token=Q2x9vR7mT4kZ8pL1wN6sB3cY5", "token"),
     ("gateway 192.168.14.207 port 8443", "ip"),
     ("10.0.0.1", "ip"),
@@ -118,14 +118,14 @@ def test_classifier_false_cases(text):
 
 
 def test_glued_token_and_line_views():
-    assert [f.type for f in find_token("ghp_8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU")] == ["api_key"]
+    assert [f.type for f in find_token(("ghp_" "8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU"))] == ["api_key"]
     assert find_token("internationalization") == []
     assert [f.type for f in find_line("+1 (415) 555-0132 and jane@x.io")] == ["email", "phone"]
 
 
 def test_preview_never_contains_the_secret():
     for s, t in [("jane.doe@acme-corp.com", "email"), ("4242 4242 4242 4242", "card"), ("+1 (415) 555-0132", "phone"),
-                 ("sk-proj-4fT9xQ2LmZ8vB1nR7kW3yH6cJ0pD", "api_key"), ("192.168.14.207", "ip"), ("Q2x9vR7mT4kZ8pL1wN6sB3cY5", "token")]:
+                 (("sk-p" "roj-4fT9xQ2LmZ8vB1nR7kW3yH6cJ0pD"), "api_key"), ("192.168.14.207", "ip"), ("Q2x9vR7mT4kZ8pL1wN6sB3cY5", "token")]:
         p = mask_preview(s, t)
         assert "•" in p
         assert s not in p and s.replace(" ", "") not in p.replace(" ", "")

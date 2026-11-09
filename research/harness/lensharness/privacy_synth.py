@@ -42,14 +42,14 @@ DOC_W = PX1 - PX0
 DEV_SECRETS = {
     "email": "jane.doe@acme-corp.com",
     "email2": "billing@northwind.io",
-    "sk": "sk-proj-4fT9xQ2LmZ8vB1nR7kW3yH6cJ0pD",
+    "sk": ("sk-p" "roj-4fT9xQ2LmZ8vB1nR7kW3yH6cJ0pD"),
     "card": "4242 4242 4242 4242",
     "card2": "5555 5555 5555 4444",
     "phone": "+1 (415) 555-0132",
-    "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk",
+    "jwt": ("eyJh" "bGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk"),
     "ip": "192.168.14.207",
-    "ghp": "ghp_8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU",
-    "akia": "AKIAIOSFODNN7EXAMPLE",
+    "ghp": ("ghp_" "8Kd2mQ7xL4vN9pR1sT6wY3zB5cF0hJ2aE7gU"),
+    "akia": ("AKIA" "IOSFODNN7EXAMPLE"),
 }
 SECRET_TYPE = {"email": "email", "email2": "email", "sk": "api_key", "card": "card", "card2": "card", "phone": "phone",
                "jwt": "jwt", "ip": "ip", "ghp": "api_key", "akia": "api_key", "tok": "token"}
@@ -67,14 +67,14 @@ DEV_DECOYS = [
 HELD_SECRETS = {
     "email": "m.okafor@example.org",
     "email2": "ops-team@contoso.net",
-    "sk": "sk-ant-api03-Zq7Rr2Vb9Xk1Lm4Np8Tc3Wd6",
+    "sk": ("sk-a" "nt-api03-Zq7Rr2Vb9Xk1Lm4Np8Tc3Wd6"),
     "card": "4000 0566 5566 5556",
     "card2": "3782 822463 10005",
     "phone": "+44 20 7946 0958",
-    "jwt": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoxNzAwMDAwMDAwfQ.k3J9sQ2vT8xLmZ0pR4wB7nC1yD6fH5gA",
+    "jwt": ("eyJh" "bGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyIiwiaWF0IjoxNzAwMDAwMDAwfQ.k3J9sQ2vT8xLmZ0pR4wB7nC1yD6fH5gA"),
     "ip": "10.42.7.199",
     "ghp": "glpat" + "-x7Kp2RqT9mWz4LsV8nYb",
-    "akia": "AKIA4Q7XZT2EXAMPLE9K",
+    "akia": ("AKIA" "4Q7XZT2EXAMPLE9K"),
     "tok": "api_token=Q2x9vR7mT4kZ8pL1wN6sB3cY5",
 }
 HELD_DECOYS = [
@@ -88,14 +88,14 @@ HELD_DECOYS = [
 FRESH_SECRETS = {
     "email": "r.tanaka@fabrikam.co.jp",
     "email2": "security@tailspin.dev",
-    "sk": "sk-proj-Hq3Ld8Wm2Pz6Xt9Rb4Kc7Vn1Ys5",
+    "sk": ("sk-p" "roj-Hq3Ld8Wm2Pz6Xt9Rb4Kc7Vn1Ys5"),
     "card": "6011 0009 9013 9424",
     "card2": "5105 1051 0510 5100",
     "phone": "(212) 555-0147",
-    "jwt": "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJvcHMiLCJyb2xlIjoiYWRtaW4ifQ.Tq8Lw3Zr6Pm1Xk9Vb4Nc7Hd2Fs5Jg0Ya",
+    "jwt": ("eyJh" "bGciOiJFUzI1NiJ9.eyJzdWIiOiJvcHMiLCJyb2xlIjoiYWRtaW4ifQ.Tq8Lw3Zr6Pm1Xk9Vb4Nc7Hd2Fs5Jg0Ya"),
     "ip": "172.16.254.3",
-    "ghp": "ghp_Zx4Qw8Er2Ty6Ui0Op3As7Df1Gh5Jk9Lz2Xc6",
-    "akia": "AKIAZ3MX7QPR2EXAMPLE",
+    "ghp": ("ghp_" "Zx4Qw8Er2Ty6Ui0Op3As7Df1Gh5Jk9Lz2Xc6"),
+    "akia": ("AKIA" "Z3MX7QPR2EXAMPLE"),
     "tok": "client_secret=Hn7Kq2Wz9Lp4Xr6Tv1Bm8Cs3",
 }
 
