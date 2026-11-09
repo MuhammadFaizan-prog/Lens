@@ -4,6 +4,8 @@
  *   scripts/make_mediarecorder_fixtures.mjs) and a stream whose channel layout changes mid-way
  *   (ADTS AAC, mono then stereo) export, through the pinned filter graph and the export path;
  * - A/V durations of the exported MP4 agree within 0.1 s;
+ * - noise reduction: noise floor in silent stretches drops >= 10 dB, speech level within 1 dB;
+ * - click sounds and 3 ms fades at cuts are back (they were missing from the in-app export).
  * LENS_TEST_FFMPEG6 (the ffmpeg-static b6.0 build the Windows installer ships, for this machine's
  * arch) is used for the graph check when set: ffmpeg 6.0 is the version that failed.
  */
@@ -14,11 +16,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AudioPlan, RenderPlan } from "@lens/engine";
 import { audioFilterGraph, finishBrowserExport, startBrowserExport, writeFrame } from "../server/browserExport";
-import { renderExportAudio } from "../server/exportAudio";
+import { cutJoins, renderExportAudio, synthClick } from "../server/exportAudio";
 
 const FF = "ffmpeg";
 const FF6 = process.env.LENS_TEST_FFMPEG6 && fs.existsSync(process.env.LENS_TEST_FFMPEG6) ? process.env.LENS_TEST_FFMPEG6 : null;
 const hasFfmpeg = spawnSync(FF, ["-version"]).status === 0;
+const hasEspeak = spawnSync("espeak-ng", ["--version"]).status === 0;
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const FIX = path.join(__dirname, "fixtures", "audio");
 const SR = 48000;
@@ -42,6 +45,11 @@ function pcm(file: string, ch = 1): Float32Array {
   const b = spawnSync(FF, ["-v", "error", "-i", file, "-f", "f32le", "-ac", String(ch), "-ar", String(SR), "-"], { maxBuffer: 1 << 28 }).stdout as Buffer;
   return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
 }
+function rawPcm(file: string): Float32Array {
+  const b = fs.readFileSync(file);
+  return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+}
+const db = (x: number) => 20 * Math.log10(x + 1e-12);
 function rmsMono(s: Float32Array, a: number, b: number, stride = 1): number {
   let acc = 0;
   let n = 0;
@@ -155,4 +163,87 @@ describe.skipIf(!hasFfmpeg)("export audio (desktop, no Python)", () => {
     expect(rmsMono(s, 2.3, 3.7)).toBeGreaterThan(0.02);
   });
 
+  it("3 ms fades at cuts: no step at the join, none inside an uncut piece split", async () => {
+    // square-ish loud tone: a hard cut in the middle of a period would leave a big step
+    const dir = tmp();
+    const src = path.join(dir, "tone.wav");
+    expect(spawnSync(FF, ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=97:d=4:sample_rate=48000", "-af", "volume=6", src]).status).toBe(0);
+    const p = audioPlan({ tracks: [{ id: "mic", kind: "mic", path: src, offsetMs: 0, volume: 1 }], durationMs: 2000, pieces: [
+      { srcStart: 0, srcEnd: 1003, rate: 1, outStart: 0, outEnd: 1003, gain: 1 },
+      { srcStart: 2511, srcEnd: 3508, rate: 1, outStart: 1003, outEnd: 2000, gain: 1 },
+    ] });
+    expect(cutJoins(p.pieces)).toEqual([{ cutBefore: false, cutAfter: true }, { cutBefore: true, cutAfter: false }]);
+    const a = await renderExportAudio(FF, p, 2000, path.join(dir, "a"), ROOT);
+    const s = rawPcm(a!.file);
+    const j = Math.round(1.003 * SR);
+    // the samples on both sides of the join are ~0 (faded), and the 3 ms ramps exist
+    expect(Math.abs(s[2 * (j - 1)]!)).toBeLessThan(0.01);
+    expect(Math.abs(s[2 * j]!)).toBeLessThan(0.01);
+    let maxStep = 0;
+    for (let i = j - 400; i < j + 400; i++) maxStep = Math.max(maxStep, Math.abs(s[2 * (i + 1)]! - s[2 * i]!));
+    expect(maxStep).toBeLessThan(0.05); // a 97 Hz tone at amplitude ~0.75 steps <= 0.01 per sample; an unfaded cut here steps ~0.5
+  });
+
+  it("click sounds at the click times", async () => {
+    const dir = tmp();
+    const p = audioPlan({ tracks: [], clickSound: { enabled: true, volume: 0.5, times: [500, 1500] }, durationMs: 2000 });
+    const a = await renderExportAudio(FF, p, 2000, path.join(dir, "a"), ROOT);
+    expect(a).not.toBeNull();
+    const s = rawPcm(a!.file);
+    expect(s.length / 2).toBe(2 * SR);
+    const click = synthClick(SR);
+    expect(click.length).toBe(1440);
+    expect(db(rmsMono(s, 0.5, 0.515, 2))).toBeGreaterThan(-25);
+    expect(db(rmsMono(s, 1.5, 1.515, 2))).toBeGreaterThan(-25);
+    expect(rmsMono(s, 0.6, 1.4, 2)).toBe(0);
+  });
+
+  it.skipIf(!hasEspeak)("noise reduction: floor in pauses drops >= 10 dB, speech level within 1 dB", async () => {
+    const dir = tmp();
+    const say = (t: string, f: string) => expect(spawnSync("espeak-ng", ["-v", "en-us", "-s", "150", "-w", f, t]).status).toBe(0);
+    const lines = ["The quick brown fox jumps over the lazy dog.", "Open the settings panel and choose a folder.", "Then press record to start the capture."];
+    const speech: Float32Array[] = lines.map((t, i) => {
+      const f = path.join(dir, `s${i}.wav`);
+      say(t, f);
+      return pcm(f);
+    });
+    const gap = 2 * SR;
+    const total = speech.reduce((n, x) => n + x.length + gap, gap);
+    const clean = new Float32Array(total);
+    const spans: Array<[number, number]> = [];
+    let pos = gap;
+    for (const x of speech) {
+      clean.set(x, pos);
+      spans.push([pos / SR, (pos + x.length) / SR]);
+      pos += x.length + gap;
+    }
+    let peak = 0;
+    for (const v of clean) peak = Math.max(peak, Math.abs(v));
+    // hiss + fan rumble + 50 Hz hum, about -44 dBFS
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296) * 2 - 1;
+    let fan = 0;
+    const noisy = new Float32Array(total);
+    for (let i = 0; i < total; i++) {
+      fan = 0.95 * fan + rnd();
+      noisy[i] = (clean[i]! / peak) * 0.5 + 0.007 * rnd() + 0.0015 * fan + 0.002 * Math.sin((2 * Math.PI * 50 * i) / SR);
+    }
+    const src = path.join(dir, "noisy.f32");
+    fs.writeFileSync(src, Buffer.from(noisy.buffer));
+    const wav = path.join(dir, "noisy.wav");
+    expect(spawnSync(FF, ["-v", "error", "-y", "-f", "f32le", "-ar", String(SR), "-ac", "1", "-i", src, "-c:a", "pcm_s16le", wav]).status).toBe(0);
+    const ms = (total * 1000) / SR;
+    const base = { tracks: [{ id: "mic", kind: "mic" as const, path: wav, offsetMs: 0, volume: 1 }], durationMs: ms, pieces: [{ srcStart: 0, srcEnd: ms, rate: 1, outStart: 0, outEnd: ms, gain: 1 }] };
+    const off = await renderExportAudio(FF, audioPlan(base), ms, path.join(dir, "off"), ROOT);
+    const on = await renderExportAudio(FF, audioPlan({ ...base, noiseReduction: { enabled: true, amountDb: 12 } }), ms, path.join(dir, "on"), ROOT);
+    const a = rawPcm(off!.file);
+    const b = rawPcm(on!.file);
+    const quiet: Array<[number, number]> = [[0.3, spans[0]![0] - 0.3], ...spans.slice(0, -1).map((s, i) => [s[1] + 0.3, spans[i + 1]![0] - 0.3] as [number, number])];
+    const lvl = (x: Float32Array, rs: Array<[number, number]>) => rs.reduce((acc, [s, e]) => acc + db(rmsMono(x, s, e, 2)), 0) / rs.length;
+    const floorDrop = lvl(a, quiet) - lvl(b, quiet);
+    const speechDiff = lvl(b, spans) - lvl(a, spans);
+    console.log(`[denoise] floor ${lvl(a, quiet).toFixed(1)} -> ${lvl(b, quiet).toFixed(1)} dBFS (drop ${floorDrop.toFixed(1)} dB), speech ${lvl(a, spans).toFixed(2)} -> ${lvl(b, spans).toFixed(2)} dBFS (${speechDiff.toFixed(2)} dB)`);
+    expect(floorDrop).toBeGreaterThanOrEqual(10);
+    expect(Math.abs(speechDiff)).toBeLessThanOrEqual(1);
+  });
 });

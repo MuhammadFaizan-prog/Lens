@@ -4,9 +4,11 @@
  *   1. every track is decoded once to float PCM at the plan rate, 2 channels, by its own ffmpeg with
  *      the format pinned (aresample + aformat fltp / stereo / 48 kHz): a mono MediaRecorder Opus webm,
  *      a mono WAV, or a stream whose channel layout changes mid-way all come out the same;
- *   2. the plan pieces are laid onto the output clock here (slice, atempo for sped-up pieces, gain),
- *      streamed in 1 s blocks so memory stays flat for long recordings;
- *   3. two-pass EBU R128 loudnorm.
+ *   2. the plan pieces are laid onto the output clock here (slice, atempo for sped-up pieces, gain,
+ *      3 ms fades at every cut), streamed in 1 s blocks so memory stays flat for long recordings;
+ *   3. noise reduction (ffmpeg arnndn with the bundled RNNoise model; afftdn with a measured noise
+ *      floor when no model is found) and two-pass EBU R128 loudnorm;
+ *   4. the synthesized click sound at every click's output time.
  *
  * The result is raw f32le, 2 channels, exactly round(frames / fps * sampleRate) samples long, which
  * the export muxes next to the encoded video (no audio filter graph in the video encoder).
@@ -19,6 +21,41 @@ import type { AudioPlan } from "../../../packages/engine/src/index";
 export const CHANNELS = 2;
 const BYTES = 4 * CHANNELS; // one f32 stereo frame
 export const PIN = (sr: number) => `aresample=${sr},aformat=sample_fmts=flt:channel_layouts=stereo:sample_rates=${sr}`;
+
+// ---------------------------------------------------------------- click sound (Lens design, as audio.py)
+
+/** Small deterministic PRNG (mulberry32) for the click's noise transient. */
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** A short soft "tick": two damped partials plus a short high-passed noise attack; mono, peak 0.9. */
+export function synthClick(sr = 48000, ms = 30): Float32Array {
+  const n = Math.floor((sr * ms) / 1000);
+  const r = rng(20261109);
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+  const noise = new Float64Array(n + 1).map(() => gauss());
+  const x = new Float32Array(n);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const body = Math.exp(-t / 0.0038);
+    const snap = Math.exp(-t / 0.0009);
+    let v = 0.55 * Math.sin(2 * Math.PI * 1870 * t) * body + 0.28 * Math.sin(2 * Math.PI * 3320 * t + 0.6) * body + 0.3 * (noise[i + 1]! - noise[i]!) * snap;
+    v *= Math.min(1, t / 0.0003);
+    x[i] = v;
+    peak = Math.max(peak, Math.abs(v));
+  }
+  for (let i = 0; i < n; i++) x[i] = (x[i]! * 0.9) / peak;
+  return x;
+}
 
 // ---------------------------------------------------------------- ffmpeg helpers
 
@@ -108,10 +145,31 @@ function readSum(tracks: RawTrack[], s0: number, s1: number): Float32Array {
   return out;
 }
 
+export interface LaidPiece {
+  o0: number;
+  o1: number;
+  cutBefore: boolean;
+  cutAfter: boolean;
+}
+
+/** Which joins are cuts (the source jumps or the output has a gap), as audio.py. */
+export function cutJoins(pieces: AudioPlan["pieces"]): Array<{ cutBefore: boolean; cutAfter: boolean }> {
+  return pieces.map((p, i) => {
+    const prev = pieces[i - 1];
+    const next = pieces[i + 1];
+    return {
+      cutBefore: !!prev && (Math.abs(prev.srcEnd - p.srcStart) > 0.5 || Math.abs(prev.outEnd - p.outStart) > 0.5),
+      cutAfter: !!next && (Math.abs(next.srcStart - p.srcEnd) > 0.5 || Math.abs(next.outStart - p.outEnd) > 0.5),
+    };
+  });
+}
+
 const BLOCK = 48000; // samples per streamed block
 
 async function layPieces(ffmpeg: string, audio: AudioPlan, tracks: RawTrack[], outFd: number, nOut: number): Promise<void> {
   const sr = audio.sampleRate;
+  const fade = Math.max(1, Math.round(0.003 * sr));
+  const joins = cutJoins(audio.pieces);
   for (let i = 0; i < audio.pieces.length; i++) {
     const p = audio.pieces[i]!;
     const s0 = Math.round((p.srcStart * sr) / 1000);
@@ -120,7 +178,15 @@ async function layPieces(ffmpeg: string, audio: AudioPlan, tracks: RawTrack[], o
     const o1 = Math.min(nOut, Math.round((p.outEnd * sr) / 1000));
     if (o1 <= o0 || s1 <= s0 || tracks.length === 0) continue;
     const len = o1 - o0;
-    const env = (_k: number) => p.gain;
+    const f = Math.min(fade, Math.floor(len / 2));
+    const { cutBefore, cutAfter } = joins[i]!;
+    // per-sample envelope at the piece's edges (3 ms linear fades at cuts) and its gain
+    const env = (k: number) => {
+      let g = p.gain;
+      if (f > 0 && cutBefore && k < f) g *= k / Math.max(1, f - 1);
+      if (f > 0 && cutAfter && k >= len - f) g *= (len - 1 - k) / Math.max(1, f - 1);
+      return g;
+    };
     const write = (block: Float32Array, k0: number) => {
       const n = Math.min(block.length / 2, len - k0);
       if (n <= 0) return;
@@ -146,14 +212,63 @@ async function layPieces(ffmpeg: string, audio: AudioPlan, tracks: RawTrack[], o
 
 // ---------------------------------------------------------------- cleanup
 
+/** Noise floor estimate: 10th percentile of 50 ms RMS windows (dBFS), skipping digital silence (as audio.py). */
+export function noiseFloorDb(fd: number, frames: number, sr: number): number {
+  const w = Math.max(1, Math.round(sr * 0.05));
+  const buf = Buffer.alloc(w * BYTES);
+  const levels: number[] = [];
+  for (let s = 0; s + w <= frames; s += w) {
+    fs.readSync(fd, buf, 0, w * BYTES, s * BYTES);
+    const f = new Float32Array(buf.buffer, buf.byteOffset, w * 2);
+    let acc = 0;
+    for (let i = 0; i < w; i++) {
+      const m = (f[2 * i]! + f[2 * i + 1]!) / 2;
+      acc += m * m;
+    }
+    const rms = Math.sqrt(acc / w);
+    if (rms > 1e-6) levels.push(rms);
+  }
+  if (!levels.length) return -80;
+  levels.sort((a, b) => a - b);
+  return 20 * Math.log10(levels[Math.floor(0.1 * (levels.length - 1))]!);
+}
+
+/** The RNNoise model bundled for arnndn (assets/models/rnnoise/sh.rnnn, fetched by scripts/fetch-models.mjs), or null. */
+export function rnnoiseModel(root: string): string | null {
+  for (const p of [process.env.LENS_RNNOISE_MODEL, path.join(root, "assets", "models", "rnnoise", "sh.rnnn")]) if (p && fs.existsSync(p)) return p;
+  return null;
+}
+
+/**
+ * The denoise filter: RNNoise (arnndn) with the bundled model, run from the model's folder so the
+ * filter argument is a bare file name (a Windows path's drive colon would need filtergraph escaping);
+ * mix scales with the project's amount (12 dB and up = full RNNoise). Without a model: afftdn with the
+ * measured noise floor (audio.py's method).
+ */
+export function denoiseFilter(amountDb: number, model: string | null, floorDb: number): { af: string; cwd?: string } {
+  if (model) {
+    const mix = Math.max(0.05, Math.min(1, amountDb / 12));
+    return { af: `arnndn=m=${path.basename(model)}:mix=${mix.toFixed(3)}`, cwd: path.dirname(model) };
+  }
+  const nr = Math.max(0.01, Math.min(97, amountDb));
+  const nf = Math.max(-80, Math.min(-20, Math.round(floorDb)));
+  return { af: `afftdn=nr=${nr}:nf=${nf}`, cwd: undefined };
+}
+
 const RAW_IN = (sr: number, f: string) => ["-f", "f32le", "-ar", String(sr), "-ac", "2", "-i", f];
 
 async function cleanup(ffmpeg: string, audio: AudioPlan, laid: string, frames: number, root: string, out: string): Promise<string> {
   const sr = audio.sampleRate;
   const chain: string[] = [];
-  const cwd: string | undefined = undefined;
-  void frames;
-  void root;
+  let cwd: string | undefined;
+  if (audio.noiseReduction.enabled) {
+    const fd = fs.openSync(laid, "r");
+    const floor = noiseFloorDb(fd, frames, sr);
+    fs.closeSync(fd);
+    const d = denoiseFilter(audio.noiseReduction.amountDb, rnnoiseModel(root), floor);
+    chain.push(d.af);
+    cwd = d.cwd;
+  }
   const L = audio.loudness;
   if (L.enabled) {
     const base = `loudnorm=I=${L.targetLufs}:TP=${L.truePeakDb}:LRA=${L.lra}`;
@@ -172,6 +287,28 @@ async function cleanup(ffmpeg: string, audio: AudioPlan, laid: string, frames: n
   return out;
 }
 
+function addClicks(file: string, audio: AudioPlan, nOut: number): void {
+  const cs = audio.clickSound;
+  if (!cs.enabled || !cs.times.length) return;
+  const sr = audio.sampleRate;
+  const click = synthClick(sr).map((v) => v * cs.volume);
+  const fd = fs.openSync(file, "r+");
+  const buf = Buffer.alloc(click.length * BYTES);
+  for (const t of cs.times) {
+    const i = Math.round((t * sr) / 1000);
+    if (i >= nOut) continue;
+    const n = Math.min(click.length, nOut - i);
+    fs.readSync(fd, buf, 0, n * BYTES, i * BYTES);
+    const f = new Float32Array(buf.buffer, buf.byteOffset, n * 2);
+    for (let k = 0; k < n; k++) {
+      f[2 * k] = Math.max(-1, Math.min(1, f[2 * k]! + click[k]!));
+      f[2 * k + 1] = Math.max(-1, Math.min(1, f[2 * k + 1]! + click[k]!));
+    }
+    fs.writeSync(fd, buf, 0, n * BYTES, i * BYTES);
+  }
+  fs.closeSync(fd);
+}
+
 export interface RenderedAudio {
   /** raw f32le, 2 channels, sampleRate */
   file: string;
@@ -185,7 +322,8 @@ export interface RenderedAudio {
  */
 export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null, outMs: number, dir: string, root: string): Promise<RenderedAudio | null> {
   if (!audio) return null;
-  if (!audio.tracks.length) return null;
+  const hasClicks = audio.clickSound.enabled && audio.clickSound.times.length > 0;
+  if (!audio.tracks.length && !hasClicks) return null;
   const sr = audio.sampleRate;
   const nOut = Math.max(1, Math.round((outMs * sr) / 1000));
   fs.mkdirSync(dir, { recursive: true });
@@ -204,11 +342,12 @@ export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null,
     } finally {
       fs.closeSync(outFd);
     }
-    const file = tracks.length ? await cleanup(ffmpeg, audio, laid, nOut, root, path.join(dir, "clean.f32")) : laid;
+    let file = tracks.length ? await cleanup(ffmpeg, audio, laid, nOut, root, path.join(dir, "clean.f32")) : laid;
     // exact length (filters may add or drop a few samples at the end)
     const fd = fs.openSync(file, "r+");
     fs.ftruncateSync(fd, nOut * BYTES);
     fs.closeSync(fd);
+    addClicks(file, audio, nOut);
     if (file !== laid) fs.rmSync(laid, { force: true });
     return { file, sampleRate: sr, frames: nOut };
   } finally {

@@ -486,3 +486,9 @@ LENS_PACKAGED_APP=out/desktop/linux-arm64-unpacked/lens): e2e/packaged-export.sp
 before measuring (export done; |A - V| <= 0.1 s; mic audible, mean > -40 dBFS): mono s16 WAV mic (the
 v0.1.0 Stop output) and the raw mono Opus webm both export on the shipped ffmpeg 6.0: video 5.000 s,
 audio 5.000 s, mean -18.3 dBFS. 2 / 2 passed.
+
+### Per-item status (one commit per item, pushed to fix/desktop-runtime, never merged to main)
+
+| # | Fix | Test and numbers | Status |
+|---|---|---|---|
+| 16 | Noise reduction toggle works: export runs ffmpeg `arnndn` with the RNNoise "sh" model (fetched by `apps/editor/scripts/fetch-models.mjs` into git-ignored `assets/models/rnnoise/`, SHA-256 pinned, staged by dist-win, 0.3 MB), preview runs the RNNoise wasm AudioWorklet (@sapphi-red/web-noise-suppressor, bundled by Vite); click sounds and 3 ms cut fades restored in the export | `exportAudio.test.ts` 7/7: noisy espeak fixture, pause floor -49.1 -> -70.1 dBFS (drop 21.0 dB, bound >= 10), speech -28.06 -> -28.21 dBFS (-0.15 dB, bound <= 1); fade test: no step at joins. Packaged spec `e2e/packaged-denoise.spec.ts` (export + preview worklet + click >= -30 dBFS) written and the app packaged with `dist-win --linux-dir`, but 3 runs (16:00-16:18 PKT) were OOM-killed: the kernel killed `lens` (anon-rss 66 MB, oom_score_adj 1000) under global memory pressure from other workspaces, not an assertion; `previewDenoise.test.ts` (Chromium worklet) OOM-killed the same way at 16:19 | code PASS (unit); packaged run OOM-limited, unverified |

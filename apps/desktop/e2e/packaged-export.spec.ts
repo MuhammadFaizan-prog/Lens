@@ -8,6 +8,7 @@
 import { _electron as electron, expect, test } from "@playwright/test";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { REPO, RUNS, appLaunchOptions, ffprobeJson, makeBundle, sleep, startXvfb } from "./helpers";
 
@@ -31,7 +32,7 @@ for (const kind of ["mono-wav", "mono-opus-webm"] as const) {
     const bundle = makeBundle(path.join(work, "bundle"), { seconds: 5, mic });
     const app = await electron.launch({
       ...appLaunchOptions(),
-      env: { ...process.env, DISPLAY: `:${DISPLAY}`, LENS_LOWMEM: "1", LENS_NO_UPDATE: "1", LENS_OPEN_BUNDLE: bundle, LENS_USER_DATA: path.join(work, `ud-${Date.now()}`) },
+      env: { ...process.env, DISPLAY: `:${DISPLAY}`, LENS_LOWMEM: "1", LENS_NO_UPDATE: "1", LENS_OPEN_BUNDLE: bundle, LENS_USER_DATA: path.join(os.tmpdir(), `lens-ud-${Date.now()}`) },
     });
     try {
       let ed = null;

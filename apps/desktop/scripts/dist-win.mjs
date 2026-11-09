@@ -82,6 +82,10 @@ for (const f of ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"]) fs.copyFileSync(path.
 if (fs.existsSync("/usr/share/doc/fonts-dejavu-core/copyright")) fs.copyFileSync("/usr/share/doc/fonts-dejavu-core/copyright", path.join(res, "fonts", "LICENSE.txt"));
 fs.cpSync(path.join(REPO, "apps", "editor", "dist"), path.join(res, "editor"), { recursive: true, filter: (f) => !f.endsWith(".map") });
 if (fs.existsSync(path.join(REPO, "assets", "fonts"))) fs.cpSync(path.join(REPO, "assets", "fonts"), path.join(res, "lens", "assets", "fonts"), { recursive: true });
+// on-device models (git-ignored; fetched and SHA-256 checked by apps/editor/scripts/fetch-models.mjs):
+// RNNoise for export noise reduction (ffmpeg arnndn) and the others listed there
+execFileSync(process.execPath, [path.join(REPO, "apps", "editor", "scripts", "fetch-models.mjs")], { stdio: "inherit" });
+fs.cpSync(path.join(REPO, "assets", "models"), path.join(res, "lens", "assets", "models"), { recursive: true });
 
 // one icon (scripts/make-icon.mjs, 16/24/32/48/64/256) for the installer, the uninstaller and Lens.exe.
 // Installer and uninstaller must share it: NSIS patches the uninstaller icon into the exe header

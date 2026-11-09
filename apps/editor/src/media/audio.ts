@@ -1,15 +1,21 @@
 /**
  * Preview audio: plays the mic track through the plan's audio pieces (cuts skipped, speed ranges
  * played at their rate, per-segment gain), and provides waveform peaks for the timeline.
- * Preview only: denoise and loudness normalisation happen in the export (compositor/audio.py).
+ * Noise reduction plays through an RNNoise AudioWorklet (rnnoiseDenoise.ts) when the project has it
+ * on, so the preview sounds like the export (ffmpeg arnndn, RNNoise too); loudness normalisation is
+ * export-only.
  */
 import type { RenderPlan } from "@lens/engine";
+import { createRnnoise } from "./rnnoiseDenoise";
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private buffer: AudioBuffer | null = null;
   private nodes: AudioBufferSourceNode[] = [];
   private gain: GainNode | null = null;
+  private denoise: AudioNode | null = null;
+  private denoiseLoading: Promise<void> | null = null;
+  private denoiseOn = false;
   private loadedPath: string | null = null;
   peaks: Float32Array | null = null;
   /** ms of source audio per peak bucket */
@@ -42,7 +48,8 @@ export class AudioEngine {
   private context(): AudioContext | null {
     if (!this.ctx) {
       try {
-        this.ctx = new AudioContext();
+        // RNNoise works on 48 kHz frames
+        this.ctx = new AudioContext({ sampleRate: 48000 });
         this.gain = this.ctx.createGain();
         this.gain.connect(this.ctx.destination);
       } catch {
@@ -63,6 +70,47 @@ export class AudioEngine {
     this.nodes = [];
   }
 
+  /** Route the output through RNNoise (on) or straight to the speakers (off). */
+  private route(on: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.gain) return;
+    if (on && !this.denoise) {
+      this.denoiseLoading ??= createRnnoise(ctx)
+        .then((n) => {
+          this.denoise = n;
+          n.connect(ctx.destination);
+          this.route(this.denoiseOn);
+        })
+        .catch((e) => console.warn("[lens] preview denoise unavailable:", e));
+      return;
+    }
+    this.gain.disconnect();
+    this.gain.connect(on && this.denoise ? this.denoise : ctx.destination);
+  }
+
+  /** Whether playback goes through RNNoise right now (diagnostics, e2e). */
+  denoiseState(): { requested: boolean; active: boolean } {
+    return { requested: this.denoiseOn, active: this.denoiseOn && !!this.denoise };
+  }
+
+  /**
+   * Run mono samples (48 kHz) through the same RNNoise worklet offline (diagnostics / packaged-app
+   * test that the bundled wasm and worklet load). Returns the processed samples.
+   */
+  async denoiseOffline(x: Float32Array): Promise<Float32Array> {
+    const ctx = new OfflineAudioContext(1, x.length, 48000);
+    const node = await createRnnoise(ctx);
+    const buf = ctx.createBuffer(1, x.length, 48000);
+    buf.copyToChannel(x, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(node).connect(ctx.destination);
+    src.start();
+    // the worklet instantiates its wasm asynchronously: hold the render until it is up
+    void ctx.suspend(256 / 48000).then(() => setTimeout(() => void ctx.resume(), 500));
+    return (await ctx.startRendering()).getChannelData(0);
+  }
+
   /** (Re)start playback from output frame `frame`. Only forward 1x-4x plays sound. */
   restart(plan: RenderPlan, frame: number, rate: number): void {
     this.stop();
@@ -70,6 +118,11 @@ export class AudioEngine {
     const ctx = this.context();
     if (!ctx || !this.gain) return;
     void ctx.resume();
+    const nr = !!plan.audio.noiseReduction?.enabled;
+    if (nr !== this.denoiseOn || (nr && !this.denoise)) {
+      this.denoiseOn = nr;
+      this.route(nr);
+    }
     const track = plan.audio.tracks[0];
     if (!track) return;
     this.gain.gain.value = track.volume;
