@@ -16,9 +16,11 @@ import {
   moveBlocks,
   selectAllItems,
   TRACK_KINDS,
+  zoomDocIndex,
+  zoomPlanIndex,
   type TrackKind,
 } from "../src/state/timelineOps";
-import { EditorStore } from "../src/state/store";
+import { EditorStore, selectedZoomDocIndex } from "../src/state/store";
 import type { Bundle } from "../src/state/bundle";
 
 const DUR = 10000;
@@ -310,5 +312,58 @@ describe("store multi-select", () => {
     expect(st.get().plan!.zoomSegments[sel.index]).toMatchObject({ startMs: z.startMs + d, endMs: z.endMs + d });
     st.undo();
     expect(st.get().project).toEqual(p);
+  });
+});
+
+describe("zoom selection index (plain click and multi-select agree, by segment id)", () => {
+  /** Auto zoom on (two live autos from the clicks) plus one manual zoom after them. */
+  function mixed(): { p: ProjectConfig; st: EditorStore; manualId: string } {
+    let p = resolveProject({ ...defaultProject(), zoom: { ...defaultProject().zoom, auto: true } });
+    p = add(p, "zoom", 8600, 9400);
+    const st = storeWith(p);
+    return { p, st, manualId: p.zoom.segments[0]!.id };
+  }
+
+  it("maps plan and project indices by id, not by position", () => {
+    const { p, st, manualId } = mixed();
+    const plan = st.get().plan!.zoomSegments;
+    const pi = plan.findIndex((z) => z.id === manualId);
+    expect(pi).toBeGreaterThan(0); // live autos come first: plan index != project index 0
+    expect(zoomDocIndex(p, plan, pi)).toBe(0);
+    expect(zoomPlanIndex(p, plan, 0)).toBe(pi);
+    expect(zoomDocIndex(p, plan, 0)).toBe(-1); // a live auto zoom has no project segment
+    expect(zoomDocIndex(p, plan, 99)).toBe(-1);
+    expect(zoomPlanIndex(p, plan, 5)).toBe(-1);
+  });
+
+  it("a plain-click selection (selectZoom by project index) is the same item multi-select uses", () => {
+    const { st, manualId } = mixed();
+    const pi = st.get().plan!.zoomSegments.findIndex((z) => z.id === manualId);
+    st.selectZoom(0); // what a plain click / add does with the project index
+    expect(st.get().selection).toEqual({ track: "zoom", index: pi });
+    expect(st.isSelected({ track: "zoom", index: pi })).toBe(true);
+    expect(selectedZoomDocIndex(st.get())).toBe(0);
+    // Ctrl+click of the same block toggles it off: both paths name the same item
+    st.toggleSelect({ track: "zoom", index: pi });
+    expect(st.get().multi).toEqual([]);
+    // select it again: Delete removes exactly the manual zoom, not the live auto at project index 0
+    st.selectZoom(0);
+    expect(st.deleteSelected()).toBe(1);
+    const q = st.get().project;
+    expect(q.zoom.segments.some((s) => s.id === manualId)).toBe(false);
+    expect(q.zoom.segments.filter((s) => s.auto)).toHaveLength(pi); // the autos survive (frozen)
+  });
+
+  it("after a plain click freezes auto zooms, the selection still names the clicked block", () => {
+    const { st } = mixed();
+    const z = st.get().plan!.zoomSegments[1]!; // a live auto zoom
+    const idx = st.freezeZoomsFor(z.startMs, z.endMs);
+    expect(idx).toBeGreaterThanOrEqual(0);
+    st.selectZoom(idx);
+    const sel = st.get().selection!;
+    expect(st.get().plan!.zoomSegments[sel.index]).toMatchObject({ startMs: z.startMs, endMs: z.endMs });
+    expect(st.get().project.zoom.segments[selectedZoomDocIndex(st.get())]).toMatchObject({ startMs: z.startMs, endMs: z.endMs });
+    st.toggleSelect(sel);
+    expect(st.get().multi).toEqual([]);
   });
 });

@@ -12,13 +12,13 @@ import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
 import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
 import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
-import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
+import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName, ZoomSegment } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
 import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
-import { blocksOf, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, type BlockRef, type TrackKind } from "./timelineOps";
+import { blocksOf, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
 
 export interface Selection {
   track: TrackKind;
@@ -58,7 +58,11 @@ export interface EditorState {
   /** Playback direction and speed for J/K/L: -4..4, never 0 while playing. */
   rate: number;
   loop: boolean;
-  /** Primary selected block (the one the inspector shows); always part of multi when set. */
+  /**
+   * Primary selected block (the one the inspector shows); always part of multi when set. Zoom
+   * indices are into plan.zoomSegments (what the timeline draws); the project segment is found by
+   * id (selectedZoomDocIndex / zoomDocIndex), never by position.
+   */
   selection: Selection | null;
   /** Every selected timeline block (zoom indices into plan.zoomSegments, like selection). */
   multi: Selection[];
@@ -353,6 +357,24 @@ export class EditorStore {
 
   select(sel: Selection | null): void {
     this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
+  }
+
+  // ------------------------------------------------------------------ zoom selection index
+
+  /** The plan's zoom list, the index space of every zoom Selection (the project's before a plan exists). */
+  private planZooms(): ZoomSegment[] {
+    return this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments;
+  }
+
+  /** Project segment index of plan zoom `planIndex` (by id); -1 for a live auto zoom. */
+  zoomDocIndex(planIndex: number): number {
+    return zoomDocIndex(this.history.doc, this.planZooms(), planIndex);
+  }
+
+  /** Select project zoom segment `docIndex`, by its plan index (same space as multi-select). */
+  selectZoom(docIndex: number): void {
+    const i = zoomPlanIndex(this.history.doc, this.planZooms(), docIndex);
+    this.select(i >= 0 ? { track: "zoom", index: i } : null);
   }
 
   // ------------------------------------------------------------------ multi-select (timeline groups)
@@ -1557,6 +1579,17 @@ export interface StepsExportRun {
 }
 
 export const store = new EditorStore();
+
+/**
+ * Project segment index of the selected zoom (selection indices are plan.zoomSegments indices,
+ * mapped by segment id); -1 when no zoom is selected or it is a live auto zoom. Pure on the state,
+ * so it works as a useEditor selector.
+ */
+export function selectedZoomDocIndex(s: EditorState): number {
+  const sel = s.selection;
+  if (sel?.track !== "zoom") return -1;
+  return zoomDocIndex(s.project, s.plan?.zoomSegments ?? s.project.zoom.segments, sel.index);
+}
 
 export function useEditor<T>(sel: (s: EditorState) => T): T {
   return useSyncExternalStore(store.subscribe, () => sel(store.get()));

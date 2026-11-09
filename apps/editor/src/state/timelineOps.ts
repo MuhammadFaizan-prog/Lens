@@ -271,6 +271,27 @@ export function unfreezeAutoZooms(p: ProjectConfig): ProjectConfig {
   return { ...p, zoom: { ...p.zoom, auto: true, segments: p.zoom.segments.filter((s) => !s.auto) } };
 }
 
+// ------------------------------------------------------------------ zoom selection index
+
+/*
+ * A zoom Selection's index is always into the render plan's zoomSegments (what the timeline draws,
+ * auto zooms included). The project segment it edits is found by segment id, never by position:
+ * the plan interleaves live auto zooms with the project's manual ones, so the two lists' indices
+ * differ whenever auto zoom is on.
+ */
+
+/** Project (p.zoom.segments) index of plan zoom `planIndex`, by id; -1 for a live auto zoom or a bad index. */
+export function zoomDocIndex(p: ProjectConfig, planZooms: readonly ZoomSegment[], planIndex: number): number {
+  const z = planZooms[planIndex];
+  return z ? p.zoom.segments.findIndex((s) => s.id === z.id) : -1;
+}
+
+/** Plan zoomSegments index of project zoom `docIndex`, by id; -1 when the plan does not hold it. */
+export function zoomPlanIndex(p: ProjectConfig, planZooms: readonly ZoomSegment[], docIndex: number): number {
+  const id = p.zoom.segments[docIndex]?.id;
+  return id === undefined ? -1 : planZooms.findIndex((z) => z.id === id);
+}
+
 // ------------------------------------------------------------------ multi-select (group) edits
 
 /** A block on a track; zoom indices here are into p.zoom.segments (the store maps plan indices). */

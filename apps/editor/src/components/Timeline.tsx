@@ -201,7 +201,9 @@ export function Timeline() {
       idx = store.freezeZoomsFor(seg.startMs, seg.endMs);
       if (idx < 0) return;
     }
-    store.select({ track, index: idx });
+    // the selection keeps the plan index (as multi-select does); idx is the project index for the drag
+    if (track === "zoom") store.selectZoom(idx);
+    else store.select({ track, index: idx });
     const blocks = blocksOf(store.get().project, track);
     // tracks whose blocks may overlap (cuts merge) can go anywhere
     const [lo, hi] = canOverlap(track) ? [0, duration] : freeSpan(blocks, (r.startMs + r.endMs) / 2, duration, idx);
@@ -767,7 +769,8 @@ export function createBlock(track: TrackKind, t: number): number {
       index = out.index;
       return track === "cut" ? normalizeCuts(out.project) : out.project;
     });
-    if (track !== "cut") store.select({ track, index });
+    if (track === "zoom") store.selectZoom(index);
+    else if (track !== "cut") store.select({ track, index });
     return index;
   } catch (e) {
     store.notify(`Could not add ${track}: ${e instanceof Error ? e.message : String(e)}`);
