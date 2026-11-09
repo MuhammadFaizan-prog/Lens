@@ -24,7 +24,9 @@ interface Bridge {
   historyOpen(dir: string): Promise<void>;
   historyReveal(dir: string): Promise<void>;
   historyDelete(dir: string): Promise<void>;
-  importVideo(file?: string): Promise<{ dir: string } | null>;
+  importVideo(file?: string): Promise<{ dir: string; video: "copy" | "encode"; durationMs: number; progressEvents: number } | { cancelled: true } | null>;
+  importCancel(): Promise<boolean>;
+  onImportProgress(fn: (p: { pct: number; phase: string }) => void): void;
   settingsGet(): Promise<{ settings: AppSettings }>;
   settingsOpen(): Promise<void>;
   onSettings(fn: (s: AppSettings) => void): void;
@@ -606,18 +608,43 @@ async function showHistory(): Promise<number> {
   }
   return items.length;
 }
+// Import Video: "Importing… 37%" with a Cancel button; every failure ends as "Import failed: <reason>"
+let importing = false;
+const importLog: Array<{ pct: number; phase: string }> = [];
+lens.onImportProgress((p) => {
+  importLog.push(p);
+  if (importing) setStatus(p.phase === "probe" ? "Importing… reading the file" : `Importing… ${p.pct}%`);
+});
+const ipcReason = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
 async function importVideo(file?: string): Promise<unknown> {
   $("file-menu").hidden = true;
+  if (importing) return null;
+  importing = true;
+  importLog.length = 0;
+  $<HTMLButtonElement>("menu-import").disabled = true;
+  const cancel = $<HTMLButtonElement>("import-cancel");
+  cancel.hidden = false;
+  cancel.disabled = false;
   setStatus("Importing…");
   try {
     const r = await lens.importVideo(file);
-    setStatus(r ? "Imported — opened in the editor" : "Ready");
+    if (r && "cancelled" in r) setStatus("Import cancelled");
+    else setStatus(r ? "Imported — opened in the editor" : "Ready");
     return r;
   } catch (e) {
-    setStatus(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    setStatus(`Import failed: ${ipcReason(e)}`);
     return null;
+  } finally {
+    importing = false;
+    cancel.hidden = true;
+    $<HTMLButtonElement>("menu-import").disabled = false;
   }
 }
+$("import-cancel").onclick = () => {
+  $<HTMLButtonElement>("import-cancel").disabled = true;
+  setStatus("Cancelling import…");
+  void lens.importCancel();
+};
 $("gear").onclick = () => void lens.settingsOpen();
 lens.onSettings(applySettings);
 lens.onMode((m) => {
@@ -719,6 +746,8 @@ void lens.updateState().then((u) => {
   setMode,
   showHistory,
   importVideo,
+  importCancel: () => lens.importCancel(),
+  importLog: () => [...importLog],
   setRegion: (r: typeof region) => ((region = r), setMode("region")),
   devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
   settings: () => ({ FPS, BPP, COUNTDOWN }),

@@ -9,7 +9,7 @@ import path from "node:path";
 import { displayForSource } from "../shared/coords";
 import { startEditorServer, type EditorServer } from "./editorServer";
 import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
-import { IMPORT_EXTENSIONS, deleteBundle, importVideo, listHistory } from "./library";
+import { IMPORT_EXTENSIONS, ImportCancelled, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
 import { defaultSettings, loadSettings, normalize, saveSettings, shortcutConflict, type Settings } from "./settings";
@@ -448,17 +448,37 @@ function registerIpc(): void {
   });
   ipcMain.handle("lens:history-reveal", (_e, dir: string) => shell.showItemInFolder(path.join(dir, "screen.mp4")));
   ipcMain.handle("lens:history-delete", (_e, dir: string) => deleteBundle(recordingsDir(), dir));
-  ipcMain.handle("lens:import", async (_e, file?: string) => {
+  // Import Video (Windows report 2026-11-09: sat on "Importing…" forever): progress to the recorder, Cancel kills ffmpeg
+  let importAbort: AbortController | null = null;
+  ipcMain.handle("lens:import", async (e, file?: string) => {
+    if (importAbort) throw new Error("an import is already running");
     let f = file;
     if (!f) {
       const r = await dialog.showOpenDialog(recorderWin ?? undefined!, { title: "Import video to create a Lens project", properties: ["openFile"], filters: [{ name: "Video", extensions: IMPORT_EXTENSIONS }] });
       if (r.canceled || !r.filePaths[0]) return null;
       f = r.filePaths[0];
     }
-    const dir = await importVideo(recordingsDir(), ffmpegPath(), f);
-    (globalThis as Record<string, unknown>).lensLastImport = dir;
-    await openEditor(dir);
-    return { dir };
+    const ac = new AbortController();
+    importAbort = ac;
+    const send = (p: unknown) => {
+      if (!e.sender.isDestroyed()) e.sender.send("lens:import-progress", p);
+    };
+    try {
+      const res = await importVideo(recordingsDir(), ffmpegPath(), f, { signal: ac.signal, onProgress: send });
+      (globalThis as Record<string, unknown>).lensLastImport = res.dir;
+      (globalThis as Record<string, unknown>).lensLastImportInfo = res;
+      await openEditor(res.dir);
+      return { dir: res.dir, video: res.video, durationMs: res.durationMs, progressEvents: res.progressEvents };
+    } catch (err) {
+      if (err instanceof ImportCancelled) return { cancelled: true };
+      throw err;
+    } finally {
+      if (importAbort === ac) importAbort = null;
+    }
+  });
+  ipcMain.handle("lens:import-cancel", () => {
+    importAbort?.abort();
+    return !!importAbort;
   });
   ipcMain.handle("lens:pick-region", (_e, displayId?: string) => pickRegion(displayId));
   ipcMain.handle("lens:teleprompter", () => toggleTeleprompter());
