@@ -17,6 +17,9 @@
  *   GET  /api/privacy/thumb/:name    a review thumbnail (.lens-cache/privacy/)
  *   POST /api/steps                  start `redact/lens-redact steps` (auto step labels) -> { id } (cached per screen.mp4)
  *   GET  /api/steps/:id              { state, error, result }
+ *   POST /api/steps-export           { project, kind: demo|guide } -> { id }: interactive demo / step guide (compositor/export_steps.py)
+ *   GET  /api/steps-export/:id       { state, error, result }
+ *   GET  /api/steps-export/:id/file/<path>   a file of that export (index.html, demo.json, images/..., guide.pdf, ...)
  *   POST /api/translate              { langs } -> { id }: translate/lens-translate on the bundle's transcript.json
  *   GET  /api/translate/:id          { state, language, index, languages, done, total, error, result: { tracks, stats } }
  *
@@ -31,7 +34,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
-import { buildRenderPlan, parseEventLog, parseTranscript, resolveProject } from "../../../packages/engine/src/index";
+import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
@@ -400,6 +403,56 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
   return job;
 }
 
+interface StepsExportJob {
+  id: string;
+  kind: "demo" | "guide";
+  state: "running" | "done" | "error";
+  out: string;
+  error?: string;
+  result?: unknown;
+  startedAt: number;
+  finishedAt?: number;
+}
+const stepsJobs = new Map<string, StepsExportJob>();
+
+/** Interactive demo / step guide (demand #7): engine stepsExportInput -> compositor/export_steps.py into .lens-export/<id>/. */
+function startStepsExport(bundle: string, rawProject: unknown, kind: "demo" | "guide"): StepsExportJob {
+  const id = "x" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const dir = path.join(bundle, ".lens-export", id);
+  fs.mkdirSync(dir, { recursive: true });
+  const meta = JSON.parse(fs.readFileSync(path.join(bundle, "meta.json"), "utf8"));
+  const events = parseEventLog(fs.readFileSync(path.join(bundle, "events.jsonl"), "utf8"));
+  const input = stepsExportInput({ meta, events, project: resolveProject(rawProject) });
+  fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(input.plan));
+  fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(input.manifest));
+  const out = path.join(dir, kind);
+  const job: StepsExportJob = { id, kind, state: "running", out, startedAt: Date.now() };
+  stepsJobs.set(id, job);
+  const py = spawn("python3", [path.join(ROOT, "compositor", "export_steps.py"), "--manifest", path.join(dir, "manifest.json"), "--plan", path.join(dir, "plan.json"),
+    "--screen", path.join(bundle, "screen.mp4"), "--out", out, "--kind", kind, "--assets", bundle], { cwd: ROOT });
+  let stdout = "";
+  let err = "";
+  py.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+  py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+  py.on("close", (code) => {
+    job.finishedAt = Date.now();
+    if (code === 0) {
+      job.state = "done";
+      try {
+        job.result = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
+      } catch {
+        job.result = {};
+      }
+    } else {
+      job.state = "error";
+      job.error = err.trim().split("\n").slice(-4).join("\n") || `export_steps.py exited ${code}`;
+    }
+  });
+  return job;
+}
+
+const EXPORT_MIME: Record<string, string> = { ...MIME, ".html": "text/html; charset=utf-8", ".json": "application/json", ".md": "text/markdown; charset=utf-8", ".pdf": "application/pdf" };
+
 export function apiMiddleware() {
   return async (req: IncomingMessage, res: ServerResponse, next: Next) => {
     const url = new URL(req.url ?? "/", "http://x");
@@ -499,6 +552,31 @@ export function apiMiddleware() {
         const job = stepJobs.get(m[1]!);
         if (!job) return sendJson(res, { error: "no such run" }, 404);
         return sendJson(res, { id: job.id, state: job.state, error: job.error, result: job.state === "done" ? job.result : undefined,
+          seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
+      }
+      if (url.pathname === "/api/steps-export" && req.method === "POST") {
+        const body = JSON.parse(await readBody(req)) as { project: unknown; kind?: string };
+        const kind = body.kind === "guide" ? "guide" : "demo";
+        try {
+          const job = startStepsExport(bundle, body.project, kind);
+          return sendJson(res, { id: job.id, state: job.state });
+        } catch (e) {
+          if (e instanceof DemoExportError) return sendJson(res, { error: e.message }, 400);
+          throw e;
+        }
+      }
+      if ((m = /^\/api\/steps-export\/([a-z0-9]+)(?:\/file\/(.+))?$/.exec(url.pathname))) {
+        const job = stepsJobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such export" }, 404);
+        if (m[2]) {
+          if (job.state !== "done") return sendJson(res, { error: "not finished" }, 409);
+          const f = path.resolve(job.out, decodeURIComponent(m[2]));
+          if (!f.startsWith(job.out + path.sep) || !fs.existsSync(f) || !fs.statSync(f).isFile()) return sendJson(res, { error: "not found" }, 404);
+          res.setHeader("content-type", EXPORT_MIME[path.extname(f).toLowerCase()] ?? "application/octet-stream");
+          res.setHeader("cache-control", "no-store");
+          return fs.createReadStream(f).pipe(res);
+        }
+        return sendJson(res, { id: job.id, kind: job.kind, state: job.state, error: job.error, result: job.state === "done" ? job.result : undefined,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       if (url.pathname === "/api/translate" && req.method === "POST") {

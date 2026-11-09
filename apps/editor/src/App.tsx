@@ -9,6 +9,7 @@ import { StepsPanel } from "./components/StepsPanel";
 import { AnnotationToolbar } from "./components/AnnotationToolbar";
 import { BrandPanel } from "./components/BrandPanel";
 import { PresetsMenu } from "./components/PresetsMenu";
+import { ExportDialog } from "./components/ExportDialog";
 import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
@@ -58,6 +59,9 @@ function TopBar() {
         </button>
         <button className="btn ghost" data-testid="save" onClick={() => store.save()}>
           <Icon name="save" /> Save
+        </button>
+        <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo or step guide" onClick={() => store.openExportDialog("demo")}>
+          Export…
         </button>
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
           <Icon name="export" /> Export MP4
@@ -347,6 +351,7 @@ export function App() {
       </main>
       <Timeline />
       <ExportSheet />
+      <ExportDialog />
       <ExportWarning />
       <Toast />
     </div>

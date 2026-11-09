@@ -5,7 +5,8 @@
  */
 import { useSyncExternalStore } from "react";
 import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS } from "@lens/engine";
-import type { BrandKit, Preset, PresetSection } from "@lens/engine";
+import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
+import { setDemoHotspot } from "@lens/engine";
 import { ensurePlanAssets, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
@@ -87,6 +88,10 @@ export interface EditorState {
   editingText: string | null;
   /** The step-label run in progress (or its last outcome). */
   stepRun: { id: string; state: "starting" | "running" | "done" | "error"; error?: string; seconds?: number } | null;
+  /** Export dialog (format tabs); null = closed. */
+  exportDialog: { tab: "video" | "demo" | "guide" } | null;
+  /** Last interactive demo / step guide build per kind (demand #7). */
+  stepsExport: Partial<Record<"demo" | "guide", StepsExportRun>>;
   /** The caption translation run in progress (or its last outcome), demand #8. */
   translateRun: TranslateRunState | null;
 }
@@ -150,6 +155,8 @@ export class EditorStore {
     newAnchor: "screen",
     editingText: null,
     stepRun: null,
+    exportDialog: null,
+    stepsExport: {},
     translateRun: null,
   };
   private listeners = new Set<Listener>();
@@ -954,6 +961,67 @@ export class EditorStore {
     setTimeout(poll, 300);
   }
 
+  // ------------------------------------------------------------------ interactive demo / step guide (demand #7)
+
+  openExportDialog(tab: "video" | "demo" | "guide" = "video"): void {
+    this.set({ exportDialog: { tab } });
+  }
+
+  setExportTab(tab: "video" | "demo" | "guide"): void {
+    this.set({ exportDialog: { tab } });
+  }
+
+  closeExportDialog(): void {
+    this.set({ exportDialog: null });
+  }
+
+  editDemo(label: string, fn: (d: DemoSettings) => DemoSettings, live = false): void {
+    const f = (p: ProjectConfig) => ({ ...p, demo: fn(p.demo) });
+    if (live) this.tweak(label, f);
+    else this.edit(label, f);
+  }
+
+  /** Hotspot editor: move a step's hotspot (source px) and / or change its tooltip; null clears. */
+  setHotspot(stepId: string, patch: { x?: number | null; y?: number | null; tooltip?: string | null } | null, label = "Move hotspot"): void {
+    this.edit(label, (p) => setDemoHotspot(p, stepId, patch));
+  }
+
+  stepsExportUrl(kind: "demo" | "guide", file: string): string | null {
+    const run = this.s.stepsExport[kind];
+    if (!run || run.state !== "done") return null;
+    return `/api/steps-export/${run.id}/file/${file}${this.dirQuery()}`;
+  }
+
+  /** Build the interactive demo or the step guide from the current project (dev server: compositor/export_steps.py). */
+  async buildStepsExport(kind: "demo" | "guide"): Promise<void> {
+    const cur = this.s.stepsExport[kind];
+    if (cur && ["starting", "running"].includes(cur.state)) return;
+    const builtFrom = JSON.stringify({ steps: this.s.project.stepLabels, demo: { ...this.s.project.demo, hotspots: [] } });
+    const put = (run: StepsExportRun) => this.set({ stepsExport: { ...this.s.stepsExport, [kind]: run } });
+    put({ id: "", state: "starting", builtFrom });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/steps-export${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project, kind }) });
+    const j = await r.json();
+    if (!r.ok) {
+      put({ id: "", state: "error", error: j.error, builtFrom });
+      return;
+    }
+    const id = j.id as string;
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        const st = await (await fetch(`/api/steps-export/${id}${q}`)).json();
+        put({ id, state: st.state, error: st.error, seconds: st.seconds, builtFrom });
+        if (st.state === "running") {
+          setTimeout(poll, 300);
+          return;
+        }
+        if (st.state === "done") this.notify(kind === "demo" ? "Interactive demo ready" : "Step guide ready");
+        resolve();
+      };
+      setTimeout(poll, 200);
+    });
+  }
+
   closeExportWarning(review = false): void {
     this.set({ exportWarning: null, ...(review ? { leftPanel: "privacy" as const } : {}) });
   }
@@ -965,6 +1033,15 @@ export class EditorStore {
   notify(text: string): void {
     this.set({ toast: { text, id: (this.s.toast?.id ?? 0) + 1 } });
   }
+}
+
+export interface StepsExportRun {
+  id: string;
+  state: "starting" | "running" | "done" | "error";
+  error?: string;
+  seconds?: number;
+  /** Changes to the project since this build (tooltips / hotspots apply live; CTA / steps need a rebuild). */
+  builtFrom?: string;
 }
 
 export const store = new EditorStore();
