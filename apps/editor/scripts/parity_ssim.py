@@ -62,6 +62,8 @@ def main() -> int:
     # renderers and not x264 / swscale rounding (which shifts some channels by ~3-4 levels).
     render(a.plan, a.screen, "unused.mp4", a.camera, RenderOptions(max_frames=max(frames) + 1, audio=False, frame_sink=keep, asset_dir=a.assets))
     rows = []
+    plan = json.loads(Path(a.plan).read_text())
+    wm = plan.get("watermark")
     for i in frames:
         web = cv2.imread(str(Path(a.pngs) / f"frame-{i}.png"), cv2.IMREAD_COLOR)
         r = refs[i]
@@ -69,13 +71,25 @@ def main() -> int:
             raise SystemExit(f"frame {i}: browser PNG missing or wrong size")
         s = ssim(cv2.cvtColor(r, cv2.COLOR_BGR2GRAY), cv2.cvtColor(web, cv2.COLOR_BGR2GRAY))
         mad = float(np.abs(r.astype(np.int16) - web.astype(np.int16)).mean())
-        rows.append({"frame": i, "ssim": round(s, 5), "meanAbsDiff": round(mad, 3)})
+        row = {"frame": i, "ssim": round(s, 5), "meanAbsDiff": round(mad, 3)}
+        # brand watermark (demand #9): SSIM inside its rect (+4 px) on frames it is visible (no slide)
+        if wm and not plan["frames"][i].get("slide"):
+            H, W = r.shape[:2]
+            x0, y0 = max(0, wm["x"] - 4), max(0, wm["y"] - 4)
+            x1, y1 = min(W, wm["x"] + wm["w"] + 4), min(H, wm["y"] + wm["h"] + 4)
+            g1 = cv2.cvtColor(r[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            g2 = cv2.cvtColor(web[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            row["watermarkSsim"] = round(ssim(g1, g2), 5)
+        rows.append(row)
         if a.diff_dir:
             Path(a.diff_dir).mkdir(parents=True, exist_ok=True)
             diff = np.clip(np.abs(r.astype(np.int16) - web.astype(np.int16)) * 4, 0, 255).astype(np.uint8)
             cv2.imwrite(str(Path(a.diff_dir) / f"parity-{i:04d}.png"), np.vstack([np.hstack([r, web]), np.hstack([diff, np.zeros_like(diff)])]))
     vals = [r["ssim"] for r in rows]
     out = {"frames": rows, "mean": round(float(np.mean(vals)), 5), "min": round(float(np.min(vals)), 5)}
+    wv = [r["watermarkSsim"] for r in rows if "watermarkSsim" in r]
+    if wv:
+        out["watermark"] = {"frames": len(wv), "mean": round(float(np.mean(wv)), 5), "min": round(float(np.min(wv)), 5)}
     Path(a.out).write_text(json.dumps(out, indent=1))
     print(json.dumps(out))
     return 0

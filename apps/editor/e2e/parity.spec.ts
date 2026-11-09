@@ -36,7 +36,8 @@ async function parityRun(page: import("@playwright/test").Page, OUT: string, FRA
     "--pngs", OUT, "--frames", FRAMES.join(","), "--out", path.join(OUT, "ssim.json"), "--diff-dir", path.join(OUT, "diff"), "--assets", bundle.dir];
   if (plan.frames.some((f) => f.layout.camera) && bundle.camera) args.push("--camera", path.join(bundle.dir, "cam.mp4"));
   execFileSync("python3", args, { stdio: "inherit", timeout: 240_000 });
-  const res = JSON.parse(fs.readFileSync(path.join(OUT, "ssim.json"), "utf8")) as { frames: Array<{ frame: number; ssim: number }>; mean: number; min: number };
+  const res = JSON.parse(fs.readFileSync(path.join(OUT, "ssim.json"), "utf8")) as { frames: Array<{ frame: number; ssim: number; watermarkSsim?: number }>; mean: number; min: number;
+    watermark?: { frames: number; mean: number; min: number } };
   console.log(`parity SSIM ${dir ? path.basename(dir) : "sample"}: mean ${res.mean} min ${res.min} over ${res.frames.length} frames`);
   for (const r of res.frames) expect(r.ssim, `frame ${r.frame}`).toBeGreaterThanOrEqual(MIN_SSIM);
   expect(res.mean).toBeGreaterThanOrEqual(MEAN_SSIM);
@@ -70,4 +71,31 @@ test("annotations and text slides: browser preview matches compositor/render.py"
   expect([...spaces].sort()).toEqual(["frame", "screen"]);
   expect(ANN_FRAMES.some((i) => plan.frames[i]!.slide && plan.frames[i]!.slide!.opacity > 0 && plan.frames[i]!.slide!.opacity < 1)).toBe(true);
   expect(ANN_FRAMES.some((i) => plan.frames[i]!.annotations.some((a) => a.space === "screen") && plan.frames[i]!.cam[2] > 1.3)).toBe(true);
+});
+
+/**
+ * Brand kit (demand #9) at parity: the brand sample (apps/editor/sample-brand) has a logo watermark
+ * (PNG with soft alpha edges, 80% opacity), the Inter font on captions and the lower-third, brand
+ * primary on a box, a step badge and the caption highlight, the derived brand backdrop, and brand
+ * intro / outro cards with the logo. Same thresholds as above.
+ */
+const BRAND_FRAMES = [6, 30, 44, 60, 80, 105, 150, 190, 230, 270, 300, 330, 352, 370];
+
+test("brand kit (watermark, brand font, intro / outro cards): browser preview matches compositor/render.py", async ({ page }) => {
+  test.setTimeout(500_000);
+  const { plan, res } = await parityRun(page, path.join(EDITOR, "test-results", "parity-brand"), BRAND_FRAMES, path.join(EDITOR, "sample-brand"));
+  // the watermark on its own (its rect + 4 px, every frame without a slide): same thresholds
+  console.log(`parity SSIM watermark rect: mean ${res.watermark?.mean} min ${res.watermark?.min} over ${res.watermark?.frames} frames`);
+  expect(res.watermark?.frames).toBeGreaterThanOrEqual(8);
+  for (const r of res.frames) if (r.watermarkSsim !== undefined) expect(r.watermarkSsim, `watermark frame ${r.frame}`).toBeGreaterThanOrEqual(MIN_SSIM);
+  expect(res.watermark!.mean).toBeGreaterThanOrEqual(MEAN_SSIM);
+  // the chosen frames really cover the watermark, both cards (with their logo), the brand font and annotations
+  expect(plan.watermark).toBeTruthy();
+  expect(plan.fonts?.map((f) => f.family)).toEqual(["Inter"]);
+  const slides = new Set(BRAND_FRAMES.map((i) => plan.frames[i]!.slide?.id).filter(Boolean));
+  expect([...slides].sort()).toEqual(["brand-intro", "brand-outro"]);
+  expect(BRAND_FRAMES.some((i) => plan.frames[i]!.slide?.ops.some((o) => o.op === "image"))).toBe(true);
+  expect(BRAND_FRAMES.filter((i) => !plan.frames[i]!.slide).length).toBeGreaterThanOrEqual(8);
+  expect(BRAND_FRAMES.some((i) => plan.frames[i]!.caption && plan.frames[i]!.caption!.active >= 0)).toBe(true);
+  expect(BRAND_FRAMES.some((i) => plan.frames[i]!.annotations.some((a) => a.ops.some((o) => o.op === "text" && o.font === "Inter")))).toBe(true);
 });
