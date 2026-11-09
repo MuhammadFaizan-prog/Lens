@@ -214,7 +214,6 @@ export class Recording {
     // quality, progress to the recorder, and the audio / camera conversions run alongside the screen.
     const wallS = Math.max(0.1, (this.stopEpoch - info.videoStart) / 1000);
     const t0 = Date.now();
-    const encoder = await pickH264(ffmpeg);
     const screenArgs = (enc: string) => ["-v", "error", "-nostats", "-progress", "pipe:1", "-y", "-i", path.join(dir, "recording.webm"), "-map", "0:v:0", "-vf", "tpad=stop_mode=clone:stop_duration=600",
       "-fps_mode", "cfr", "-r", String(info.fps), "-t", wallS.toFixed(3), ...h264Args(enc, quality), "-movflags", "+faststart", path.join(dir, "screen.mp4")];
     let lastPct = -1;
@@ -225,15 +224,21 @@ export class Recording {
         onProgress?.(`Preparing… ${pct}%`);
       }
     };
-    let used = encoder;
-    const screen = run(ffmpeg, screenArgs(encoder), onTime).catch(async (e) => {
-      if (encoder === "libx264") throw e;
-      // a hardware encoder that passed the probe but failed on the real stream: once more in software
-      markBroken(ffmpeg, encoder);
-      this.warnings.push(`hardware encoder ${encoder} failed (${e instanceof Error ? e.message.slice(0, 200) : String(e)}); used libx264`);
-      used = "libx264";
-      await run(ffmpeg, screenArgs("libx264"), onTime);
-    });
+    let used = "libx264";
+    // the encoder probe (a test encode per hardware candidate, ~0.7 s each when it fails) is normally done
+    // already (main.ts warms it when recording starts); if not, the audio / camera jobs below are not held up by it
+    const screen = (async () => {
+      const encoder = await pickH264(ffmpeg);
+      used = encoder;
+      await run(ffmpeg, screenArgs(encoder), onTime).catch(async (e) => {
+        if (encoder === "libx264") throw e;
+        // a hardware encoder that passed the probe but failed on the real stream: once more in software
+        markBroken(ffmpeg, encoder);
+        this.warnings.push(`hardware encoder ${encoder} failed (${e instanceof Error ? e.message.slice(0, 200) : String(e)}); used libx264`);
+        used = "libx264";
+        await run(ffmpeg, screenArgs("libx264"), onTime);
+      });
+    })();
     const tracks: unknown[] = [];
     const nonEmpty = (f: string) => fs.existsSync(path.join(dir, f)) && fs.statSync(path.join(dir, f)).size > 0;
     // pinned to 48 kHz stereo, so every later step (preview, STT, export) reads one fixed format

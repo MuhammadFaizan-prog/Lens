@@ -13,6 +13,7 @@ import { initLog, logDir, logLine } from "./log";
 import { IMPORT_EXTENSIONS, ImportCancelled, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
+import { pickH264 } from "../../../editor/server/h264";
 import { defaultSettings, loadSettings, normalize, saveSettings, shortcutConflict, type Settings } from "./settings";
 
 const APP_ID = "io.github.muhammadfaizanprog.lens"; // = electron-builder appId (scripts/dist-win.mjs)
@@ -449,6 +450,8 @@ function registerIpc(): void {
     const displays = displayGeoms();
     const captured = info.kind === "screen" ? displayForSource(info.displayId, info.sourceId, displays) : null;
     rec.start({ ...info, quality: settings.record.quality, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
+    // the H.264 encoder probe (test encodes, cached per process) runs now, not after Stop
+    void pickH264(ffmpegPath()).catch(() => undefined);
     if (settings.record.hideWhileRecording) recorderWin?.hide();
     return { ok: true };
   });
