@@ -17,6 +17,7 @@ interface Source {
 
 interface Bridge {
   sources(): Promise<Source[]>;
+  captureSource(id: string): Promise<{ ok: boolean }>;
   status(): Promise<{ hotkey: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
   begin(): Promise<{ dir: string }>;
   started(info: unknown): Promise<unknown>;
@@ -144,6 +145,45 @@ function stoppedEvent(r: MediaRecorder): Promise<void> {
   return new Promise((resolve) => r.addEventListener("stop", () => resolve(), { once: true }));
 }
 
+let captureApi: "getDisplayMedia" | "getUserMedia" = "getDisplayMedia";
+
+/**
+ * The capture stream. getDisplayMedia (the main process hands it the chosen source, no picker) so the
+ * OS cursor can be left out (cursor: "never"; Windows #9). Electron builds without
+ * setDisplayMediaRequestHandler support fall back to the legacy desktop capture, which always
+ * includes the OS cursor.
+ */
+async function captureStream(src: Source, size: Source["size"], cursor: "never" | "always"): Promise<MediaStream> {
+  try {
+    await lens.captureSource(src.id);
+    const s = await navigator.mediaDevices.getDisplayMedia({
+      audio: false,
+      video: {
+        cursor,
+        frameRate: { ideal: FPS, max: FPS },
+        ...(size ? { width: { ideal: size.width, max: size.width }, height: { ideal: size.height, max: size.height } } : { width: { max: 3840 }, height: { max: 2160 } }),
+      } as unknown as MediaTrackConstraints,
+    });
+    captureApi = "getDisplayMedia";
+    return s;
+  } catch (e) {
+    console.warn("[lens] getDisplayMedia failed, legacy desktop capture (OS cursor included):", e);
+    captureApi = "getUserMedia";
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        // Chromium's desktop capture constraints (Electron)
+        mandatory: {
+          chromeMediaSource: "desktop",
+          chromeMediaSourceId: src.id,
+          maxFrameRate: FPS,
+          ...(size ? { maxWidth: size.width, maxHeight: size.height, minWidth: size.width, minHeight: size.height } : { maxWidth: 3840, maxHeight: 2160 }),
+        },
+      } as unknown as MediaTrackConstraints,
+    });
+  }
+}
+
 async function start(sourceId?: string): Promise<void> {
   if (state !== "idle") return;
   if (sourceId) selected = sources.find((s) => s.id === sourceId) ?? selected;
@@ -156,18 +196,10 @@ async function start(sourceId?: string): Promise<void> {
   $<HTMLButtonElement>("go").disabled = true;
   try {
     const size = src.size;
-    const video = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        // Chromium's desktop capture constraints (Electron)
-        mandatory: {
-          chromeMediaSource: "desktop",
-          chromeMediaSourceId: src.id,
-          maxFrameRate: FPS,
-          ...(size ? { maxWidth: size.width, maxHeight: size.height, minWidth: size.width, minHeight: size.height } : { maxWidth: 3840, maxHeight: 2160 }),
-        },
-      } as unknown as MediaTrackConstraints,
-    });
+    const cursorWanted: "never" | "always" = $<HTMLInputElement>("syscursor").checked ? "always" : "never";
+    const video = await captureStream(src, size, cursorWanted);
+    const vt = video.getVideoTracks()[0];
+    const cursorInfo = { requested: cursorWanted, reported: ((vt?.getSettings() as { cursor?: string } | undefined)?.cursor ?? null), api: captureApi };
     streams = [video];
     const v = $<HTMLVideoElement>("v");
     v.srcObject = video;
@@ -204,7 +236,7 @@ async function start(sourceId?: string): Promise<void> {
     ripples = [];
     await lens.started({
       sourceId: src.id, sourceName: src.name, kind: src.kind, displayId: src.displayId, capture, fps: FPS, videoMime: vMime, videoStart, clock,
-      mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null,
+      mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null, cursor: cursorInfo,
     });
     state = "recording";
     setStatus("Recording", true);

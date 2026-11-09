@@ -30,6 +30,19 @@ export interface StartInfo {
   /** The candidates the renderer measured for videoStart (diagnostics, recording.json). */
   clock?: Record<string, unknown>;
   mic: { mime: string; start: number } | null;
+  /**
+   * The OS cursor in the captured video (Windows #9): "never" = excluded (Lens draws its own),
+   * "always" = the user asked for the system cursor; capture = the API that took the frames and the
+   * cursor setting Chromium reported for the track.
+   */
+  cursor?: { requested: "never" | "always"; reported: string | null; api: "getDisplayMedia" | "getUserMedia" };
+}
+
+/** Is the OS cursor in the captured frames? Only a track that reports cursor "never" is clean. */
+export function cursorBaked(c: StartInfo["cursor"] | undefined): boolean {
+  if (!c) return true;
+  if (c.requested === "always") return true;
+  return c.api !== "getDisplayMedia" || c.reported !== "never";
 }
 
 export interface Hook {
@@ -197,10 +210,14 @@ export class Recording {
     }
     const pixelRatio = this.captured ? this.captured.scaleFactor * (info.capture.width / (this.captured.physical?.width ?? this.captured.bounds.width * this.captured.scaleFactor)) : 1;
     fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width: info.capture.width, height: info.capture.height, fps: info.fps, durationMs, pixelRatio: Math.round(pixelRatio * 1000) / 1000 }));
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks } }, null, 2));
+    // Windows #9: Chromium (Electron 38) does not implement getDisplayMedia's cursor: "never" yet, so the
+    // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
+    // and export never show two cursors; it turns on by itself once the capture really excludes it.
+    const baked = cursorBaked(info.cursor);
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
-      capture: info.capture, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
+      capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
       displays: this.displays, captured: this.captured, counts: this.log?.counts, clickSources: this.clickSources, warnings: this.warnings,
       // the editor transcribes the mic on-device the first time it opens this recording (Windows #5)
       autoTranscribe: tracks.length > 0,

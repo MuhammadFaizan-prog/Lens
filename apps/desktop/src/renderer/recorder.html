@@ -26,6 +26,7 @@
     </section>
     <footer>
       <label class="mic"><input type="checkbox" id="mic" /> Microphone</label>
+      <label class="mic" title="Off: Lens asks the capture to leave the OS cursor out and draws its own. Where the capture cannot leave it out (Chromium does not support that yet on Windows), the original cursor is kept and Lens's cursor starts off, so there are never two. On: always keep the system cursor."><input type="checkbox" id="syscursor" data-testid="syscursor" /> Show system cursor</label>
       <button id="go" class="rec" data-testid="go">Start recording</button>
       <p class="hint">Hotkey <kbd id="hotkey">Ctrl+Shift+R</kbd> starts and stops from anywhere. <span id="hookwarn"></span></p>
       <p class="hint"><span id="version"></span> · <a href="#" id="check-updates" data-testid="check-updates">Check for updates</a></p>

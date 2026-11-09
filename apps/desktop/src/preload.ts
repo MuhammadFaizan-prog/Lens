@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("lensDesktop", {
   sources: () => ipcRenderer.invoke("lens:sources"),
+  captureSource: (id: string) => ipcRenderer.invoke("lens:capture-source", id),
   status: () => ipcRenderer.invoke("lens:status"),
   begin: () => ipcRenderer.invoke("lens:begin"),
   started: (info: unknown) => ipcRenderer.invoke("lens:started", info),

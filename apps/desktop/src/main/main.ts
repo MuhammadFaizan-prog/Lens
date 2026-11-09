@@ -4,7 +4,7 @@
  * (recording.ts) and the bundled editor (editorServer.ts), opened on the new project after Stop.
  * See docs/Desktop.md.
  */
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, Menu, nativeImage, screen, Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, Menu, nativeImage, screen, session, Tray } from "electron";
 import path from "node:path";
 import { displayForSource } from "../shared/coords";
 import { startEditorServer, type EditorServer } from "./editorServer";
@@ -173,7 +173,34 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
   return win;
 }
 
+/**
+ * Screen capture goes through getDisplayMedia (Windows #9: the legacy getUserMedia desktop capture
+ * always bakes the OS cursor into the video, under Lens's own rendered cursor = two cursors).
+ * The recorder names the source first (lens:capture-source); this handler hands that source to
+ * Chromium without a picker, and the renderer asks for cursor: "never" (Windows Graphics Capture
+ * honours it) unless "Show system cursor" is ticked.
+ */
+let captureSourceId: string | null = null;
+function installDisplayMediaHandler(): void {
+  session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
+    const want = captureSourceId;
+    captureSourceId = null;
+    desktopCapturer
+      .getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false })
+      .then((all) => {
+        const s = all.find((x) => x.id === want);
+        if (s) callback({ video: s });
+        else callback({});
+      })
+      .catch(() => callback({}));
+  });
+}
+
 function registerIpc(): void {
+  ipcMain.handle("lens:capture-source", (_e, id: string) => {
+    captureSourceId = id;
+    return { ok: true };
+  });
   ipcMain.handle("lens:sources", async () => {
     const sources = await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 240, height: 135 }, fetchWindowIcons: false });
     const displays = displayGeoms();
@@ -233,6 +260,7 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   loadHook();
+  installDisplayMediaHandler();
   registerIpc();
   createRecorder();
   tray = new Tray(trayIcon());
