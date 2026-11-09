@@ -15,6 +15,8 @@ import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
 import { store, useEditor } from "./state/store";
 import { ABOUT_NOTICES } from "./about";
+import { Splitter } from "./components/Splitter";
+import { ui, useUi } from "./state/uiLayout";
 
 function TopBar() {
   const name = useEditor((s) => s.bundle?.name ?? "");
@@ -289,7 +291,13 @@ function useKeys() {
           if (sel.length) store.deleteWords(sel);
           break;
         }
+        case "f":
+        case "F":
+          e.preventDefault();
+          ui.toggleFullscreen();
+          break;
         case "Escape":
+          if (ui.get().fullscreen) ui.setFullscreen(false);
           store.select(null);
           store.selectWords([]);
           store.setTool("select");
@@ -332,23 +340,32 @@ function useKeys() {
 export function App() {
   const status = useEditor((s) => s.status);
   const error = useEditor((s) => s.error);
+  const L = useUi((s) => s);
   useKeys();
   useEffect(() => {
     void loadCaptionFont().then(() => store.load(new URLSearchParams(location.search).get("dir") ?? undefined));
   }, []);
   return (
-    <div className="app" data-status={status}>
+    <div
+      className={`app ${L.fullscreen ? "preview-fs" : ""} ${L.leftOpen ? "" : "left-closed"} ${L.rightOpen ? "" : "right-closed"}`}
+      data-status={status}
+      data-fullscreen={L.fullscreen ? "1" : "0"}
+      style={{ ["--left-w" as string]: `${L.leftOpen ? L.leftW : 0}px`, ["--right-w" as string]: `${L.rightOpen ? L.rightW : 0}px`, ["--tl-h" as string]: `${L.tlH}px` }}
+    >
       <TopBar />
       {status === "error" && <div className="banner error">Could not open the recording: {error}</div>}
       <main className="workspace">
-        <LeftPanel />
-        <section className="center">
+        {L.leftOpen ? <LeftPanel /> : <div className="panel-stub" />}
+        <Splitter kind="left" />
+        <section className="center" data-testid="stage">
           <AnnotationToolbar />
           <Preview />
           <Transport />
         </section>
-        <Inspector />
+        <Splitter kind="right" />
+        {L.rightOpen ? <Inspector /> : <div className="panel-stub" />}
       </main>
+      <Splitter kind="timeline" />
       <Timeline />
       <ExportSheet />
       <ExportDialog />

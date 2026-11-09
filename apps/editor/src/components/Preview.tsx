@@ -3,6 +3,7 @@ import type { RenderPlan } from "@lens/engine";
 import { PlanRenderer } from "../render/renderer";
 import { store, useEditor } from "../state/store";
 import { AnnotationOverlay } from "./AnnotationOverlay";
+import { useUi } from "../state/uiLayout";
 
 /** Draw frame i of plan into g with the right source images (awaits decoding when needed). */
 export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, i: number): Promise<boolean> {
@@ -37,7 +38,14 @@ export function Preview() {
     setArea({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
-  const k = area.w && area.h ? Math.min(area.w / w, area.h / h) : 0;
+  const zoom = useUi((s) => s.previewZoom);
+  const fs = useUi((s) => s.fullscreen);
+  // fit: largest size that fits the stage (keeps aspect); 100 %: one output px per device px
+  const k = zoom === "100" ? 1 / (window.devicePixelRatio || 1) : area.w && area.h ? Math.min(area.w / w, area.h / h) : 0;
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el) setArea({ w: el.clientWidth, h: el.clientHeight });
+  }, [fs, zoom]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -83,7 +91,7 @@ export function Preview() {
   }, []);
 
   return (
-    <div className="preview" ref={box}>
+    <div className={`preview ${zoom === "100" ? "zoom-100" : ""}`} ref={box} data-testid="preview-area">
       <div className="preview-stage" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }}>
         <canvas ref={ref} className="preview-canvas" data-testid="preview" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }} />
         {k > 0 && <AnnotationOverlay cssW={Math.floor(w * k)} cssH={Math.floor(h * k)} />}

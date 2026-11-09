@@ -1,3 +1,4 @@
+import { ui, useUi } from "../state/uiLayout";
 import { useEffect, useRef, useState } from "react";
 import { PlanRenderer } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
@@ -103,6 +104,8 @@ export function Transport() {
   const plan = useEditor((s) => s.plan);
   const fps = plan?.output.fps ?? 30;
   const n = plan?.frames.length ?? 1;
+  const fs = useUi((s) => s.fullscreen);
+  const zoom = useUi((s) => s.previewZoom);
   return (
     <div className="transport">
       <div className="transport-row">
@@ -130,7 +133,17 @@ export function Transport() {
         <button className={`chip-btn ${loop ? "on" : ""}`} aria-pressed={loop} data-testid="loop" title="Loop playback" onClick={() => store.setLoop(!loop)}>
           <Icon name="loop" /> Loop
         </button>
-        <div className="kbd-hint">J K L · ← → · Space</div>
+        <div className="kbd-hint">J K L · ← → · Space · F</div>
+        <div className="segmented preview-zoom" role="radiogroup" aria-label="Preview size">
+          {(["fit", "100"] as const).map((z) => (
+            <button key={z} role="radio" aria-checked={zoom === z} className={zoom === z ? "on" : ""} data-testid={`preview-zoom-${z}`} title={z === "fit" ? "Fit the preview to the stage" : "Actual pixels (100%)"} onClick={() => ui.setPreviewZoom(z)}>
+              {z === "fit" ? "Fit" : "100%"}
+            </button>
+          ))}
+        </div>
+        <button className={`icon-btn fs-btn ${fs ? "on" : ""}`} aria-pressed={fs} aria-label={fs ? "Exit fullscreen" : "Fullscreen"} title={fs ? "Exit fullscreen (F / Esc)" : "Fullscreen preview (F)"} data-testid="fullscreen" onClick={() => ui.toggleFullscreen()}>
+          {fs ? "⤡" : "⤢"}
+        </button>
       </div>
       <Scrubber />
     </div>
