@@ -601,6 +601,7 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 @media (max-width: 1360px) { .top-actions .btn-label { display: none; } .top-actions .btn { padding: 0 9px; } }
 .preview-zoom { width: auto; }
 .preview-zoom button { padding: 3px 8px; font-size: 11.5px; flex: none; }
+.block-volume { background: var(--audio); top: 3px; height: 18px; opacity: 0.9; }
 /* on-canvas overlays (Windows bugs #12 / #14) */
 .canvas-overlay { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .canvas-overlay .co-outline { fill: none; stroke: rgba(255, 255, 255, 0.35); stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; stroke-width: 1; }
@@ -618,3 +619,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 /* shrinking the window must shrink the timeline: flex / grid items default to min-width: auto, which
    kept the lanes at their old content width (the page stayed 1440 px wide after a resize to 1280) */
 .app > *, .timeline, .timeline-body, .tl-scroll, .topbar, .top-actions { min-width: 0; }
+/* Windows bug #13: the Annotations label (toggle + name + row count) was wider than the label column,
+   so its "+" sat over the lanes and the lane took the click: "+" did nothing. The name now truncates and
+   every "+" stays inside the column, which sits above the lanes. */
+.tl-labels { position: relative; z-index: 3; overflow: hidden; }
+.tl-label { overflow: hidden; }
+.tl-label .lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.tl-label .mini-add, .tl-label .lane-toggle, .tl-label .dot, .tl-label .lane-count { flex: none; }
+.tl-label .lane-count + .mini-add { margin-left: 4px; }

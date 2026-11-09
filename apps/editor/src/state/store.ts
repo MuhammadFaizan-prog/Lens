@@ -268,7 +268,15 @@ export class EditorStore {
     this.flushGesture();
     const next = fn(this.history.doc);
     this.history.commit(next, label);
-    this.rebuild(this.history.doc);
+    try {
+      this.rebuild(this.history.doc);
+    } catch (e) {
+      // never leave an edit half-applied and silent: roll it back and say why
+      this.history.undo();
+      this.rebuild(this.history.doc);
+      this.notify(`${label} failed: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(e);
+    }
   }
 
   /** Live edit during a drag: the preview updates, history records one step at endGesture. */

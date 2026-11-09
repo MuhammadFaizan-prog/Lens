@@ -91,6 +91,11 @@ function SelectionCard() {
         )}
       </>
     );
+  } else if (sel.track === "volume") {
+    const o = project.overrides.filter((x) => x.volume !== undefined)[sel.index];
+    if (!o) return null;
+    range = o;
+    body = <Slider label="Volume" value={o.volume ?? 1} min={0} max={2} step={0.05} format={pct} testId="sel-volume" onChange={(v) => tweak("Segment volume", { volume: v })} />;
   } else {
     const c = project.edits.cuts[sel.index];
     if (!c) return null;
@@ -100,7 +105,7 @@ function SelectionCard() {
     <div className="selection-card" data-testid="selection-card">
       <div className="sel-head">
         <span className={`dot dot-${sel.track}`} />
-        <b>{sel.track === "cut" ? "Cut" : sel.track === "zoom" ? "Zoom block" : sel.track === "speed" ? "Speed range" : "Mask"}</b>
+        <b>{({ cut: "Cut", zoom: "Zoom block", speed: "Speed range", mask: "Mask", caption: "Caption", volume: "Volume segment" } as Record<string, string>)[sel.track] ?? sel.track}</b>
         {range && (
           <span className="sel-time">
             {timecode(range.startMs, fps)} – {timecode(range.endMs, fps)}
