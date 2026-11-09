@@ -283,6 +283,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | AI-05, AI-06 | SRT import and export | `transcript.ts` parseSrt / toSrt |
 | TXT-01 (basic) | Shortcut overlays for modifier combos with Mac glyphs, repeat merging, 1200 ms display | `events.ts` shortcutOverlays, `render.py` |
 | AI-13 (text), (demand #3) | Automatic privacy redaction: on-device OCR + classifiers (emails, phones, Luhn cards, API keys, JWTs, tokens, IPs) and corner notification banners, tracked frame by frame (scroll, moving cards, partial cover), review list (accept / dismiss, blur / pixelate), accepted items as tracked masks that follow zooms; export warns while items are pending. Screen Studio's version is unique to it; FocuSee has manual masks only | `redact/lens_redact`, `privacy.ts`, `masks.ts` keyedRect, editor PrivacyPanel, `docs/Privacy.md` |
+| TXT-02, TXT-03, TXT-06 (callout), (demand #4) | Annotations: text (title, lower-third, label), arrows (straight / curved, triangle / open / dot heads and tails), box and ellipse highlights, numbered step badges, callout bubbles with a pointer; colour, fill, stroke, font size, bold, radius, shadow, opacity; in / out animations (fade, spring pop, draw-on, typewriter); anchored to the screen (follow zoom / pan) or to the frame; full-frame text slides inserted between segments with their own duration (audio shifts with them); auto step labels from clicks + local OCR ("Click Save", "Open Settings") reviewed before they become numbered badges. Editor: draw / move / resize on the preview, inline text editing, Annotations lane, style inspector, Steps panel. FocuSee has text / shapes / callouts; neither product drafts step labels | `annotations.ts`, `timeline.ts` insertSlides, `annotations.py`, editor `render/annotations.ts` + AnnotationOverlay / StepsPanel, `lens_redact/steps.py`, `docs/Annotations.md` |
 | (demand #1) | Multi-take with automatic best take: retakes found in the transcript, keep last / best take, rejected takes as reversible cuts (video, audio, captions follow), per-group swap, mark retake; editor Alt takes lane with A/B preview and undo. Neither product has it (Screen Studio: planned) | `takes.ts` resolveTakes, `plan.ts`, editor Timeline / TranscriptPanel, `docs/Takes.md` |
 | EXP-01, EXP-02, EXP-03 (basic) | H.264 MP4 via ffmpeg, CRF 18, fps 24/30/60 | `render.py`, `project.ts` |
 
@@ -327,7 +328,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | ZM-11 | 3D Motion | P2 | Unique to FocuSee |
 | ZM-12 | AI upscaling of zoomed text | P3 | Unique to Screen Studio |
 | AI-14 | Auto-hide faces | P2 | Sensitive text (AI-13) is implemented (demand #3, `docs/Privacy.md`); faces are not |
-| TXT-02/03/06/07 | Text, shapes, magnifier/callout, watermark | P2 | FocuSee only |
+| TXT-06 (magnifier), TXT-07 | Magnifier, watermark | P2 | FocuSee only. Text, shapes and callouts are implemented (demand #4, `docs/Annotations.md`) |
 | EXP-05 | ProRes export | P3 | |
 | EXP-09/11/12 | Batch export, estimates, quick-share widget | P3 | |
 | REC-06 | Android capture | P3 | |
@@ -336,6 +337,7 @@ Note: `docs/Tracker.md` says native capture, the Tauri editor UI and the GPU ren
 | AI-10/12 | AI voiceover, AI avatars | P3 | |
 | COL-03/04/05 | Comments, view counts, project sharing | P3 | |
 | EDT-09/11/12/13/15 | Shuttle, copy props, ⌘K, copy frame, preview modes | P3 | Editor UI not started |
+| (demand #20) | Freeze frame, still images | P3 | Full-frame text slides are built (demand #4); freeze frame and stills are not |
 
 ---
 

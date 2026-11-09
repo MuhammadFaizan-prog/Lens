@@ -155,6 +155,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Build size:** M. It is a compositor layer, an anchor transform and a label generator.
 
+**Status (2026-11-09): built, first version.** Text (title, lower-third, label), arrows (straight or curved, head styles), box / ellipse highlights, numbered step badges and callout bubbles with in / out animations (fade, spring pop, draw-on, typewriter), anchored to the screen (they follow zoom and pan) or to the frame; full-frame text slides between segments with their own duration; all non-destructive project data. Auto step labels: clicks + on-device OCR around each click draft "Click Save" / "Open Settings", reviewed and edited before they become badges numbered 1, 2, 3 (see `docs/Annotations.md`). Measured: step labels 16/16 exact on a held-out synthetic session (14/14 on the dev one), numbering 100% in click order; preview ↔ export SSIM mean 0.990 / min 0.983 on annotation frames; screen-anchored box within 1.7 px of its target through a 2× zoom; text read back by OCR from the export 14/14 words. Not done: the 5-user task test, the 100-click / 5-real-app label test, accessibility-tree labels (needs native capture), magnifier and watermark.
+
 **How to test:** Task test: 5 users add 6 callouts to a 2-minute demo; measure time against Camtasia or Keynote. Check auto-label accuracy on 100 clicks across 5 web apps (target ≥80% usable unedited).
 
 ---

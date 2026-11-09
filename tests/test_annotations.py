@@ -141,6 +141,7 @@ def test_arrow_draw_on_matches_plan_within_one_frame(export):
         return x0 + (x1 - x0) * a["anim"]["draw"]
 
     checked = 0
+    worst = 0.0
     for i in idx:
         # coverage of the arrow colour per pixel: projection of (pixel - background) onto
         # (arrow colour - background), so the thin anti-aliased point of the head still counts
@@ -159,6 +160,8 @@ def test_arrow_draw_on_matches_plan_within_one_frame(export):
         hi = max(plan_tip(i - 1), plan_tip(i), plan_tip(i + 1)) + 2
         assert lo <= tip <= hi, f"frame {i}: tip at {tip:.1f}, plan {plan_tip(i):.1f} (±1 frame: {lo:.1f}..{hi:.1f})"
         checked += 1
+        worst = max(worst, abs(tip - plan_tip(i)))
+    print(f"arrow draw-on: {checked} frames inside ±1 frame, largest |tip - plan tip| {worst:.2f} px")
     assert checked >= 20
 
 

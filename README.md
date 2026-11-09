@@ -23,7 +23,8 @@ See `docs/Rules.md`.
   CPU, word timings aligned to measured pauses, filler and pause detection. See `docs/STT.md`.
 - `redact/` on-device privacy scan (`lens-redact`): Tesseract OCR on sampled frames, classifiers for
   emails, phones, cards, API keys, JWTs, tokens, IPs and notification banners, frame-by-frame box
-  tracking into timed masks. See `docs/Privacy.md`.
+  tracking into timed masks. See `docs/Privacy.md`. `lens-redact steps` drafts step labels from
+  clicks + OCR (`docs/Annotations.md`).
 - `research/harness/` measurement harness: recovers padding, corner radius, shadow, zoom spring
   curves, lead/hold, cursor smoothing, loudness from any export; blind A/B pair builder.
 - `research/bars/` reference exports from the products we match (not committed if licensed).
@@ -60,6 +61,11 @@ python3 research/harness/demo_p1.py      # out/demo-p1.mp4 + contact sheet, ever
 transcribe/lens-transcribe mic.wav -o transcript.json [--offset-ms 400]
 python3 compositor/pipeline.py --meta meta.json --events events.jsonl --project project.json \
   --screen screen.mp4 --out final.mp4   # transcribes when captions / edits.cleanup need words
+
+# step labels: draft "Click Save"-style labels from the clicks, accept them all as numbered badges
+redact/lens-redact steps screen.mp4 --events events.jsonl -o steps.json
+node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
+  --step-labels steps.json --accept-steps --out plan.json
 
 # privacy: find sensitive text, then hide everything found (or review it in the editor's Privacy panel)
 redact/lens-redact screen.mp4 --events events.jsonl -o privacy.json --thumbs thumbs/
@@ -105,5 +111,9 @@ takes lane to swap or A/B-preview takes (`edits.takes`, see `docs/Takes.md`).
 Privacy redaction: an on-device scan finds emails, phone and card numbers, API keys, tokens, JWTs,
 IPs and notification banners, follows them through scrolls and zooms, and offers them for review in
 the editor's Privacy panel; accepted ones become tracked blur masks (`privacy`, see `docs/Privacy.md`).
+Annotations: text, arrows, box / ellipse highlights, numbered step badges and callouts with fade /
+pop / draw-on / typewriter animations, anchored to the screen (they follow zooms) or the frame, plus
+full-frame text slides; auto step labels drafted from clicks + local OCR and reviewed in the editor's
+Steps panel (`annotations`, `slides`, `stepLabels`, see `docs/Annotations.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

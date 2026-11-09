@@ -24,7 +24,7 @@ symlinked to `~/.cache/ms-playwright/ffmpeg-<rev>/ffmpeg-linux` works.
 
 ### Running the e2e on a small machine
 
-The suite is 19 tests (parity 1, editor 14, demo 1, takes 2, privacy 1) and runs with `workers: 1`, `fullyParallel:
+The suite is 22 tests (parity 2, editor 14, demo 1, takes 2, privacy 1, annotations 2) and runs with `workers: 1`, `fullyParallel:
 false`, one reused server (`reuseExistingServer`). On the 2-core sandbox with ~1 GB free, a default
 headless Chromium (~900 MB over 8 processes) plus the export's compositor (~430 MB: Python 180, x264
 110, two decoders) got the Playwright worker OOM-killed, so by default (`LENS_E2E_LOWMEM=0` turns it
@@ -44,6 +44,8 @@ npx playwright test e2e/demo.spec.ts
 npx playwright test e2e/takes.spec.ts -g "swap take"     # multi-take, on apps/editor/sample-takes
 npx playwright test e2e/takes.spec.ts -g "mark retake"
 npx playwright test e2e/privacy.spec.ts                 # privacy scan + review, on apps/editor/sample-privacy
+npx playwright test e2e/parity.spec.ts -g annotations   # annotations parity, on apps/editor/sample-annotations
+npx playwright test e2e/annotations.spec.ts             # draw / edit / scrub / step labels / undo
 ```
 
 Don't run pytest at the same time.
@@ -80,6 +82,16 @@ screen.mp4 in `.lens-cache/privacy/`), lists the finds by type with thumbnails, 
 dismisses them (one or all; blur or pixelate). Accepted finds are tracked masks (hatched blocks in
 the Masks lane). Export asks first while finds are pending. Sample: `apps/editor/sample-privacy`.
 Source frames are now fetched from the bundle opened with `?dir=` (before, always the default one).
+
+Annotations (`docs/Annotations.md`): a tool bar over the preview (Select, Arrow, Box, Ellipse, Text,
+Callout, Step badge; On screen / On frame; + Text slide), an SVG overlay for drawing, handles and
+inline text editing (`AnnotationOverlay.tsx`), an **Annotations** lane with slide markers, a style
+inspector (`AnnotationInspector.tsx`) and a **Steps** tab in the left column (`StepsPanel.tsx`,
+`POST /api/steps` → `lens-redact steps`). The renderer draws the plan's annotation ops
+(`render/annotations.ts`, a port of `compositor/lens_compositor/annotations.py`): screen-anchored
+items inside the screen before the cursor, frame-anchored ones after the webcam, slides last. A
+regular-weight DejaVu Sans is served next to the bold one (`/api/font/caption-regular.ttf`).
+Sample: `apps/editor/sample-annotations` (`make_sample.py --annotations`).
 
 Deleting transcript words adds cuts (`cutsForDeletedWords`) and, since this change, words inside
 any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every filler not already
@@ -121,5 +133,9 @@ Intentional or accepted differences:
 10. **Audio preview** plays the raw mic track: no denoise or loudness normalisation (export only),
     no click sounds, and speed ranges change pitch (WebAudio playbackRate) where the export uses
     pitch-preserving atempo.
-11. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
+11. **Annotation text** is laid out the same way in both (no kerning: PIL `Layout.BASIC` and canvas
+    `fontKerning = "none"`), but rasterised by different engines; vector ops are 4× supersampled in
+    the compositor and coverage-anti-aliased by the canvas. Measured on the annotations sample:
+    SSIM mean 0.990, min 0.983 (bounds unchanged).
+12. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
     to the first colour).

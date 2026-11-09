@@ -30,6 +30,7 @@
 | Captions follow transcript cuts: words inside any cut are left out of captions | done | vitest (`zoombudget.test.ts` "captions follow transcript cuts"); `p1.test.ts` caption-highlight case rewritten, see below |
 | Multi-take with automatic best take (demand #1): retakes found in the transcript (fuzzy prefix alignment of word sequences + restart cues: phrases, long pause, filler, stutter, low confidence), groups of 2+ takes, keep last or best (completeness, fillers, pauses, confidence), rejected takes as reversible plan cuts that video, audio and captions follow; per-group choice, mark retake, not-a-retake; `edits.takes`; editor Alt takes lane, struck-through alt-take words, one-click swap, A/B preview, all undoable. See `docs/Takes.md` | done | vitest `takes.test.ts` (17): HELD_OUT word precision 0.957 / recall 1.000, group precision 0.933 / recall 1.000 (bounds 0.95 / 0.90 / 0.90 / 0.90), DEV 1.0 on all four, 0 groups on ~180 words of normal narration. pytest `test_takes.py`: espeak fumbles -> lens-transcribe -> render -> re-transcribe: WER 9.5% (2/21, bound 10%), fumble-only word gone, frames = plan, video 10466.7 / audio 10474.7 ms vs plan 10467.0 (bound 1 frame), sync median 20 ms / p90 41 ms (bounds 60 / 150), captions on 20/20 matched words. Playwright `takes.spec.ts` (2): swap changes kept take, transcript, plan and drawn pixels; A/B preview adds no undo step and ends by itself; undo restores take, frames, source time and pixels; mark retake + toggle undo |
 | Automatic privacy redaction (demand #3): on-device OCR (Tesseract) on sampled frames + scene changes, classifiers (email, phone, Luhn + IIN cards, API-key prefixes, JWT, high-entropy tokens, IPv4), notification banners in corners; frame-by-frame NCC tracking with backward fill, scroll prediction, piece matching and coasting; tracks merged / bridged into review items; `privacy.detections` (pending / accepted / dismissed), accepted items as tracked masks (`keys`, `privacyId`); `lens-redact` CLI, `lens-plan --privacy-scan --accept-privacy`; editor Privacy panel (scan, grouped list with thumbnails, accept / dismiss one or all, blur / pixelate, undo), Masks lane, export warning. See `docs/Privacy.md` | done (first version) | pytest `test_privacy.py`: fresh (unseen) session instance recall 1.000 (13/13), frame recall 0.991, 0 false positives (bounds ≥ 0.95 / ≥ 0.95 / ≤ 1 per min); dev 1.000 / 1.000 / 0; heldout first run frame recall 0.942 (failed, two bugs fixed, then 1.000); export with all accepted, 1.6x zoom: 6041 secret regions OCR'd, 0 leaked frames, control read 431/447 (0.96, bound 0.70); scan 32-46 s per minute of 720p30 video. Engine vitest `privacy.test.ts` (9), editor vitest (2), Playwright `privacy.spec.ts` (1) |
+| Annotations (demand #4): text (title / lower-third / label), arrows (straight / curved, head + tail styles), box / ellipse highlights, numbered step badges, callouts with pointer; fade / spring pop / draw-on / typewriter in and out; screen anchor (follows zoom + pan) or frame anchor; full-frame text slides inserted into the edit timeline with their own duration; auto step labels from clicks + local OCR (`lens-redact steps`), reviewed before they become badges; engine emits drawing ops, compositor and preview draw them; editor tool bar, on-preview drawing / handles / inline text, Annotations lane, style inspector, Steps panel, undo. See `docs/Annotations.md` | done (first version) | vitest `annotations.test.ts` 14 + editor `annotationOps.test.ts` 3; pytest `test_annotations.py` 6: arrow draw-on inside ±1 frame of the plan, export text OCR 14/14 words, screen-anchored box worst edge error 1.68 px over 135 zoomed frames (bound 2), slide exactly 45 frames + beeps after it within a frame + silent slide, step labels dev 14/14 and **held-out 16/16 exact** (bound 0.90), numbering 100% in click order; Playwright annotations parity SSIM mean 0.99043 / min 0.98289 (bounds 0.97 / 0.95), `annotations.spec.ts` 2/2 |
 | Tauri app shell | not started | |
 | GPU renderer (wgpu) | not started | |
 
@@ -174,3 +175,35 @@ rendering); text revealed or typed while visible is only re-found at the next OC
 user-supplied words (customer names); no hand-drawn tracked box; notification detection needs a
 bordered corner banner; English OCR only; no funnel metric for the review step; long recordings and
 scan speed on other machines not measured; overlapping hidden items share one Masks lane.
+
+Annotations (demand #4), 2026-11-09. Bounds were written into `tests/test_annotations.py`,
+`packages/engine/test/annotations.test.ts`, `apps/editor/e2e/parity.spec.ts` (the existing parity
+bounds, unchanged) and `apps/editor/e2e/annotations.spec.ts` before the first measurement; none
+was changed.
+1. Measurement-method changes after first runs (bounds unchanged): (a) arrow draw-on, first run
+   failed at frame 33 (tip read 856.0 px vs 856.2..860.4 allowed): the RGB-box colour test missed
+   the thin anti-aliased point of the head; the tip is now found by projecting each pixel onto
+   (arrow colour - background), coverage > 0.25 with a colour residual < 40, inside the arrow's
+   own stretch of the screen (a second run without that restriction matched the darker backdrop
+   outside the screen). (b) Screen-anchored box: the red-stroke mask also caught red-ish
+   anti-aliased edges of the orange badge / lower-third bar elsewhere on the frame; the search is
+   now limited to the plan's position of the box ± 30 px, and the target's dark pixels to inside the
+   drawn box (text backings are dark too). (c) Text OCR: whole-frame Tesseract (`--psm 11`) skipped
+   the label and badge pills (0/3 words for the label); each item's region is now OCR'd on its own
+   (laid out exactly as the compositor lays it out, polarity-normalised, 2x, `--psm 6`), the way the
+   privacy leak check OCRs each secret's region. After the changes: arrow pass, box worst 1.68 px,
+   text 14/14 words.
+2. Step labels: on the dev session the first version read none of the four white-on-blue buttons
+   (10/14); a second OCR pass on a polarity-free contrast map (distance from a 21 px median
+   background) replaced the inverted-image pass, then 14/14. The held-out session (dark theme,
+   Liberation Sans, other words and layout) was generated and measured once after that, nothing
+   changed after: 16/16. Caveat: the navigation word list was written before the held-out session
+   but by the same person who wrote it; one held-out menu item ("Insert", not in the list) was
+   labelled "Open" by the top-menu-row rule.
+3. Editor e2e, first run of the step-label test failed on its own assumption: it expected the six
+   step badges to be numbered consecutively, but the sample's own auto-numbered badge sits between
+   steps 2 and 3 in time, so numbering is shared (1..7 by start time, which is the intended
+   behaviour). The test now asserts every auto badge is numbered 1..7 by start time and the step
+   numbers rise with click time. Found at the same time: the Steps panel numbered accepted steps
+   1..6 on their own, which did not match the drawn badges; it now shows the drawn number.
+4. Audio: joins where the output has a gap (a text slide) now get the same 3 ms fades as cuts.
