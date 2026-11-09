@@ -8,6 +8,7 @@ import { layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } fr
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, mergeRanges, outputDuration, outputToSource } from "./timeline.js";
+import { resolveTakes, type TakeGroup } from "./takes.js";
 import { captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
 
@@ -48,6 +49,10 @@ export interface RenderPlan {
   cuts: TimeRange[];
   /** The part of cuts that came from transcript cleanup (fillers, long pauses). */
   cleanupCuts: TimeRange[];
+  /** Retake groups (edits.takes): every take, which one is kept, and why the group was found. */
+  takes: TakeGroup[];
+  /** The part of cuts that removes rejected takes. */
+  takeCuts: TimeRange[];
   zoomSegments: ZoomSegment[];
   frames: PlanFrame[];
 }
@@ -119,7 +124,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
   const autoCuts = cl.enabled && words.length
     ? cleanupCuts(words, meta.durationMs, cl, { removeFillers: cl.removeFillers, shortenPauses: cl.shortenPauses, pauses })
     : [];
-  const allCuts = mergeRanges([...project.edits.cuts, ...autoCuts]);
+  // Multi-take (demand #1): rejected takes become cuts, so audio, captions and video all follow.
+  const takes = resolveTakes(words, project.edits.takes, cl.fillers, meta.durationMs);
+  const allCuts = mergeRanges([...project.edits.cuts, ...autoCuts, ...takes.cuts]);
   const timeline = buildTimeline(meta.durationMs, allCuts, speed);
   const blend = project.camera.zoomedSize !== 1 ? zoomBlendTrack(camera, zoomSegments, project.zoom.spring) : [];
   const durationMs = outputDuration(timeline);
@@ -204,6 +211,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project, wo
     audio: buildAudioPlan(project, timeline, durationMs, clicks(rawEvents).map((c) => c.t)),
     cuts: allCuts.map((c) => ({ startMs: r2(Math.max(0, c.startMs)), endMs: r2(Math.min(meta.durationMs, c.endMs)) })),
     cleanupCuts: autoCuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
+    takes: takes.groups,
+    takeCuts: takes.cuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     zoomSegments,
     frames: planFrames,
   };

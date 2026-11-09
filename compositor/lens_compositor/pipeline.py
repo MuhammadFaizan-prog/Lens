@@ -1,6 +1,6 @@
 """End-to-end render pipeline: (optional) on-device transcription -> lens-plan -> compositor.
 
-When the project wants words (captions on, or transcript cleanup on) and none were supplied, an
+When the project wants words (captions, transcript cleanup or multi-take on) and none were supplied, an
 audio track is transcribed locally with lens-transcribe (faster-whisper) and its transcript is
 handed to the engine, so captions and filler/pause removal come straight from the recording's
 audio. project.transcription controls it:
@@ -35,7 +35,8 @@ def _get(d: dict, *keys, default=None):
 
 
 def needs_words(project: dict) -> bool:
-    return bool(_get(project, "captions", "enabled", default=False) or _get(project, "edits", "cleanup", "enabled", default=False))
+    return bool(_get(project, "captions", "enabled", default=False) or _get(project, "edits", "cleanup", "enabled", default=False)
+                or _get(project, "edits", "takes", "enabled", default=False))
 
 
 def pick_track(project: dict) -> Optional[dict]:

@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 import { springFromSettle } from "./spring.js";
 import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
+import { DEFAULT_TAKES, type TakeSettings } from "./takes.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -123,6 +124,12 @@ export interface ProjectConfig {
       keepPauseMs: number;
       padMs: number;
     };
+    /**
+     * Multi-take (demand #1): find retakes in the transcript, keep one take per group (the last, or
+     * the best by completeness / fillers / pauses / confidence), cut the others. choices pick a
+     * take per group, marked adds user-marked retakes, ignored dismisses detected groups.
+     */
+    takes: TakeSettings;
   };
   captions: {
     enabled: boolean;
@@ -275,6 +282,7 @@ export function defaultProject(): ProjectConfig {
         keepPauseMs: DEFAULT_CLEANUP.keepPauseMs,
         padMs: DEFAULT_CLEANUP.padMs,
       },
+      takes: { ...DEFAULT_TAKES, choices: [], marked: [], ignored: [] },
     },
     captions: {
       enabled: false,
@@ -366,6 +374,14 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (cl.maxPauseMs <= 0 || cl.keepPauseMs < 0 || cl.keepPauseMs >= cl.maxPauseMs) errs.push("edits.cleanup needs 0 <= keepPauseMs < maxPauseMs");
   if (cl.padMs < 0) errs.push("edits.cleanup.padMs must be >= 0");
   if (!Array.isArray(cl.fillers)) errs.push("edits.cleanup.fillers must be a list of words");
+  const tk = p.edits.takes;
+  if (!["last", "best"].includes(tk.strategy)) errs.push(`edits.takes.strategy must be last or best, got ${String(tk.strategy)}`);
+  if (!(tk.padMs >= 0)) errs.push("edits.takes.padMs must be >= 0");
+  if (!Array.isArray(tk.choices) || tk.choices.some((c) => !Number.isFinite(c?.atMs) || !Number.isInteger(c?.keep) || c.keep < 0))
+    errs.push("edits.takes.choices must be [{atMs, keep >= 0}]");
+  if (!Array.isArray(tk.marked) || tk.marked.some((r) => !Number.isFinite(r?.startMs) || !(r.endMs > r.startMs)))
+    errs.push("edits.takes.marked must be ranges with endMs > startMs");
+  if (!Array.isArray(tk.ignored) || tk.ignored.some((t) => !Number.isFinite(t))) errs.push("edits.takes.ignored must be a list of times");
   if (!["auto", "off"].includes(p.transcription.mode)) errs.push("transcription.mode must be auto or off");
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
