@@ -93,6 +93,15 @@ items inside the screen before the cursor, frame-anchored ones after the webcam,
 regular-weight DejaVu Sans is served next to the bold one (`/api/font/caption-regular.ttf`).
 Sample: `apps/editor/sample-annotations` (`make_sample.py --annotations`).
 
+Caption translation (`docs/Translation.md`): the Captions tab has a **Languages** section: caption
+language switcher, **Translate to…** with progress (`POST /api/translate` → `translate/lens-translate`
+on the bundle's transcript, polled at `GET /api/translate/:id`), the selected track's segments side by
+side with their source (edit, Enter / blur commits one undo step), .srt / .vtt download for the selected
+language (`store.subtitleFile`, output clock). The renderer draws right-to-left captions in the plan's
+visual order, Arabic-script words in Noto Naskh Arabic with `direction = rtl`. The **About** button
+(top bar) lists third-party notices, including the CC-BY-4.0 model attribution. Sample:
+`apps/editor/sample-translate` (`make_sample.py --translate`, Spanish + Urdu, Urdu selected).
+
 Deleting transcript words adds cuts (`cutsForDeletedWords`) and, since this change, words inside
 any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every filler not already
 cut, as one undo step. Zoom intensity presets and the zoom budget are engine features

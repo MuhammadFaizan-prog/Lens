@@ -21,6 +21,8 @@ See `docs/Rules.md`.
   runs transcription → plan → render in one go.
 - `transcribe/` on-device speech-to-text (`lens-transcribe`): faster-whisper base.en (MIT) on the
   CPU, word timings aligned to measured pauses, filler and pause detection. See `docs/STT.md`.
+- `translate/` on-device caption translation (`lens-translate`): local CTranslate2 models (Argos
+  Translate / OPUS-MT) per caption segment into caption tracks, SRT and VTT. See `docs/Translation.md`.
 - `redact/` on-device privacy scan (`lens-redact`): Tesseract OCR on sampled frames, classifiers for
   emails, phones, cards, API keys, JWTs, tokens, IPs and notification banners, frame-by-frame box
   tracking into timed masks. See `docs/Privacy.md`. `lens-redact steps` drafts step labels from
@@ -33,8 +35,8 @@ See `docs/Rules.md`.
 ## Run
 ```bash
 npm install && npm run build && npm test        # engine + editor: typecheck, build, vitest
-pip install opencv-python-headless numpy scipy pillow pytest faster-whisper
-sudo apt install espeak-ng tesseract-ocr        # test-only: synthetic speech + caption OCR
+pip install opencv-python-headless numpy scipy pillow pytest faster-whisper ctranslate2 sentencepiece
+sudo apt install espeak-ng tesseract-ocr tesseract-ocr-spa   # test-only: synthetic speech + caption OCR
 python3 -m pytest                               # harness + compositor + STT + end-to-end
 ```
 
@@ -66,6 +68,11 @@ python3 compositor/pipeline.py --meta meta.json --events events.jsonl --project 
 redact/lens-redact steps screen.mp4 --events events.jsonl -o steps.json
 node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
   --step-labels steps.json --accept-steps --out plan.json
+
+# translation: caption tracks per language (+ SRT / VTT), then burn one in
+translate/lens-translate transcript.json --to es,fr,de,ur -o out/ --project project.json --select es
+node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
+  --words transcript.json --captions-language es --srt es.srt --vtt es.vtt --out plan.json
 
 # presets: apply a .lenspreset (all sections or some) before planning
 node packages/engine/dist/cli.js --meta meta.json --events events.jsonl --project project.json \
@@ -122,5 +129,9 @@ Steps panel (`annotations`, `slides`, `stepLabels`, see `docs/Annotations.md`).
 Presets and brand kit: `.lenspreset` files for the whole look (five built-ins, partial apply, live
 thumbnails, default for new projects, import / export) and a brand kit (colours, fonts, logo
 watermark, intro / outro cards) that themed elements inherit (`theme`, `brand`, see `docs/Presets.md`).
+Caption translation: captions translated on-device into Spanish, French, German, Urdu or Arabic,
+one track per language, re-timed so word highlight still works, right-to-left captions shaped and
+ordered in preview and export, SRT / VTT per language; editor language switcher, Translate to… and
+side-by-side editing (`translations`, see `docs/Translation.md`).
 Native capture (ScreenCaptureKit / Windows Graphics Capture / WASAPI), the Tauri app shell, and the
 GPU renderer are not built yet. No parity bars recorded yet. See `docs/Tracker.md`.

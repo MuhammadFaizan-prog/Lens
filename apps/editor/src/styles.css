@@ -529,3 +529,5 @@ select {
 .tr-text { font: 12.5px/1.35 var(--sans, inherit); color: var(--text); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 6px; resize: vertical; min-height: 38px; }
 .tr-text[dir="rtl"] { font-family: "Lens Noto Naskh Arabic", "Noto Naskh Arabic", serif; font-size: 14px; }
 .tr-edited { position: absolute; right: 4px; bottom: -2px; font-size: 10px; }
+.about-sheet { max-width: 560px; }
+.about-list { margin: 10px 0; padding-left: 18px; font-size: 12.5px; line-height: 1.45; color: var(--text-2); display: flex; flex-direction: column; gap: 8px; }

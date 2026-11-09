@@ -250,6 +250,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Bilingual raters score translated captions on 10 demos (adequacy 1–5, target ≥4). Pricing fake-door: count how many users tick extra languages at export.
 
+**Status (2026-11-09): subtitles built, first version (dubbing not started).** On-device translation with local CTranslate2 models (Argos Translate / OPUS-MT; MIT / CC0 and CC-BY-4.0, credited in `docs/Translation.md` and the editor's About sheet) into Spanish, French, German, Urdu and Arabic, per caption segment; one caption track per language in the project, re-timed onto the speech so word highlight still works; right-to-left Urdu / Arabic captions shaped and ordered correctly in preview and export; SRT / VTT per language; editor language switcher, Translate to… with progress and side-by-side editing. Measured on 24 fixed UI / tutorial sentences with hand-written references: chrF es 81.2, fr 91.5, de 85.4, ur 50.5; ~160–340 words/s on 2 CPU cores; burned-in Spanish read back by OCR 20/20 words; Urdu / Arabic lines identical to a libraqm whole-line rendering. Not done: the bilingual-rater adequacy test, the fake-door metric, a one-click batch burn-in of every language, TTS voiceover (phase 2).
+
 ---
 
 ## 9. Projects, presets and brand kit — 160 · S–M

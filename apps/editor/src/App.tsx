@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
@@ -13,6 +13,7 @@ import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
 import { store, useEditor } from "./state/store";
+import { ABOUT_NOTICES } from "./about";
 
 function TopBar() {
   const name = useEditor((s) => s.bundle?.name ?? "");
@@ -61,8 +62,40 @@ function TopBar() {
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
           <Icon name="export" /> Export MP4
         </button>
+        <AboutButton />
       </div>
     </header>
+  );
+}
+
+function AboutButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn ghost" data-testid="about" title="About Lens and third-party notices" onClick={() => setOpen(true)}>About</button>
+      {open && (
+        <div className="sheet-backdrop" onClick={() => setOpen(false)}>
+          <div className="sheet about-sheet" role="dialog" aria-label="About Lens" data-testid="about-sheet" onClick={(e) => e.stopPropagation()}>
+            <header>
+              <h2>About Lens</h2>
+            </header>
+            <p className="note">Everything below runs on this computer. Third-party components and their licences:</p>
+            <ul className="about-list">
+              {ABOUT_NOTICES.map((n) => (
+                <li key={n.what}>
+                  <b>{n.what}</b> <span className="stat">({n.licence})</span>
+                  <br />
+                  {n.credit}
+                </li>
+              ))}
+            </ul>
+            <div className="sheet-actions">
+              <button className="btn" onClick={() => setOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
