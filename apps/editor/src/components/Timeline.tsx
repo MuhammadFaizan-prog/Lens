@@ -20,13 +20,31 @@ import { Icon } from "./Icon";
 
 const LABEL_W = 112;
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0 };
+const ANN_ROW = 15;
+
+/** Stack overlapping annotation blocks into rows (greedy, by start time). */
+function annotationRows(items: Array<{ startMs: number; endMs: number }>): number[] {
+  const order = items.map((a, i) => ({ a, i })).sort((x, y) => x.a.startMs - y.a.startMs);
+  const ends: number[] = [];
+  const rows = new Array<number>(items.length).fill(0);
+  for (const { a, i } of order) {
+    let r = ends.findIndex((e) => e <= a.startMs);
+    if (r < 0) {
+      r = ends.length;
+      ends.push(a.endMs);
+    } else ends[r] = a.endMs;
+    rows[i] = r;
+  }
+  return rows;
+}
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
   { kind: "takes", label: "Alt takes" },
   { kind: "speed", label: "Speed" },
   { kind: "mask", label: "Masks" },
+  { kind: "annotation", label: "Annotations" },
   { kind: "caption", label: "Captions" },
   { kind: "audio", label: "Audio" },
 ];
@@ -108,7 +126,7 @@ export function Timeline() {
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "mask"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "mask", "annotation"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         t.push(b.startMs, b.endMs);
@@ -139,7 +157,8 @@ export function Timeline() {
     }
     store.select({ track, index: idx });
     const blocks = blocksOf(store.get().project, track);
-    const [lo, hi] = track === "cut" ? [0, duration] : freeSpan(blocks, (r.startMs + r.endMs) / 2, duration, idx);
+    // cuts merge and annotations may overlap: they can go anywhere
+    const [lo, hi] = track === "cut" || track === "annotation" ? [0, duration] : freeSpan(blocks, (r.startMs + r.endMs) / 2, duration, idx);
     drag.current = { track, index: idx, mode, x0: e.clientX, r0: { startMs: r.startMs, endMs: r.endMs }, lo, hi, moved: false };
     store.beginGesture();
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -172,7 +191,9 @@ export function Timeline() {
 
   const create = (track: TrackKind, t: number) => {
     const p = store.get().project;
-    const r = createRange(blocksOf(p, track), t, DEFAULT_LEN[track], duration, MIN_BLOCK_MS[track]);
+    const r = track === "annotation"
+      ? { startMs: Math.max(0, Math.min(t, duration - 500)), endMs: Math.min(duration, Math.max(t, 0) + DEFAULT_LEN.annotation) }
+      : createRange(blocksOf(p, track), t, DEFAULT_LEN[track], duration, MIN_BLOCK_MS[track]);
     if (!r) {
       store.notify("No room for a block there");
       return;
@@ -212,6 +233,32 @@ export function Timeline() {
     requestAnimationFrame(() => (el.scrollLeft = (t / 1000) * next - (e.clientX - el.getBoundingClientRect().left)));
   };
 
+  const annRows = annotationRows(project.annotations);
+  const annLaneH = Math.max(34, 4 + (annRows.length ? Math.max(...annRows) + 1 : 1) * ANN_ROW);
+
+  /** Drag a slide marker along the source timeline (one undo step). */
+  const startSlideDrag = (e: React.PointerEvent, index: number, at0: number) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    store.select({ track: "slide", index });
+    store.beginGesture();
+    const x0 = e.clientX;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - x0) < 2) return;
+      moved = true;
+      const at = Math.round(Math.max(0, Math.min(duration, at0 + msOf(ev.clientX - x0))));
+      store.preview((p) => ({ ...p, slides: p.slides.map((s, j) => (j === index ? { ...s, atMs: at } : s)) }));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      store.endGesture("Move text slide");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   const step = niceStep(pps);
   const ticks: number[] = [];
   for (let s = 0; s <= duration / 1000 + 1e-9; s += step) ticks.push(s);
@@ -219,13 +266,13 @@ export function Timeline() {
   const zoomLevel = Math.round((pps / fitPps) * 100);
   const peaks = store.audio.peaks;
 
-  const block = (track: TrackKind, i: number, r: Range, label: string, extra = "", testId?: string) => {
+  const block = (track: TrackKind, i: number, r: Range, label: string, extra = "", testId?: string, style: React.CSSProperties = {}) => {
     const selected = selection?.track === track && selection.index === i && !extra.includes("auto");
     return (
       <div
         key={`${track}-${i}-${r.startMs}`}
         className={`block block-${track} ${selected ? "selected" : ""} ${extra}`}
-        style={{ left: xOf(r.startMs), width: Math.max(4, xOf(r.endMs) - xOf(r.startMs)) }}
+        style={{ left: xOf(r.startMs), width: Math.max(4, xOf(r.endMs) - xOf(r.startMs)), ...style }}
         onPointerDown={(e) => startDrag(e, track, i, r)}
         onDoubleClick={(e) => e.stopPropagation()}
         data-testid={testId ?? `block-${track}-${i}`}
@@ -271,10 +318,10 @@ export function Timeline() {
         <div className="tl-labels" style={{ width: LABEL_W }}>
           <div className="tl-ruler-spacer" />
           {TRACKS.map((t) => (
-            <div key={t.kind} className={`tl-label tl-label-${t.kind}`}>
+            <div key={t.kind} className={`tl-label tl-label-${t.kind}`} style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
               <span className={`dot dot-${t.kind}`} />
               {t.label}
-              {["zoom", "cut", "speed", "mask"].includes(t.kind) && (
+              {["zoom", "cut", "speed", "mask", "annotation"].includes(t.kind) && (
                 <button className="mini-add" title={`Add ${t.label.toLowerCase()} at playhead`} aria-label={`Add ${t.kind}`} data-testid={`add-${t.kind}`} onClick={() => create(t.kind as TrackKind, playSrc)}>
                   <Icon name="plus" size={12} />
                 </button>
@@ -353,6 +400,23 @@ export function Timeline() {
             </div>
             <div className="lane" data-testid="lane-mask" onPointerDown={scrubLane} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
               {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}
+            </div>
+            <div className="lane lane-annotation" data-testid="lane-annotation" style={{ height: annLaneH }} onPointerDown={scrubLane} onDoubleClick={(e) => create("annotation", msOf(laneX(e.clientX)))}>
+              {project.annotations.map((a, i) =>
+                block("annotation", i, a, `${a.stepId ? "step · " : ""}${a.text ? a.text : a.kind}`, a.stepId ? "step" : "", `block-annotation-${a.id}`, { top: 2 + annRows[i]! * ANN_ROW, height: ANN_ROW - 2 }),
+              )}
+              {project.slides.map((sl, i) => (
+                <div
+                  key={`slide-${sl.id}`}
+                  className={`slide-marker ${selection?.track === "slide" && selection.index === i ? "selected" : ""}`}
+                  style={{ left: xOf(sl.atMs) }}
+                  data-testid={`slide-marker-${sl.id}`}
+                  title={`Text slide “${sl.title}” · ${(sl.durationMs / 1000).toFixed(1)} s · inserted at ${timecode(sl.atMs, fps)}`}
+                  onPointerDown={(e) => startSlideDrag(e, i, sl.atMs)}
+                >
+                  <span>{sl.title}</span>
+                </div>
+              ))}
             </div>
             <div className={`lane lane-caption ${project.captions.enabled ? "" : "off"}`} onPointerDown={scrubLane}>
               {captionBlockList.map((b, i) => (

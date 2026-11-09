@@ -6,6 +6,7 @@ import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
+import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -41,6 +42,14 @@ function SelectionCard() {
   const project = useEditor((s) => s.project);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
   if (!sel) return null;
+  if (sel.track === "annotation") {
+    const a = project.annotations[sel.index];
+    return a ? <AnnotationCard a={a} /> : null;
+  }
+  if (sel.track === "slide") {
+    const s = project.slides[sel.index];
+    return s ? <SlideCard index={sel.index} s={s} /> : null;
+  }
   const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, sel.index, patch));
   let body: React.ReactNode = null;
   let range: { startMs: number; endMs: number } | undefined;

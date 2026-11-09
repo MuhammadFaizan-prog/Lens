@@ -19,6 +19,8 @@
   --mask: #b794ff;
   --caption: #5eead4;
   --audio: #5fd4a4;
+  --annotation: #ff8a5c;
+  --slide: #f0abfc;
   --radius: 10px;
   --font: "Inter", "SF Pro Text", -apple-system, "Segoe UI", system-ui, "Cantarell", "DejaVu Sans", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
@@ -402,3 +404,46 @@ select {
 .block-mask.privacy { background: repeating-linear-gradient(135deg, var(--mask) 0 6px, #9a76ec 6px 12px); }
 .warn-text { color: var(--text-2); font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ------------------------------------------------------------ annotations (demand #4) */
+.dot-annotation { background: var(--annotation); } .dot-slide { background: var(--slide); }
+.block-annotation { background: var(--annotation); position: absolute; font-size: 10.5px; }
+.block-annotation.step { background: #ffb38f; }
+.lane-annotation { overflow: hidden; }
+.slide-marker { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--slide); cursor: ew-resize; z-index: 3; }
+.slide-marker span { position: absolute; top: 2px; left: 4px; padding: 0 5px; border-radius: 4px; background: rgba(240, 171, 252, 0.9); color: #2a0b31; font-size: 10px; font-weight: 650; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.slide-marker.selected { box-shadow: 0 0 0 2px #fff; }
+.preview-stage { position: relative; flex: none; }
+.preview-stage .preview-canvas { display: block; }
+.ann-overlay { position: absolute; left: 0; top: 0; overflow: visible; touch-action: none; }
+.ann-overlay.tool-select { cursor: default; }
+.ann-overlay:not(.tool-select) { cursor: crosshair; }
+.ann-hit { fill: transparent; stroke: none; }
+.ann-overlay.tool-select .ann-hit { cursor: move; }
+.ann-hit.sel { stroke: var(--accent-2); stroke-width: 1.5px; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.ann-handle { fill: #fff; stroke: var(--accent-2); stroke-width: 2px; vector-effect: non-scaling-stroke; cursor: grab; }
+.ann-handle.h-curve { fill: var(--accent-2); }
+.ann-handle.h-tip { fill: var(--annotation); }
+.ann-inline { position: absolute; z-index: 5; resize: none; border: 1.5px solid var(--accent-2); border-radius: 6px; background: rgba(10, 12, 15, 0.92); color: #fff; font-family: "DejaVu Sans", var(--font); font-weight: 700; padding: 2px 6px; line-height: 1.15; outline: none; user-select: text; }
+.ann-toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 22px 0; flex-wrap: wrap; }
+.tool-btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text-2); cursor: pointer; font-size: 12px; }
+.tool-btn:hover { color: var(--text); }
+.tool-btn.on { color: var(--accent); border-color: rgba(94, 234, 212, 0.5); background: rgba(94, 234, 212, 0.1); }
+.tool-btn .glyph { font-size: 13px; width: 14px; text-align: center; }
+.ann-toolbar .divider { width: 1px; height: 20px; background: var(--line-2); margin: 0 4px; }
+.ann-toolbar .segmented.pin { width: auto; }
+.ann-toolbar .segmented.pin button { padding: 3px 8px; font-size: 11.5px; }
+.ann-card .ann-text-row { display: flex; align-items: center; gap: 8px; }
+.ann-text-input { flex: 1; min-width: 0; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 4px 7px; font: inherit; user-select: text; }
+.ann-anim { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
+.ann-jump { display: flex; gap: 6px; padding-top: 6px; }
+.st-list { list-style: none; margin: 0; padding: 4px 8px 8px; flex: 1; overflow: auto; }
+.st-item { display: flex; align-items: center; gap: 6px; border-radius: 8px; padding: 4px; }
+.st-item:hover { background: var(--panel-2); }
+.st-item.dismissed { opacity: 0.5; }
+.st-num { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--annotation); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
+.st-item.pending .st-num { background: var(--panel-3); color: var(--muted); }
+.st-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.st-label { background: transparent; border: 1px solid transparent; border-radius: 5px; color: var(--text); font: inherit; font-weight: 600; padding: 2px 4px; user-select: text; }
+.st-label:hover, .st-label:focus { border-color: var(--line-2); background: var(--panel-3); outline: none; }
+.pv-badge.low { color: var(--speed); }

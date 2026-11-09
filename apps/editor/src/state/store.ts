@@ -4,8 +4,8 @@
  * through useEditor(selector) so the preview can redraw at 60 fps without re-rendering React.
  */
 import { useSyncExternalStore } from "react";
-import { applyPrivacyScan, applyZoomPreset, cutsForDeletedWords, isFiller, privacyCounts, resolveProject, reviewPrivacy, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
-import type { PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, TakeSettings, TakeStrategy, ZoomPresetName } from "@lens/engine";
+import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
+import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { History } from "./history";
@@ -70,8 +70,18 @@ export interface EditorState {
   /** Export asked while privacy detections are unreviewed: the sheet asks first. */
   exportWarning: { pending: number } | null;
   /** Which panel the left column shows. */
-  leftPanel: "transcript" | "privacy";
+  leftPanel: "transcript" | "privacy" | "steps";
+  /** Annotation tool on the preview (select = pick / move / resize existing items). */
+  tool: AnnotationTool;
+  /** Anchor for newly drawn items: follow the screen (zoom / pan) or stay fixed on the frame. */
+  newAnchor: "screen" | "frame";
+  /** Annotation whose text is being edited inline on the preview. */
+  editingText: string | null;
+  /** The step-label run in progress (or its last outcome). */
+  stepRun: { id: string; state: "starting" | "running" | "done" | "error"; error?: string; seconds?: number } | null;
 }
+
+export type AnnotationTool = "select" | "arrow" | "rect" | "ellipse" | "text" | "badge" | "callout";
 
 type Listener = () => void;
 
@@ -102,6 +112,10 @@ export class EditorStore {
     privacyScan: null,
     exportWarning: null,
     leftPanel: "transcript",
+    tool: "select",
+    newAnchor: "screen",
+    editingText: null,
+    stepRun: null,
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -448,6 +462,113 @@ export class EditorStore {
     this.pause();
     const t = d.tracks[0]!;
     this.seekSource(Math.min(t.endMs - 1, t.startMs + Math.min(400, (t.endMs - t.startMs) / 2)));
+  }
+
+  // ------------------------------------------------------------------ annotations (demand #4)
+
+  setTool(tool: AnnotationTool): void {
+    this.set({ tool, editingText: null });
+  }
+
+  setNewAnchor(newAnchor: "screen" | "frame"): void {
+    this.set({ newAnchor });
+  }
+
+  /** Index of an annotation by id in the current project, or -1. */
+  annotationIndex(id: string): number {
+    return this.history.doc.annotations.findIndex((a) => a.id === id);
+  }
+
+  selectAnnotation(id: string | null): void {
+    const i = id ? this.annotationIndex(id) : -1;
+    this.set({ selection: i >= 0 ? { track: "annotation", index: i } : null, selectedWords: [] });
+  }
+
+  selectedAnnotation(): Annotation | null {
+    const sel = this.s.selection;
+    return sel?.track === "annotation" ? this.s.project.annotations[sel.index] ?? null : null;
+  }
+
+  /** Add an annotation (one undo step) and select it. */
+  addAnnotation(a: Annotation, label = `Add ${a.kind}`): void {
+    this.edit(label, (p) => ({ ...p, annotations: [...p.annotations, a] }));
+    this.selectAnnotation(a.id);
+  }
+
+  /** Change one annotation: live (during a drag, one step at endGesture), tweak (sliders) or one step. */
+  updateAnnotation(id: string, fn: (a: Annotation) => Annotation, mode: "edit" | "preview" | "tweak" = "edit", label = "Edit annotation"): void {
+    const apply = (p: ProjectConfig) => ({ ...p, annotations: p.annotations.map((a) => (a.id === id ? fn(a) : a)) });
+    if (mode === "preview") this.preview(apply);
+    else if (mode === "tweak") this.tweak(label, apply);
+    else this.edit(label, apply);
+  }
+
+  deleteAnnotation(id: string): void {
+    const a = this.history.doc.annotations.find((x) => x.id === id);
+    if (!a) return;
+    this.edit(`Delete ${a.kind}`, (p) => {
+      const q = { ...p, annotations: p.annotations.filter((x) => x.id !== id) };
+      // a step badge deleted by hand sends its draft back to review
+      return a.stepId ? { ...q, stepLabels: { ...q.stepLabels, drafts: q.stepLabels.drafts.map((d) => (d.id === a.stepId ? { ...d, state: "pending" as const } : d)) } } : q;
+    });
+    this.set({ selection: null, editingText: null });
+  }
+
+  startTextEdit(id: string | null): void {
+    this.set({ editingText: id });
+  }
+
+  addSlide(sl: TextSlide): void {
+    this.edit("Add text slide", (p) => ({ ...p, slides: [...p.slides, sl] }));
+    this.set({ selection: { track: "slide", index: this.history.doc.slides.length - 1 } });
+  }
+
+  updateSlide(index: number, patch: Partial<TextSlide>, live = false): void {
+    const fn = (p: ProjectConfig) => ({ ...p, slides: p.slides.map((s, i) => (i === index ? { ...s, ...patch } : s)) });
+    if (live) this.tweak("Edit slide", fn);
+    else this.edit("Edit slide", fn);
+  }
+
+  /** Draft step labels from the clicks + on-device OCR (dev server: lens-redact steps), as one undo step. */
+  async generateSteps(): Promise<void> {
+    if (this.s.stepRun && ["starting", "running"].includes(this.s.stepRun.state)) return;
+    this.set({ stepRun: { id: "", state: "starting" } });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/steps${q}`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) {
+      this.set({ stepRun: { id: "", state: "error", error: j.error } });
+      return;
+    }
+    const id = j.id as string;
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        const st = await (await fetch(`/api/steps/${id}${q}`)).json();
+        this.set({ stepRun: { id, state: st.state, error: st.error, seconds: st.seconds } });
+        if (st.state === "running") {
+          setTimeout(poll, 300);
+          return;
+        }
+        if (st.state === "done") {
+          const drafts = (st.result as { drafts: StepDraft[] }).drafts;
+          this.edit("Generate step labels", (p) => applyStepDrafts(p, drafts, new Date().toISOString()));
+          this.notify(drafts.length ? `${drafts.length} step label${drafts.length > 1 ? "s" : ""} to review` : "No clicks found");
+        }
+        resolve();
+      };
+      setTimeout(poll, 150);
+    });
+  }
+
+  reviewSteps(ids: string[] | null, state: StepDraft["state"]): void {
+    const ds = this.history.doc.stepLabels.drafts.filter((d) => !ids || ids.includes(d.id));
+    if (!ds.length) return;
+    const verb = state === "accepted" ? "Accept" : state === "dismissed" ? "Dismiss" : "Unreview";
+    this.edit(`${verb} ${ids === null ? `all ${ds.length} steps` : ds.length === 1 ? `step "${ds[0]!.label}"` : `${ds.length} steps`}`, (p) => reviewSteps(p, ids, state));
+  }
+
+  editStepLabel(id: string, label: string): void {
+    this.edit("Edit step label", (p) => editStepLabel(p, id, label));
   }
 
   // ------------------------------------------------------------------ transport

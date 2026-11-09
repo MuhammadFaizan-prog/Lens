@@ -12,6 +12,8 @@
  *   POST /api/privacy/scan[?force=1] start redact/lens-redact on screen.mp4 -> { id } (cached per screen.mp4)
  *   GET  /api/privacy/scan/:id       { state, stage, done, total, error, result }
  *   GET  /api/privacy/thumb/:name    a review thumbnail (.lens-cache/privacy/)
+ *   POST /api/steps                  start `redact/lens-redact steps` (auto step labels) -> { id } (cached per screen.mp4)
+ *   GET  /api/steps/:id              { state, error, result }
  *
  * A bundle is a folder with screen.mp4, meta.json, events.jsonl and optionally cam.mp4,
  * transcript.json, project.json and audio files. Default: $LENS_BUNDLE or apps/editor/sample
@@ -108,6 +110,52 @@ function startScan(bundle: string, force: boolean): ScanJob {
   });
   return job;
 }
+interface StepJob {
+  id: string;
+  state: "running" | "done" | "error";
+  error?: string;
+  result?: unknown;
+  startedAt: number;
+  finishedAt?: number;
+}
+
+const stepJobs = new Map<string, StepJob>();
+
+/** Draft step labels from the clicks in events.jsonl + local OCR; cached next to the frames by screen.mp4's mtime. */
+function startSteps(bundle: string): StepJob {
+  const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const dir = path.join(bundle, ".lens-cache", "steps");
+  const out = path.join(dir, "steps.json");
+  const stamp = path.join(dir, ".stamp");
+  const video = path.join(bundle, "screen.mp4");
+  const ev = path.join(bundle, "events.jsonl");
+  const key = `${fs.statSync(video).mtimeMs}:${fs.statSync(ev).mtimeMs}`;
+  const job: StepJob = { id, state: "running", startedAt: Date.now() };
+  stepJobs.set(id, job);
+  if (fs.existsSync(out) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key) {
+    job.result = JSON.parse(fs.readFileSync(out, "utf8"));
+    job.state = "done";
+    job.finishedAt = Date.now();
+    return job;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const py = spawn("python3", [path.join(ROOT, "redact", "lens-redact"), "steps", video, "--events", ev, "-o", out], { cwd: ROOT });
+  let err = "";
+  py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+  py.on("close", (code) => {
+    job.finishedAt = Date.now();
+    if (code === 0 && fs.existsSync(out)) {
+      job.result = JSON.parse(fs.readFileSync(out, "utf8"));
+      fs.writeFileSync(stamp, key);
+      job.state = "done";
+    } else {
+      job.state = "error";
+      job.error = err.trim().split("\n").slice(-4).join("\n") || `lens-redact steps exited ${code}`;
+    }
+  });
+  return job;
+}
+
 const extracting = new Map<string, Promise<number>>();
 
 export function defaultBundle(): string {
@@ -118,8 +166,10 @@ function ensureSample(dir: string): void {
   if (fs.existsSync(path.join(dir, "screen.mp4"))) return;
   const takes = path.resolve(dir) === path.resolve(EDITOR, "sample-takes");
   const privacy = path.resolve(dir) === path.resolve(EDITOR, "sample-privacy");
-  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes && !privacy) throw new Error(`no screen.mp4 in ${dir}`);
-  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : []), ...(privacy ? ["--privacy"] : [])], { encoding: "utf8" });
+  const annotations = path.resolve(dir) === path.resolve(EDITOR, "sample-annotations");
+  if (path.resolve(dir) !== path.resolve(EDITOR, "sample") && !takes && !privacy && !annotations) throw new Error(`no screen.mp4 in ${dir}`);
+  const r = spawnSync("python3", [path.join(EDITOR, "scripts", "make_sample.py"), "--out", dir, ...(takes ? ["--takes"] : []), ...(privacy ? ["--privacy"] : []),
+    ...(annotations ? ["--annotations"] : [])], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`make_sample failed: ${r.stderr}`);
 }
 
@@ -315,6 +365,16 @@ export function apiMiddleware() {
         res.setHeader("content-type", "image/jpeg");
         res.setHeader("cache-control", "no-store");
         return fs.createReadStream(file).pipe(res);
+      }
+      if (url.pathname === "/api/steps" && req.method === "POST") {
+        const job = startSteps(bundle);
+        return sendJson(res, { id: job.id, state: job.state });
+      }
+      if ((m = /^\/api\/steps\/([a-z0-9]+)$/.exec(url.pathname))) {
+        const job = stepJobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such run" }, 404);
+        return sendJson(res, { id: job.id, state: job.state, error: job.error, result: job.state === "done" ? job.result : undefined,
+          seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       return sendJson(res, { error: "unknown endpoint" }, 404);
     } catch (e) {

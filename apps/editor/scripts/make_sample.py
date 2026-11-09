@@ -4,6 +4,7 @@
   python3 apps/editor/scripts/make_sample.py [--out apps/editor/sample] [--force]
   python3 apps/editor/scripts/make_sample.py --takes [--out apps/editor/sample-takes]
   python3 apps/editor/scripts/make_sample.py --privacy [--out apps/editor/sample-privacy]
+  python3 apps/editor/scripts/make_sample.py --annotations [--out apps/editor/sample-annotations]
 
 Writes a Lens bundle the editor opens by default:
   screen.mp4  cursorless fake-app recording (1280x720 @ 30 fps, 10 s) + meta.json + events.jsonl
@@ -118,6 +119,51 @@ def make_privacy(out: Path, force: bool) -> int:
     return 0
 
 
+def annotations_project() -> dict:
+    """Every annotation kind, both anchors, every animation, a zoom (screen anchors follow it) and a text slide."""
+    none = {"kind": "none", "ms": 0}
+    return {
+        "version": 1,
+        "output": {"aspect": "16:9", "resolution": 720, "fps": 30},
+        "background": {"kind": "gradient", "colors": ["#0f2027", "#2c5364", "#7ab8a6"], "angle": 135, "blur": 0},
+        "zoom": {"auto": False, "segments": [{"id": "z1", "startMs": 4200, "endMs": 7600, "scale": 1.7, "focus": {"x": 420, "y": 200},
+                                               "style": "classic", "auto": False}]},
+        "cursor": {"visible": True},
+        "annotations": [
+            {"id": "title", "kind": "text", "role": "title", "anchor": "frame", "startMs": 0, "endMs": 2600, "rect": {"x": 0.12, "y": 0.06, "w": 0.76, "h": 0},
+             "align": "center", "text": "Create a project in three clicks", "in": {"kind": "pop", "ms": 500}, "out": {"kind": "fade", "ms": 300},
+             "style": {"fontSize": 54, "fill": "#11131a", "fillOpacity": 0.72, "radius": 16}},
+            {"id": "arrow1", "kind": "arrow", "startMs": 300, "endMs": 2500, "from": {"x": 470, "y": 330}, "to": {"x": 150, "y": 118}, "curve": -0.22,
+             "in": {"kind": "draw", "ms": 700}, "out": {"kind": "fade", "ms": 250}},
+            {"id": "box1", "kind": "rect", "startMs": 2700, "endMs": 5600, "rect": {"x": 228, "y": 110, "w": 116, "h": 58},
+             "in": {"kind": "draw", "ms": 600}, "out": {"kind": "fade", "ms": 300}},
+            {"id": "badge1", "kind": "badge", "startMs": 2900, "endMs": 5600, "at": {"x": 360, "y": 96}, "text": "Pick Create"},
+            {"id": "lower", "kind": "text", "role": "lower-third", "anchor": "frame", "startMs": 4400, "endMs": 9800, "rect": {"x": 0.08, "y": 0.8, "w": 0.6, "h": 0},
+             "text": "Projects \u00b7 Create", "in": {"kind": "typewriter", "ms": 800}, "out": {"kind": "fade", "ms": 300},
+             "style": {"fontSize": 38, "strokeWidth": 8, "fill": "#11131a", "fillOpacity": 0.8, "radius": 8}},
+            {"id": "ring", "kind": "ellipse", "startMs": 7700, "endMs": 10400, "rect": {"x": 500, "y": 104, "w": 200, "h": 72},
+             "in": {"kind": "draw", "ms": 500}, "out": {"kind": "pop", "ms": 300}, "style": {"color": "#ffd23f", "fill": "#ffd23f", "fillOpacity": 0.15}},
+            {"id": "note", "kind": "callout", "anchor": "frame", "startMs": 8000, "endMs": 11000, "rect": {"x": 0.6, "y": 0.42, "w": 0.3, "h": 0.12},
+             "to": {"x": 0.47, "y": 0.27}, "text": "Exports land in Downloads", "in": {"kind": "pop", "ms": 450}, "out": none},
+        ],
+        "slides": [{"id": "slide1", "atMs": 6000, "durationMs": 1500, "title": "Step two", "subtitle": "Export the list", "fadeMs": 300}],
+    }
+
+
+def make_annotations(out: Path, force: bool) -> int:
+    """A short click-through of a fake app (steps_synth dev, 6 clicks) with every annotation kind."""
+    if (out / "project.json").exists() and (out / "screen.mp4").exists() and not force:
+        print(f"sample exists: {out}")
+        return 0
+    from lensharness.steps_synth import generate  # noqa: E402
+    out.mkdir(parents=True, exist_ok=True)
+    generate(out, "dev", max_steps=6)
+    (out / "gt.json").unlink(missing_ok=True)  # test ground truth is not part of a bundle
+    (out / "project.json").write_text(json.dumps(annotations_project(), indent=2))
+    print(f"annotations sample written: {out}")
+    return 0
+
+
 def project() -> dict:
     sx = W / 1920
     return {
@@ -146,7 +192,11 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--takes", action="store_true", help="write the multi-take sample (default --out apps/editor/sample-takes)")
     ap.add_argument("--privacy", action="store_true", help="write the privacy-redaction sample (default --out apps/editor/sample-privacy)")
+    ap.add_argument("--annotations", action="store_true", help="write the annotations sample (default --out apps/editor/sample-annotations)")
     a = ap.parse_args()
+    if a.annotations:
+        out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-annotations"
+        return make_annotations(out, a.force)
     if a.privacy:
         out = Path(a.out) if a.out != ap.get_default("out") else ROOT / "apps" / "editor" / "sample-privacy"
         return make_privacy(out, a.force)

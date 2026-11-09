@@ -5,6 +5,8 @@ import { Preview } from "./components/Preview";
 import { deleteSelection, Timeline } from "./components/Timeline";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
+import { StepsPanel } from "./components/StepsPanel";
+import { AnnotationToolbar } from "./components/AnnotationToolbar";
 import { privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
@@ -64,6 +66,7 @@ function TopBar() {
 function LeftPanel() {
   const panel = useEditor((s) => s.leftPanel);
   const pending = useEditor((s) => privacyCounts(s.project).pending);
+  const steps = useEditor((s) => s.project.stepLabels.drafts.filter((d) => d.state === "pending").length);
   return (
     <div className="left-col">
       <nav className="left-tabs" role="tablist">
@@ -74,8 +77,12 @@ function LeftPanel() {
           <Icon name="shield" size={14} /> Privacy
           {pending > 0 && <span className="tab-badge" data-testid="pv-pending-badge">{pending}</span>}
         </button>
+        <button role="tab" aria-selected={panel === "steps"} className={panel === "steps" ? "on" : ""} data-testid="left-tab-steps" onClick={() => store.setLeftPanel("steps")}>
+          Steps
+          {steps > 0 && <span className="tab-badge" data-testid="st-pending-badge">{steps}</span>}
+        </button>
       </nav>
-      {panel === "transcript" ? <TranscriptPanel /> : <PrivacyPanel />}
+      {panel === "transcript" ? <TranscriptPanel /> : panel === "privacy" ? <PrivacyPanel /> : <StepsPanel />}
     </div>
   );
 }
@@ -240,6 +247,35 @@ function useKeys() {
         case "Escape":
           store.select(null);
           store.selectWords([]);
+          store.setTool("select");
+          break;
+        case "v":
+        case "V":
+          store.setTool("select");
+          break;
+        case "a":
+        case "A":
+          store.setTool("arrow");
+          break;
+        case "b":
+        case "B":
+          store.setTool("rect");
+          break;
+        case "e":
+        case "E":
+          store.setTool("ellipse");
+          break;
+        case "t":
+        case "T":
+          store.setTool("text");
+          break;
+        case "c":
+        case "C":
+          store.setTool("callout");
+          break;
+        case "n":
+        case "N":
+          store.setTool("badge");
           break;
       }
     };
@@ -262,6 +298,7 @@ export function App() {
       <main className="workspace">
         <LeftPanel />
         <section className="center">
+          <AnnotationToolbar />
           <Preview />
           <Transport />
         </section>

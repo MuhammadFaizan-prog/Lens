@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RenderPlan } from "@lens/engine";
 import { PlanRenderer } from "../render/renderer";
 import { store, useEditor } from "../state/store";
+import { AnnotationOverlay } from "./AnnotationOverlay";
 
 /** Draw frame i of plan into g with the right source images (awaits decoding when needed). */
 export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, i: number): Promise<boolean> {
@@ -83,7 +84,10 @@ export function Preview() {
 
   return (
     <div className="preview" ref={box}>
-      <canvas ref={ref} className="preview-canvas" data-testid="preview" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }} />
+      <div className="preview-stage" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }}>
+        <canvas ref={ref} className="preview-canvas" data-testid="preview" style={{ width: Math.floor(w * k), height: Math.floor(h * k) }} />
+        {k > 0 && <AnnotationOverlay cssW={Math.floor(w * k)} cssH={Math.floor(h * k)} />}
+      </div>
     </div>
   );
 }

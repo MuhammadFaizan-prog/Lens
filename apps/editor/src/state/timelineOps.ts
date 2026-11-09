@@ -6,16 +6,16 @@
  * Timeline blocks live in SOURCE time (recording ms), like the engine's project data. The
  * transport works in OUTPUT frames; plan frames map one to the other.
  */
-import { mergeRanges, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
+import { defaultSlide, mergeRanges, normalizeAnnotation, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
 
-export type TrackKind = "zoom" | "cut" | "speed" | "mask";
+export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide";
 
 export interface Range {
   startMs: number;
   endMs: number;
 }
 
-export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200 };
+export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200 };
 
 export interface SnapOptions {
   targets: number[];
@@ -99,6 +99,11 @@ export function blocksOf(p: ProjectConfig, track: TrackKind): Range[] {
       return p.edits.speed;
     case "mask":
       return p.masks;
+    case "annotation":
+      return p.annotations;
+    case "slide":
+      // slides are points in source time; as ranges they are zero-length
+      return p.slides.map((s) => ({ startMs: s.atMs, endMs: s.atMs }));
   }
 }
 
@@ -125,6 +130,10 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
           return { ...m, ...patch };
         }),
       };
+    case "annotation":
+      return { ...p, annotations: p.annotations.map((a, j) => (j === i ? { ...a, ...patch } : a)) };
+    case "slide":
+      return { ...p, slides: p.slides.map((s, j) => (j === i ? { ...s, ...(patch.startMs !== undefined ? { atMs: patch.startMs } : {}) } : s)) };
   }
 }
 
@@ -138,6 +147,14 @@ export function deleteBlock(p: ProjectConfig, track: TrackKind, i: number): Proj
       return { ...p, edits: { ...p.edits, speed: p.edits.speed.filter((_, j) => j !== i) } };
     case "mask":
       return { ...p, masks: p.masks.filter((_, j) => j !== i) };
+    case "annotation": {
+      const a = p.annotations[i];
+      const q = { ...p, annotations: p.annotations.filter((_, j) => j !== i) };
+      // a step badge deleted by hand sends its draft back to review
+      return a?.stepId ? { ...q, stepLabels: { ...q.stepLabels, drafts: q.stepLabels.drafts.map((d) => (d.id === a.stepId ? { ...d, state: "pending" as const } : d)) } } : q;
+    }
+    case "slide":
+      return { ...p, slides: p.slides.filter((_, j) => j !== i) };
   }
 }
 
@@ -170,6 +187,15 @@ export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 19
         startMs: r.startMs, endMs: r.endMs, feather: 8, fadeMs: 200, strength: 12 };
       const masks = [...p.masks, m].sort((a, b) => a.startMs - b.startMs);
       return { project: { ...p, masks }, index: masks.indexOf(m) };
+    }
+    case "annotation": {
+      // a frame-anchored text label in the middle of the frame
+      const a = normalizeAnnotation({ id: newId("text"), kind: "text", anchor: "frame", startMs: r.startMs, endMs: r.endMs, rect: { x: 0.35, y: 0.45, w: 0.3, h: 0 }, align: "center", text: "Text" });
+      return { project: { ...p, annotations: [...p.annotations, a] }, index: p.annotations.length };
+    }
+    case "slide": {
+      const s = defaultSlide(newId("slide"), r.startMs);
+      return { project: { ...p, slides: [...p.slides, s] }, index: p.slides.length };
     }
   }
 }

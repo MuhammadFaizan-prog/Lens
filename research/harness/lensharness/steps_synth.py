@@ -199,11 +199,14 @@ def _ease(u: float) -> float:
     return 2 * u * u if u < 0.5 else 1 - (-2 * u + 2) ** 2 / 2
 
 
-def generate(out: str | Path, variant: str = "dev") -> dict:
-    """Write screen.mp4, meta.json, events.jsonl and gt.json; returns the ground truth."""
+def generate(out: str | Path, variant: str = "dev", max_steps: int | None = None) -> dict:
+    """Write screen.mp4, meta.json, events.jsonl and gt.json; returns the ground truth.
+    max_steps keeps only the first n steps (the editor's short sample)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    v = VARIANTS[variant]
+    v = dict(VARIANTS[variant])
+    if max_steps is not None:
+        v["steps"] = v["steps"][:max_steps]
     th = THEMES[variant]
     page = v["start"]
     events: list[dict] = []

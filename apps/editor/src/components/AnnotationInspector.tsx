@@ -1,0 +1,112 @@
+import type { Annotation, AnnotationStyle, ArrowHead, InAnimation, OutAnimation, TextSlide } from "@lens/engine";
+import { store, useEditor } from "../state/store";
+import { timecode } from "../state/timelineOps";
+import { ColorInput, Segmented, Select, Slider, Toggle } from "./Controls";
+import { Icon } from "./Icon";
+
+const KIND_LABEL: Record<Annotation["kind"], string> = { text: "Text", arrow: "Arrow", rect: "Box", ellipse: "Ellipse", badge: "Step badge", callout: "Callout" };
+const IN_OPTS: Array<{ value: InAnimation; label: string }> = [
+  { value: "none", label: "None" }, { value: "fade", label: "Fade" }, { value: "pop", label: "Pop" }, { value: "draw", label: "Draw on" }, { value: "typewriter", label: "Typewriter" },
+];
+const OUT_OPTS: Array<{ value: OutAnimation; label: string }> = [{ value: "none", label: "None" }, { value: "fade", label: "Fade" }, { value: "pop", label: "Pop" }, { value: "draw", label: "Draw off" }];
+const px = (v: number) => `${Math.round(v)} px`;
+const ms = (v: number) => `${Math.round(v)} ms`;
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+/** Style inspector for the selected annotation (the store's selection on track "annotation"). */
+export function AnnotationCard({ a }: { a: Annotation }) {
+  const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  const id = a.id;
+  const st = (label: string, patch: Partial<AnnotationStyle>, live = true) => store.updateAnnotation(id, (x) => ({ ...x, style: { ...x.style, ...patch } }), live ? "tweak" : "edit", label);
+  const set = (label: string, patch: Partial<Annotation>, live = false) => store.updateAnnotation(id, (x) => ({ ...x, ...patch }), live ? "tweak" : "edit", label);
+  const hasText = a.kind === "text" || a.kind === "callout" || a.kind === "badge";
+  const hasFill = a.kind !== "arrow";
+  return (
+    <div className="selection-card ann-card" data-testid="ann-card">
+      <div className="sel-head">
+        <span className="dot dot-annotation" />
+        <b data-testid="ann-card-kind">{KIND_LABEL[a.kind]}</b>
+        <span className="sel-time">
+          {timecode(a.startMs, fps)} – {timecode(a.endMs, fps)} · {a.anchor === "screen" ? "on screen" : "on frame"}
+        </span>
+        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete annotation" data-testid="ann-delete" onClick={() => store.deleteAnnotation(id)}>
+          <Icon name="trash" />
+        </button>
+      </div>
+      {hasText && (
+        <label className="row ann-text-row">
+          <span className="row-label">Text</span>
+          <input className="ann-text-input" value={a.text ?? ""} data-testid="ann-text" onChange={(e) => set("Edit text", { text: e.target.value }, true)} />
+        </label>
+      )}
+      <ColorInput label={a.kind === "badge" ? "Ring" : a.kind === "text" ? "Accent" : "Colour"} value={a.style.color} testId="ann-color" onChange={(v) => st("Annotation colour", { color: v })} />
+      {hasFill && (
+        <>
+          <ColorInput label="Fill" value={a.style.fill ?? "#000000"} testId="ann-fill" onChange={(v) => st("Annotation fill", { fill: v })} />
+          <Slider label="Fill opacity" value={a.style.fill ? a.style.fillOpacity : 0} min={0} max={1} step={0.02} format={pct} onChange={(v) => st("Fill opacity", { fillOpacity: v, fill: a.style.fill ?? "#000000" })} />
+        </>
+      )}
+      <Slider label="Stroke" value={a.style.strokeWidth} min={0} max={24} step={0.5} format={px} testId="ann-stroke" onChange={(v) => st("Stroke width", { strokeWidth: v })} />
+      {hasText && (
+        <>
+          <Slider label="Font size" value={a.style.fontSize} min={10} max={120} step={1} format={px} testId="ann-font" onChange={(v) => st("Font size", { fontSize: v })} />
+          <ColorInput label="Text colour" value={a.style.textColor} onChange={(v) => st("Text colour", { textColor: v })} />
+          <Toggle label="Bold" value={a.style.bold} onChange={(v) => st("Bold", { bold: v }, false)} />
+        </>
+      )}
+      {(a.kind === "rect" || a.kind === "callout" || a.kind === "text") && <Slider label="Corner radius" value={a.style.radius} min={0} max={40} step={1} format={px} onChange={(v) => st("Corner radius", { radius: v })} />}
+      {a.kind === "arrow" && (
+        <>
+          <Slider label="Curve" value={a.curve ?? 0} min={-0.8} max={0.8} step={0.02} format={(v) => v.toFixed(2)} testId="ann-curve" onChange={(v) => set("Arrow curve", { curve: v }, true)} />
+          <Select<ArrowHead> label="Head" value={a.head ?? "triangle"} options={[{ value: "triangle", label: "Triangle" }, { value: "open", label: "Open" }, { value: "dot", label: "Dot" }, { value: "none", label: "None" }]} onChange={(v) => set("Arrow head", { head: v })} />
+          <Select<ArrowHead> label="Tail" value={a.tail ?? "none"} options={[{ value: "none", label: "None" }, { value: "triangle", label: "Triangle" }, { value: "open", label: "Open" }, { value: "dot", label: "Dot" }]} onChange={(v) => set("Arrow tail", { tail: v })} />
+        </>
+      )}
+      <Toggle label="Shadow" value={a.style.shadow.enabled} onChange={(v) => st("Shadow", { shadow: { ...a.style.shadow, enabled: v } }, false)} />
+      {a.style.shadow.enabled && <Slider label="Softness" value={a.style.shadow.blur} min={0} max={40} step={1} format={px} onChange={(v) => st("Shadow softness", { shadow: { ...a.style.shadow, blur: v } })} />}
+      <Slider label="Opacity" value={a.style.opacity} min={0.1} max={1} step={0.02} format={pct} onChange={(v) => st("Opacity", { opacity: v })} />
+      <div className="ann-anim">
+        <Select<InAnimation> label="In" value={a.in.kind} testId="ann-in" options={IN_OPTS} onChange={(v) => set("In animation", { in: { ...a.in, kind: v } })} />
+        <Slider label="In time" value={a.in.ms} min={0} max={2000} step={50} format={ms} testId="ann-in-ms" onChange={(v) => set("In time", { in: { ...a.in, ms: v } }, true)} />
+        <Select<OutAnimation> label="Out" value={a.out.kind} testId="ann-out" options={OUT_OPTS} onChange={(v) => set("Out animation", { out: { ...a.out, kind: v } })} />
+        <Slider label="Out time" value={a.out.ms} min={0} max={2000} step={50} format={ms} onChange={(v) => set("Out time", { out: { ...a.out, ms: v } }, true)} />
+        <div className="ann-jump">
+          <button className="chip-btn" data-testid="ann-jump-in" title="Put the playhead at the start of the in-animation" onClick={() => { store.pause(); store.seekSource(a.startMs); }}>⇤ In</button>
+          <button className="chip-btn" data-testid="ann-play-in" title="Play the in-animation" onClick={() => { store.seekSource(a.startMs); store.play(1); }}>▶ Play in</button>
+          <button className="chip-btn" title="Put the playhead at the start of the out-animation" onClick={() => { store.pause(); store.seekSource(Math.max(a.startMs, a.endMs - a.out.ms)); }}>Out ⇥</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SlideCard({ index, s }: { index: number; s: TextSlide }) {
+  const fps = useEditor((st) => st.plan?.output.fps ?? 30);
+  return (
+    <div className="selection-card ann-card" data-testid="slide-card">
+      <div className="sel-head">
+        <span className="dot dot-slide" />
+        <b>Text slide</b>
+        <span className="sel-time">at {timecode(s.atMs, fps)} · {(s.durationMs / 1000).toFixed(1)} s</span>
+        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete slide" data-testid="slide-delete" onClick={() => { store.edit("Delete text slide", (p) => ({ ...p, slides: p.slides.filter((_, i) => i !== index) })); store.select(null); }}>
+          <Icon name="trash" />
+        </button>
+      </div>
+      <label className="row ann-text-row">
+        <span className="row-label">Title</span>
+        <input className="ann-text-input" value={s.title} data-testid="slide-title" onChange={(e) => store.updateSlide(index, { title: e.target.value }, true)} />
+      </label>
+      <label className="row ann-text-row">
+        <span className="row-label">Subtitle</span>
+        <input className="ann-text-input" value={s.subtitle} data-testid="slide-subtitle" onChange={(e) => store.updateSlide(index, { subtitle: e.target.value }, true)} />
+      </label>
+      <Slider label="Duration" value={s.durationMs} min={500} max={8000} step={100} format={(v) => `${(v / 1000).toFixed(1)} s`} testId="slide-duration" onChange={(v) => store.updateSlide(index, { durationMs: v }, true)} />
+      <Slider label="Cross-fade" value={s.fadeMs} min={0} max={1000} step={50} format={ms} onChange={(v) => store.updateSlide(index, { fadeMs: v }, true)} />
+      <ColorInput label="Background" value={s.background} onChange={(v) => store.updateSlide(index, { background: v }, true)} />
+      <ColorInput label="Text" value={s.textColor} onChange={(v) => store.updateSlide(index, { textColor: v }, true)} />
+      <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "#ff5a36" : null })} />
+      <Segmented label="Size" value={s.titleSize >= 96 ? "l" : s.titleSize <= 64 ? "s" : "m"} options={[{ value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }]}
+        onChange={(v) => store.updateSlide(index, { titleSize: v === "s" ? 60 : v === "m" ? 84 : 110 })} />
+    </div>
+  );
+}
