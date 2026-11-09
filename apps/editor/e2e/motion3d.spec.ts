@@ -29,6 +29,8 @@ import { closeAll, openLens } from "./lensApp";
 import { editProject, exportMp4, frameAt, proj, smallExport, uxBundle } from "./uxHelpers";
 
 test.afterAll(() => closeAll());
+// a hung click / fill fails with Playwright's actionability log instead of waiting out the 20 min test timeout
+test.use({ actionTimeout: 20_000, navigationTimeout: 60_000 });
 
 const F = 33; // output frame inside the block (1.1 s at 30 fps)
 const tMid = (f: number) => (f + 0.5) / 30;
@@ -91,6 +93,9 @@ async function timedExport(page: Page, dir: string): Promise<{ mp4: string; seco
   const wall = (Date.now() - t0) / 1000;
   const ex = await page.evaluate(() => (window as any).__lens.store.get().exporting);
   expect(ex.path).toBe("browser");
+  // the export progress sheet stays open on "done"; close it so the timeline is clickable again
+  await page.evaluate(() => { const st = (window as any).__lens.store; st.closeExport(); st.closeExportDialog(); });
+  await expect(page.locator(".sheet-backdrop")).toHaveCount(0);
   return { mp4, seconds: ex.seconds ?? wall, wall };
 }
 
@@ -99,6 +104,9 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   const dir = uxBundle("motion3d");
   const lens = await openLens(dir, { w: 1600, h: 1000 });
   const page = lens.page;
+  page.on("pageerror", (e) => console.log("[pageerror]", e.message));
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") console.log(`[console.${m.type()}]`, m.text().slice(0, 300)); });
+  const step = (s: string) => console.log(`[step] ${new Date().toISOString().slice(11, 19)} ${s}`);
   const gl = await page.evaluate(() => {
     const g = new OffscreenCanvas(4, 4).getContext("webgl2") as WebGL2RenderingContext | null;
     if (!g) return null;
@@ -127,6 +135,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   const frames = await page.evaluate(() => (window as any).__lens.store.get().plan.frames.length);
   expect(frames).toBe(90);
 
+  step('baseline: no 3D');
   // ---- baseline: no 3D
   const fpsFlat = await measureFps(page);
   console.log("preview fps, no 3D:", JSON.stringify(fpsFlat));
@@ -140,6 +149,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   const flatRect = await page.evaluate((f) => (window as any).__lens.store.get().plan.frames[f].layout.screen, F);
 
   mem("before 3D");
+  step('1: lane "+" at the playhead (1.0 s)');
   // ---- 1: lane "+" at the playhead (1.0 s)
   await seek(page, 30);
   await page.getByTestId("add-motion3d").scrollIntoViewIfNeeded();
@@ -150,6 +160,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   expect(Math.abs(m3[0].startMs - 1000)).toBeLessThanOrEqual(34);
   await expect(page.getByTestId(`block-motion3d-${m3[0].id}`)).toBeVisible();
   mem("block added");
+  step('2: pick a template');
   // ---- 2: pick a template
   await page.getByTestId("m3d-tpl-swing-left").click();
   expect((await proj(page)).motion3d[0].template).toBe("swing-left");
@@ -158,6 +169,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   expect(m3[0].template).toBe("tilt-in");
   expect(m3[0].from.rx).toBe(25);
 
+  step('3: inside the block the card is in 3D');
   // ---- 3: inside the block the card is in 3D
   await seek(page, F);
   const fr = await page.evaluate((f) => (window as any).__lens.store.get().plan.frames[f], F);
@@ -175,6 +187,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   await shot(page, "motion3d-tilt");
 
   mem("3D drawn");
+  step('4: Rotate Y slider (Start key)');
   // ---- 4: Rotate Y slider (Start key)
   await page.getByTestId("m3d-ry").fill("30");
   await settle(page);
@@ -185,17 +198,20 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   console.log("preview frame 33 after Rotate Y 30 vs before:", dRy.toFixed(2));
   expect(dRy).toBeGreaterThanOrEqual(3);
 
+  step('5: keyframe at 1.5 s');
   // ---- 5: keyframe at 1.5 s
   await seek(page, 45);
   await page.getByTestId("m3d-key-add").click();
   await expect(page.getByTestId("m3d-key-2")).toBeVisible();
   expect((await proj(page)).motion3d[0].keys).toHaveLength(1);
 
+  step('6: save as template, it shows in the grid');
   // ---- 6: save as template, it shows in the grid
   await page.getByTestId("m3d-save-name").fill("E2E Tilt");
   await page.getByTestId("m3d-save").click();
   await expect(page.locator('[data-testid^="m3d-tpl-user:"]', { hasText: "E2E Tilt" })).toBeVisible();
 
+  step('7: undo removes the block, redo brings it back');
   // ---- 7: undo removes the block, redo brings it back
   let undos = 0;
   while ((await proj(page)).motion3d.length && undos < 12) {
@@ -215,6 +231,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   await noGlError();
 
   mem("before 3D export");
+  step('8: export, frame 33 vs preview frame 33');
   // ---- 8: export, frame 33 vs preview frame 33
   await seek(page, F + 1);
   await seek(page, F);
@@ -231,6 +248,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   await noGlError();
 
   mem("after 3D export");
+  step('perf with a 3D block over the whole clip');
   // ---- perf with a 3D block over the whole clip
   await editProject(page, "3D over the clip", "(p) => ({ ...p, motion3d: [{ id: 'perf', startMs: 0, endMs: 3000, template: 'custom', from: { rx: 20, ry: -25 }, to: { rx: -10, ry: 25 }, easing: 'linear', perspective: 1600 }] })");
   const fps3d = await measureFps(page);
