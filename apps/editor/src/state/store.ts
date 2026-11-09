@@ -18,7 +18,7 @@ import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
 import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
-import { frameForSource, freezeAutoZooms, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
+import { blocksOf, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, type BlockRef, type TrackKind } from "./timelineOps";
 
 export interface Selection {
   track: TrackKind;
@@ -58,7 +58,10 @@ export interface EditorState {
   /** Playback direction and speed for J/K/L: -4..4, never 0 while playing. */
   rate: number;
   loop: boolean;
+  /** Primary selected block (the one the inspector shows); always part of multi when set. */
   selection: Selection | null;
+  /** Every selected timeline block (zoom indices into plan.zoomSegments, like selection). */
+  multi: Selection[];
   selectedWords: number[];
   toast: { text: string; id: number } | null;
   exporting: ExportState | null;
@@ -145,6 +148,7 @@ export class EditorStore {
     rate: 1,
     loop: false,
     selection: null,
+    multi: [],
     selectedWords: [],
     toast: null,
     exporting: null,
@@ -190,6 +194,8 @@ export class EditorStore {
   };
 
   private set(patch: Partial<EditorState>): void {
+    // a plain selection change (select(), selectAnnotation(), undo ...) resets the group to it
+    if ("selection" in patch && !("multi" in patch)) patch = { ...patch, multi: patch.selection ? [patch.selection] : [] };
     this.s = { ...this.s, ...patch };
     for (const l of this.listeners) l();
   }
@@ -347,6 +353,230 @@ export class EditorStore {
 
   select(sel: Selection | null): void {
     this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
+  }
+
+  // ------------------------------------------------------------------ multi-select (timeline groups)
+
+  private blockCount(track: TrackKind): number {
+    return track === "zoom" ? (this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments).length : blocksOf(this.history.doc, track).length;
+  }
+
+  private uiRange(sel: Selection): { startMs: number; endMs: number } | null {
+    return (sel.track === "zoom" ? (this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments) : blocksOf(this.history.doc, sel.track))[sel.index] ?? null;
+  }
+
+  private valid(sel: Selection): boolean {
+    return Number.isInteger(sel.index) && sel.index >= 0 && sel.index < this.blockCount(sel.track);
+  }
+
+  /** Replace the group; the primary is `primary` when given (and in the group), else the last item. */
+  setSelection(items: Selection[], primary?: Selection | null): void {
+    const seen = new Set<string>();
+    const multi = items.filter((x) => this.valid(x) && !seen.has(`${x.track}:${x.index}`) && (seen.add(`${x.track}:${x.index}`), true)).map((x) => ({ track: x.track, index: x.index }));
+    const prim = primary && multi.find((x) => x.track === primary.track && x.index === primary.index);
+    const selection = prim ?? multi[multi.length - 1] ?? null;
+    this.set({ multi, selection, ...(selection ? { selectedWords: [], canvasSel: null } : {}), zoomPlacing: selection?.track === "zoom" ? this.s.zoomPlacing : false });
+  }
+
+  isSelected(sel: Selection): boolean {
+    return this.s.multi.some((x) => x.track === sel.track && x.index === sel.index);
+  }
+
+  /** Ctrl/Cmd-click: add a block to the group (it becomes primary) or take it out. */
+  toggleSelect(sel: Selection): void {
+    if (this.isSelected(sel)) {
+      const multi = this.s.multi.filter((x) => !(x.track === sel.track && x.index === sel.index));
+      const keep = this.s.selection && !(this.s.selection.track === sel.track && this.s.selection.index === sel.index) ? this.s.selection : null;
+      this.setSelection(multi, keep);
+    } else this.setSelection([...this.s.multi, sel], sel);
+  }
+
+  /**
+   * Shift-click: every block of the primary's track between it and `sel` in time (both included) is
+   * added to the group; on another track (or with nothing selected) `sel` is just added.
+   */
+  selectRange(sel: Selection): void {
+    const a = this.s.selection;
+    const ra = a && this.uiRange(a);
+    const rb = this.uiRange(sel);
+    if (!a || !ra || !rb || a.track !== sel.track) return this.setSelection([...this.s.multi, sel], sel);
+    const lo = Math.min(ra.startMs, rb.startMs);
+    const hi = Math.max(ra.startMs, rb.startMs);
+    const blocks = sel.track === "zoom" ? this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments : blocksOf(this.history.doc, sel.track);
+    const span: Selection[] = [];
+    blocks.forEach((b, index) => {
+      if (b.startMs >= lo && b.startMs <= hi) span.push({ track: sel.track, index });
+    });
+    this.setSelection([...this.s.multi, ...span], a);
+  }
+
+  /** Select every block of one track (or of every track). */
+  selectAll(track?: TrackKind): void {
+    const out: Selection[] = [];
+    for (const t of track ? [track] : TRACK_KINDS) for (let index = 0; index < this.blockCount(t); index++) out.push({ track: t, index });
+    this.setSelection(out);
+  }
+
+  /** The group (or the single selection) as doc refs on `p`: zoom plan indices become p.zoom.segments indices. */
+  private groupItems(): Selection[] {
+    return this.s.multi.length ? this.s.multi : this.s.selection ? [this.s.selection] : [];
+  }
+
+  /**
+   * Doc refs for UI items. Zoom items point at plan.zoomSegments; when auto zoom is on they are
+   * frozen into the project first (inside the same edit, so one undo restores auto zoom too).
+   */
+  private toDoc(p: ProjectConfig, items: Selection[]): { doc: ProjectConfig; refs: BlockRef[] } {
+    const zooms = items.filter((x) => x.track === "zoom");
+    const planZ = this.s.plan?.zoomSegments ?? p.zoom.segments;
+    const doc = zooms.length && p.zoom.auto && this.s.plan ? freezeAutoZooms(p, this.s.plan.zoomSegments) : p;
+    const refs: BlockRef[] = [];
+    for (const x of items) {
+      if (x.track !== "zoom") {
+        refs.push({ track: x.track, index: x.index });
+        continue;
+      }
+      const z = planZ[x.index];
+      if (!z) continue;
+      let i = doc.zoom.segments.findIndex((s) => s.id === z.id);
+      if (i < 0) i = doc.zoom.segments.findIndex((s) => Math.abs(s.startMs - z.startMs) < 0.5 && Math.abs(s.endMs - z.endMs) < 0.5);
+      if (i >= 0) refs.push({ track: "zoom", index: i });
+    }
+    return { doc, refs };
+  }
+
+  /** Doc refs back to UI selections after the plan rebuilt (zoom via segment id). */
+  private toUi(p: ProjectConfig, refs: BlockRef[]): Selection[] {
+    const planZ = this.s.plan?.zoomSegments ?? p.zoom.segments;
+    const out: Selection[] = [];
+    for (const r of refs) {
+      if (r.track !== "zoom") out.push({ track: r.track, index: r.index });
+      else {
+        const id = p.zoom.segments[r.index]?.id;
+        const i = planZ.findIndex((z) => z.id === id);
+        if (i >= 0) out.push({ track: "zoom", index: i });
+      }
+    }
+    return out;
+  }
+
+  private duration(): number {
+    return this.s.bundle?.meta.durationMs ?? Infinity;
+  }
+
+  private noun(n: number): string {
+    return n === 1 ? "block" : `${n} blocks`;
+  }
+
+  /** Delete every selected block: one undo step. Returns how many were deleted. */
+  deleteSelected(): number {
+    const items = this.groupItems();
+    if (!items.length) return 0;
+    let n = 0;
+    this.edit(`Delete ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      n = refs.length;
+      return deleteBlocks(doc, refs);
+    });
+    this.set({ selection: null, editingText: null });
+    return n;
+  }
+
+  /** Move every selected block by deltaMs (clamped as a group): one undo step. Returns the delta applied. */
+  moveSelected(deltaMs: number, label?: string): number {
+    const items = this.groupItems();
+    if (!items.length || !deltaMs) return 0;
+    let applied = 0;
+    let moved: BlockRef[] = [];
+    const prim = this.primaryAt();
+    this.edit(label ?? `Move ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      const r = moveBlocks(doc, refs, deltaMs, this.duration());
+      applied = r.deltaMs;
+      moved = r.items;
+      return applied ? r.project : p;
+    });
+    if (applied) this.reselect(moved, prim && { track: prim.track, atMs: prim.startMs + applied });
+    return applied;
+  }
+
+  /** Arrow-key nudge: one output frame (or a second with big), as one undo step. */
+  nudge(dir: -1 | 1, big = false): number {
+    const fps = this.s.plan?.output.fps ?? this.s.bundle?.meta.fps ?? 30;
+    return this.moveSelected(dir * (big ? 1000 : 1000 / fps), "Nudge");
+  }
+
+  private dragBase: { doc: ProjectConfig; refs: BlockRef[]; items: Selection[]; moved: BlockRef[]; delta: number; prim: { track: TrackKind; startMs: number } | null } | null = null;
+
+  /** Group drag: begin (auto zooms freeze inside the gesture), preview(total delta), end = one undo step. */
+  beginMoveSelected(): void {
+    const items = this.groupItems();
+    if (!items.length) return;
+    this.beginGesture();
+    const { doc, refs } = this.toDoc(this.history.doc, items);
+    if (doc !== this.history.doc) this.preview(() => doc);
+    this.dragBase = { doc, refs, items, moved: refs, delta: 0, prim: this.primaryAt() };
+  }
+
+  previewMoveSelected(totalDeltaMs: number): number {
+    const b = this.dragBase;
+    if (!b) return 0;
+    const r = moveBlocks(b.doc, b.refs, totalDeltaMs, this.duration(), false);
+    b.moved = r.items;
+    b.delta = r.deltaMs;
+    this.preview(() => r.project);
+    return r.deltaMs;
+  }
+
+  endMoveSelected(): void {
+    const b = this.dragBase;
+    if (!b) return;
+    this.dragBase = null;
+    let refs = b.moved;
+    this.endGesture(`Move ${this.noun(b.items.length)}`, (p) => {
+      if (!refs.some((r) => r.track === "cut")) return p;
+      const r = moveBlocks(p, refs, 0, this.duration());
+      refs = r.items;
+      return r.project;
+    });
+    this.reselect(refs, b.prim && { track: b.prim.track, atMs: b.prim.startMs + b.delta });
+  }
+
+  /** Duplicate every selected block right after the group: one undo step; the copies become the selection. */
+  duplicateSelected(): number {
+    const items = this.groupItems();
+    if (!items.length) return 0;
+    let copies: BlockRef[] = [];
+    let skipped = 0;
+    this.edit(`Duplicate ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      const r = duplicateBlocks(doc, refs, this.duration());
+      copies = r.items;
+      skipped = r.skipped;
+      return copies.length ? r.project : p;
+    });
+    if (copies.length) this.reselect(copies, null);
+    if (skipped) this.notify(`${skipped} block${skipped > 1 ? "s" : ""} had no room to duplicate`);
+    return copies.length;
+  }
+
+  /** The primary block's track and start, to find it again after an edit. */
+  private primaryAt(): { track: TrackKind; startMs: number } | null {
+    const sel = this.s.selection;
+    const r = sel && this.uiRange(sel);
+    return sel && r ? { track: sel.track, startMs: r.startMs } : null;
+  }
+
+  /** Select `refs` (doc space) after an edit; the block holding `primary.atMs` on its track stays primary. */
+  private reselect(refs: BlockRef[], primary: { track: TrackKind; atMs: number } | null): void {
+    const ui = this.toUi(this.history.doc, refs);
+    const prim = primary
+      ? ui.find((x) => {
+          const r = x.track === primary.track ? this.uiRange(x) : null;
+          return !!r && primary.atMs >= r.startMs - 0.5 && primary.atMs <= r.endMs + 0.5;
+        })
+      : null;
+    this.setSelection(ui, prim ?? null);
   }
 
   selectCanvas(which: EditorState["canvasSel"]): void {
