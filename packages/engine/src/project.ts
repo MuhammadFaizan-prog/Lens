@@ -35,6 +35,12 @@ export interface ProjectConfig {
     /** Height of the output for 16:9, or the short side for other aspects. */
     resolution: 360 | 480 | 720 | 1080 | 1440 | 2160;
     fps: 24 | 30 | 60;
+    /**
+     * How the recording fills an output whose aspect differs from it (9:16 for a 16:9 screen):
+     * "fit" (default) letterboxes the whole screen inside the padding; "fill" crops in to fill the
+     * frame and pans to follow the cursor or a fixed zoom target (Windows bug #8).
+     */
+    fit?: "fit" | "fill";
   };
   background: {
     kind: "solid" | "gradient" | "image";
@@ -441,6 +447,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (!["auto", "off"].includes(p.transcription.mode)) errs.push("transcription.mode must be auto or off");
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
+  if (p.output.fit !== undefined && p.output.fit !== "fit" && p.output.fit !== "fill") errs.push("output.fit must be fit or fill");
   if (p.captions.style.maxWordsPerLine < 1) errs.push("captions.style.maxWordsPerLine must be >= 1");
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));

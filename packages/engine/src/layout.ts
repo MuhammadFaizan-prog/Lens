@@ -157,3 +157,24 @@ export function scaleCameraRect(layout: FrameLayout, factor: number, corner: Pro
   const y = corner.startsWith("bottom") ? c.y + c.h - h : c.y;
   return { ...layout, camera: { x, y, w, h } };
 }
+
+/**
+ * Fill mode (output.fit = "fill", Windows bug #8): the screen rect that covers the whole output at the
+ * source aspect, panned so source x `focusX` (in the current camera viewport [x0, x0 + vw]) sits at the
+ * output centre, clamped so no background shows. Vertical pan likewise for outputs wider than the source.
+ */
+export function fillScreenRect(out: { width: number; height: number }, sourceAspect: number, view: { x0: number; vw: number; y0: number; vh: number }, focus: { x: number; y: number }): Rect {
+  const W = out.width;
+  const H = out.height;
+  let w = H * sourceAspect;
+  let h = H;
+  if (w < W) {
+    w = W;
+    h = W / sourceAspect;
+  }
+  const kx = w / view.vw;
+  const ky = h / view.vh;
+  const x = Math.min(0, Math.max(W - w, W / 2 - (focus.x - view.x0) * kx));
+  const y = Math.min(0, Math.max(H - h, H / 2 - (focus.y - view.y0) * ky));
+  return { x, y, w, h };
+}

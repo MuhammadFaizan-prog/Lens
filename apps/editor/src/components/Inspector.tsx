@@ -155,6 +155,9 @@ function LookTab({ p }: { p: ProjectConfig }) {
       </Section>
       <Section title="Output">
         <Segmented label="Aspect" value={p.output.aspect} testId="aspect" options={["16:9", "1:1", "4:5", "9:16"].map((a) => ({ value: a, label: a }))} onChange={(v) => store.edit(`Aspect ${v}`, (q) => ({ ...q, output: { ...q.output, aspect: v } }))} />
+        <Segmented label="Screen" value={p.output.fit ?? "fit"} testId="output-fit" options={[{ value: "fit", label: "Fit" }, { value: "fill", label: "Fill & follow" }]}
+          onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
+        {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
       </Section>
     </>
   );

@@ -1,10 +1,11 @@
 import { buildAudioPlan, type AudioPlan } from "./audio.js";
 import { effectiveZoomSegments } from "./autozoom.js";
-import { buildCameraTrack, lerpCamera, zoomBlendTrack, type CameraSample } from "./camera.js";
+import { activeSegment, buildCameraTrack, lerpCamera, zoomBlendTrack, type CameraSample } from "./camera.js";
+import { stepSpring, type SpringState } from "./spring.js";
 import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalizeCrop, zoomableEvents } from "./crop.js";
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
-import { layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
+import { fillScreenRect, layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
@@ -146,11 +147,14 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const cursor: CursorSample[] = buildCursorTrack(events, meta, project.cursor, fps, project.overrides);
   const zoomSegments = effectiveZoomSegments(zoomableEvents(events, crop), meta, { ...project.zoom, segments: cropZoomSegments(project.zoom.segments, crop) });
   const staticLayout = layoutFor(project.camera.enabled ? "camera-overlay" : "screen-only", out, sourceAspect, project);
+  // Fill mode (Windows bug #8): crop in to fill a differently shaped output and pan with the action.
+  const fill = project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
   const camera: CameraSample[] = buildCameraTrack(cursor, zoomSegments, meta, {
     spring: project.zoom.spring,
     followDeadzone: project.zoom.followDeadzone,
-    avoid: overlayAvoidRect(staticLayout),
+    avoid: fill ? null : overlayAvoidRect(staticLayout),
   });
+  const pan = fill ? buildPanTrack(cursor, camera, zoomSegments, meta, out, sourceAspect, project.zoom.spring) : [];
 
   // 2. Edit timeline (cuts, manual speed, typing speed-up).
   const speed = [...project.edits.speed];
@@ -200,6 +204,12 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     if (blend.length) {
       const b = sampleTrack(blend, src, (p, q, u) => ({ t: p.t + (q.t - p.t) * u, v: p.v + (q.v - p.v) * u })).v;
       layout = scaleCameraRect(layout, 1 + (project.camera.zoomedSize - 1) * b, project.camera.corner);
+    }
+    if (fill && pan.length && (layout.kind === "screen-only" || layout.kind === "camera-overlay" || layout.kind === "camera-cutout")) {
+      const p = sampleTrack(pan, src, (a, b, u) => ({ t: a.t + (b.t - a.t) * u, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }));
+      const vw = meta.width / c.scale;
+      const vh = meta.height / c.scale;
+      layout = { ...layout, screen: fillScreenRect(out, sourceAspect, { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh }, p) };
     }
     const curVisible = project.cursor.visible && k.opacity > 0.001 && insideCrop(k, crop);
     const activeClicks = project.cursor.clickEffect === "none"
@@ -277,4 +287,54 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     ...(theme.watermark ? { watermark: theme.watermark } : {}),
     frames: planFrames,
   };
+}
+
+/**
+ * Fill-mode pan focus per cursor sample (source px, cropped space): a fixed zoom target when one is
+ * active, else the cursor with a deadzone of half the visible half-width, spring-smoothed with the
+ * zoom spring so the crop glides rather than jumps.
+ */
+function buildPanTrack(
+  cursor: CursorSample[],
+  camera: CameraSample[],
+  segments: ZoomSegment[],
+  meta: RecordingMeta,
+  out: { width: number; height: number },
+  sourceAspect: number,
+  spring: ProjectConfig["zoom"]["spring"],
+): Array<{ t: number; x: number; y: number }> {
+  const coverW = Math.max(out.height * sourceAspect, out.width);
+  const coverH = coverW / sourceAspect;
+  const visX = out.width / coverW;
+  const visY = out.height / coverH;
+  const res: Array<{ t: number; x: number; y: number }> = [];
+  let fx = cursor[0]?.x ?? meta.width / 2;
+  let fy = cursor[0]?.y ?? meta.height / 2;
+  let sx: SpringState = { x: fx, v: 0 };
+  let sy: SpringState = { x: fy, v: 0 };
+  for (let i = 0; i < cursor.length; i++) {
+    const cur = cursor[i]!;
+    const cam = camera[Math.min(i, camera.length - 1)];
+    const scale = cam ? cam.scale : 1;
+    const seg = activeSegment(segments, cur.t);
+    if (seg && seg.focus !== "follow") {
+      fx = seg.focus.x;
+      fy = seg.focus.y;
+    } else {
+      const dzX = ((visX * meta.width) / scale / 2) * 0.5;
+      const dzY = ((visY * meta.height) / scale / 2) * 0.5;
+      if (Math.abs(cur.x - fx) > dzX) fx += cur.x - fx - Math.sign(cur.x - fx) * dzX;
+      if (Math.abs(cur.y - fy) > dzY) fy += cur.y - fy - Math.sign(cur.y - fy) * dzY;
+    }
+    if (i === 0) {
+      sx = { x: fx, v: 0 };
+      sy = { x: fy, v: 0 };
+    } else {
+      const dt = cur.t - cursor[i - 1]!.t;
+      sx = stepSpring(sx, fx, dt, spring);
+      sy = stepSpring(sy, fy, dt, spring);
+    }
+    res.push({ t: cur.t, x: sx.x, y: sy.x });
+  }
+  return res;
 }
