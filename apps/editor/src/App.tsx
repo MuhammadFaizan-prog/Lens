@@ -57,16 +57,16 @@ function TopBar() {
         <PresetsMenu />
         <input ref={file} type="file" accept=".json,application/json" hidden data-testid="open-input" onChange={(e) => onFile(e.target.files?.[0])} />
         <button className="btn ghost" data-testid="open" onClick={() => file.current?.click()}>
-          <Icon name="open" /> Open
+          <Icon name="open" /> <span className="btn-label">Open</span>
         </button>
         <button className="btn ghost" data-testid="save" onClick={() => store.save()}>
-          <Icon name="save" /> Save
+          <Icon name="save" /> <span className="btn-label">Save</span>
         </button>
         <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo or step guide" onClick={() => store.openExportDialog("demo")}>
           Export…
         </button>
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
-          <Icon name="export" /> Export MP4
+          <Icon name="export" /> <span className="btn-label">Export</span> MP4
         </button>
         <AboutButton />
       </div>
@@ -166,10 +166,10 @@ function ExportSheet() {
   const dir = new URLSearchParams(location.search).get("dir");
   const fileUrl = `/api/export/${ex.id}/file${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`;
   return (
-    <div className="sheet-backdrop" onClick={() => store.closeExport()}>
+    <div className="sheet-backdrop" onClick={() => ex.state !== "running" && ex.state !== "starting" && store.closeExport()}>
       <div className="sheet" role="dialog" aria-label="Export" data-testid="export-sheet" onClick={(e) => e.stopPropagation()}>
         <header>
-          <h2>{ex.state === "done" ? "Export ready" : ex.state === "error" ? "Export failed" : "Exporting"}</h2>
+          <h2>{ex.state === "done" ? "Export ready" : ex.state === "error" ? (ex.error === "Export cancelled" ? "Export cancelled" : "Export failed") : "Exporting"}</h2>
           {ex.state !== "running" && (
             <button className="icon-btn" aria-label="Close" onClick={() => store.closeExport()}>
               <Icon name="close" />
@@ -192,6 +192,11 @@ function ExportSheet() {
           </>
         )}
         {ex.state === "error" && <pre className="error" data-testid="export-error">{ex.error}</pre>}
+        {(ex.state === "running" || ex.state === "starting") && (
+          <div className="sheet-actions">
+            <button className="btn" data-testid="export-cancel" onClick={() => void store.cancelExport()}>Cancel export</button>
+          </div>
+        )}
         {ex.state === "done" && (
           <div className="export-done">
             <video src={fileUrl} controls muted className="export-video" data-testid="export-video" />

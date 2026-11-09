@@ -981,9 +981,26 @@ export class EditorStore {
    * renderer into an offscreen canvas and posted as a JPEG; the server pipes them into ffmpeg and
    * mixes the plan's audio (server/browserExport.ts).
    */
+  private exportWorker: Worker | null = null;
+  private exportCancel = false;
+
+  /** Stop a running export (Windows bug #11): the worker stops between frames and ffmpeg is killed. */
+  async cancelExport(): Promise<void> {
+    const ex = this.s.exporting;
+    if (!ex || (ex.state !== "running" && ex.state !== "starting")) return;
+    this.exportCancel = true;
+    this.exportWorker?.postMessage({ type: "cancel" });
+    this.exportWorker?.terminate();
+    this.exportWorker = null;
+    if (ex.id) await fetch(`/api/export-browser/${ex.id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+    this.set({ exporting: { ...ex, state: "error", error: "Export cancelled" } });
+    this.notify("Export cancelled");
+  }
+
   private async exportInBrowser(): Promise<void> {
     const b = this.s.bundle;
     if (!b || !this.screen) return;
+    this.exportCancel = false;
     const plan = buildPlan(b, this.s.project);
     const total = plan.frames.length;
     const t0 = performance.now();
@@ -994,17 +1011,66 @@ export class EditorStore {
     if (!r.ok) return fail(j.error);
     const id = j.id as string;
     if (j.total !== total) return fail(`plan mismatch: server ${j.total} frames, editor ${total}`, id);
+    if (this.exportCancel) return;
+    this.set({ exporting: { id, state: "running", done: 0, total, path: "browser", seconds: 0 } });
+    const q = this.dirQuery();
+    const rendered = (globalThis as { __lensNoExportWorker?: boolean }).__lensNoExportWorker || typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined"
+      ? await this.renderOnPage(plan, id, q, t0)
+      : await this.renderInWorker(plan, id, q, t0);
+    if (!rendered) return;
+    const poll = async () => {
+      const s = await (await fetch(`/api/export/${id}${q}`)).json();
+      if (this.exportCancel) return;
+      if (s.state === "running") return void setTimeout(poll, 300);
+      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser" } });
+      if (s.state === "done") this.notify("Export finished");
+    };
+    setTimeout(poll, 200);
+  }
+
+  /** Frames drawn and encoded in a Web Worker: the editor stays responsive during a long export. */
+  private renderInWorker(plan: RenderPlan, id: string, q: string, t0: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const w = new Worker(new URL("../export/exportWorker.ts", import.meta.url), { type: "module" });
+      this.exportWorker = w;
+      const total = plan.frames.length;
+      w.onmessage = (e: MessageEvent) => {
+        const m = e.data as { type: string; done?: number; error?: string };
+        if (this.exportCancel) return;
+        if (m.type === "progress") this.set({ exporting: { id, state: "running", done: m.done ?? 0, total, path: "browser", seconds: (performance.now() - t0) / 1000 } });
+        else {
+          w.terminate();
+          this.exportWorker = null;
+          if (m.type === "rendered") resolve(true);
+          else {
+            if (m.type === "error") this.set({ exporting: { id, state: "error", done: m.done ?? 0, total, error: m.error, path: "browser" } });
+            resolve(false);
+          }
+        }
+      };
+      w.onerror = (e) => {
+        this.exportWorker = null;
+        this.set({ exporting: { id, state: "error", done: 0, total, error: `export worker: ${e.message}`, path: "browser" } });
+        resolve(false);
+      };
+      const scr = this.screen!;
+      const cam = this.cam && this.s.project.camera.enabled ? this.cam : null;
+      w.postMessage({ type: "start", id, plan, query: q, screen: { count: scr.count, fps: scr.fps }, cam: cam ? { count: cam.count, fps: cam.fps } : null });
+    });
+  }
+
+  /** Fallback without workers / OffscreenCanvas: the same loop on the page, yielding between frames. */
+  private async renderOnPage(plan: RenderPlan, id: string, q: string, t0: number): Promise<boolean> {
+    const total = plan.frames.length;
     await ensurePlanAssets(plan);
     const renderer = new PlanRenderer();
     const canvas = makeCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d") as CanvasRenderingContext2D;
-    const q = this.dirQuery();
     const sep = q ? "&" : "?";
-    // own frame stores with a small window, released behind the playhead, so a long export does not
-    // keep every source frame in memory (the preview's stores are left alone)
-    const scrStore = new FrameStore("screen", this.screen.count, this.screen.fps, q, 6);
+    const scrStore = new FrameStore("screen", this.screen!.count, this.screen!.fps, q, 6);
     const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6) : null;
     for (let i = 0; i < total; i++) {
+      if (this.exportCancel) return false;
       const f = plan.frames[i]!;
       const si = scrStore.indexAt(f.src);
       const ci = camStore ? camStore.indexAt(f.src) : 0;
@@ -1014,17 +1080,15 @@ export class EditorStore {
       camStore?.releaseBelow(ci);
       const blob = "convertToBlob" in canvas ? await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 }) : await new Promise<Blob>((res) => (canvas as HTMLCanvasElement).toBlob((x) => res(x!), "image/jpeg", 0.95));
       const fr = await fetch(`/api/export-browser/${id}/frame${q}${sep}i=${i}`, { method: "POST", body: blob });
-      if (!fr.ok) return fail((await fr.json()).error ?? `frame ${i} failed`, id, i);
+      if (!fr.ok) {
+        this.set({ exporting: { id, state: "error", done: i, total, error: (await fr.json()).error ?? `frame ${i} failed`, path: "browser" } });
+        return false;
+      }
       if (i % 5 === 0 || i === total - 1) this.set({ exporting: { id, state: "running", done: i + 1, total, path: "browser", seconds: (performance.now() - t0) / 1000 } });
+      await new Promise((res) => setTimeout(res, 0)); // let input and paint through
     }
     await fetch(`/api/export-browser/${id}/finish${q}`, { method: "POST" });
-    const poll = async () => {
-      const s = await (await fetch(`/api/export/${id}${q}`)).json();
-      if (s.state === "running") return void setTimeout(poll, 300);
-      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser" } });
-      if (s.state === "done") this.notify("Export finished");
-    };
-    setTimeout(poll, 200);
+    return true;
   }
 
   // ------------------------------------------------------------------ interactive demo / step guide (demand #7)

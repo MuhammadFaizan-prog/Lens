@@ -554,9 +554,22 @@ export function apiMiddleware() {
         const job = startExportBrowser(bundle, body.project);
         return sendJson(res, { id: job.id, total: job.total });
       }
-      if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish)$/.exec(url.pathname)) && req.method === "POST") {
+      if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish|cancel)$/.exec(url.pathname)) && req.method === "POST") {
         const job = jobs.get(m[1]!);
         if (!job || !("ff" in job)) return sendJson(res, { error: "no such export" }, 404);
+        if (m[2] === "cancel") {
+          // Windows bug #11: long jobs can be cancelled; ffmpeg is stopped and the partial file left behind
+          if (job.state === "running") {
+            job.state = "error";
+            job.error = "cancelled";
+            try {
+              job.ff.kill("SIGKILL");
+            } catch {
+              // already gone
+            }
+          }
+          return sendJson(res, { ok: true });
+        }
         if (m[2] === "finish") {
           finishBrowserExport(job);
           return sendJson(res, { ok: true });

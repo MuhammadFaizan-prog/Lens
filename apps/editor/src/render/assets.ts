@@ -33,6 +33,11 @@ export function fontUrl(ref: string): string {
   return `/api/font/file${dirQuery}${sep}ref=${encodeURIComponent(ref)}`;
 }
 
+/** The page's FontFaceSet, or the worker's (exports render in a worker, Windows bug #11). */
+export function fontSet(): FontFaceSet {
+  return ((globalThis as unknown as { fonts?: FontFaceSet }).fonts ?? document.fonts) as FontFaceSet;
+}
+
 const fonts = new Map<string, Promise<boolean>>();
 
 function loadFont(f: FontFiles): Promise<boolean> {
@@ -43,8 +48,8 @@ function loadFont(f: FontFiles): Promise<boolean> {
       try {
         const name = `Lens ${f.family}`;
         const [r, b] = await Promise.all([new FontFace(name, `url(${fontUrl(f.regular)})`, { weight: "normal" }).load(), new FontFace(name, `url(${fontUrl(f.bold)})`, { weight: "bold" }).load()]);
-        document.fonts.add(r);
-        document.fonts.add(b);
+        fontSet().add(r);
+        fontSet().add(b);
         return true;
       } catch {
         return false;
