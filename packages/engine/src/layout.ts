@@ -41,7 +41,8 @@ export function layoutFor(
   cfg: ProjectConfig,
 ): FrameLayout {
   const short = Math.min(out.width, out.height);
-  const pad = cfg.frame.padding * short;
+  // a hidden backdrop has nothing to show around the recording: it fills the frame
+  const pad = cfg.background.kind === "hidden" ? 0 : cfg.frame.padding * short;
   const area: Rect = { x: pad, y: pad, w: out.width - 2 * pad, h: out.height - 2 * pad };
   const camSize = cfg.camera.size * short;
   const margin = Math.max(pad * 0.5, short * 0.03);

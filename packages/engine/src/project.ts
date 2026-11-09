@@ -43,11 +43,20 @@ export interface ProjectConfig {
     fit?: "fit" | "fill";
   };
   background: {
-    kind: "solid" | "gradient" | "image";
+    /** "hidden": no backdrop at all, the recording fills the frame (no padding, corners or shadow). */
+    kind: "solid" | "gradient" | "image" | "hidden";
     colors: string[];
     /** Gradient angle in degrees. */
     angle: number;
+    /**
+     * Gradient stop positions (0..1 along the gradient), one per colour, in any order: the user drags
+     * them freely. Absent (or a length that does not match colors) = evenly spaced.
+     */
+    stops?: number[];
+    /** kind image: a bundle-relative / absolute file, or "builtin:<id>" for Lens's own procedural art. */
     imagePath?: string;
+    /** kind image: scale to cover the frame (crop) or fit inside it (colors[0] around). Default cover. */
+    fit?: "cover" | "contain";
     blur: number;
     /**
      * Follow the theme backdrop (preset palette < brand kit, see palette.ts) instead of kind / colors /
@@ -478,6 +487,12 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));
   if (!isColorValue(p.captions.style.highlightColor) || !isColorValue(p.captions.style.textColor)) errs.push("caption colours must be #rrggbb or a theme slot (@highlight)");
+  if (!["solid", "gradient", "image", "hidden"].includes(p.background.kind)) errs.push("background.kind must be solid, gradient, image or hidden");
+  const st = p.background.stops;
+  if (st !== undefined && !(Array.isArray(st) && st.length === p.background.colors.length && st.every((v) => Number.isFinite(v) && v >= 0 && v <= 1)))
+    errs.push("background.stops must give one position in 0..1 per colour");
+  if (p.background.kind === "image" && !p.background.imagePath) errs.push("background.imagePath is required for an image backdrop");
+  if (p.background.fit !== undefined && p.background.fit !== "cover" && p.background.fit !== "contain") errs.push("background.fit must be cover or contain");
   if (typeof p.background.inherit !== "boolean") errs.push("background.inherit must be true or false");
   errs.push(...validateTheme(p.theme));
   errs.push(...validateBrand(p.brand));

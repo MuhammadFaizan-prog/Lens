@@ -1,4 +1,5 @@
 import { buildAudioPlan, type AudioPlan } from "./audio.js";
+import { backdropById, type Backdrop } from "./backdropArt.js";
 import { effectiveZoomSegments } from "./autozoom.js";
 import { activeSegment, buildCameraTrack, lerpCamera, zoomBlendTrack, type CameraSample } from "./camera.js";
 import { applyWordEdits, mergeCaptionCues } from "./captionsManual.js";
@@ -34,6 +35,8 @@ export interface RenderPlan {
   source: { width: number; height: number; fps: number; durationMs: number; pixelRatio: number; crop: [number, number, number, number] };
   style: {
     background: ProjectConfig["background"];
+    /** kind image with imagePath "builtin:<id>": the procedural art to draw (Windows bug #20). */
+    backdropArt?: Backdrop;
     radius: number;
     shadow: ProjectConfig["frame"]["shadow"];
     cursorSize: number;
@@ -257,8 +260,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     },
     style: {
       background: project.background,
-      radius: project.frame.radius * resScale,
-      shadow: { ...project.frame.shadow, blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
+      ...(project.background.kind === "image" && project.background.imagePath && backdropById(project.background.imagePath) ? { backdropArt: backdropById(project.background.imagePath)! } : {}),
+      radius: project.background.kind === "hidden" ? 0 : project.frame.radius * resScale,
+      shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
       cursorSize: project.cursor.size,
       cursorShape: project.cursor.shape,
       clickEffect: project.cursor.clickEffect,

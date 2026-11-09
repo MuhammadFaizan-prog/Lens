@@ -81,3 +81,24 @@ describe("free overlay positions (Windows bug #12)", () => {
   });
 });
 
+describe("backdrop kinds (Windows bug #20)", () => {
+  it("hidden fills the frame, image needs a path", () => {
+    const p = resolveProject({ background: { kind: "hidden", inherit: false } });
+    expect(layoutFor("screen-only", { width: 1920, height: 1080 }, 16 / 9, p).screen).toEqual({ x: 0, y: 0, w: 1920, h: 1080 });
+    expect(() => resolveProject({ background: { kind: "image", inherit: false } })).toThrow(/imagePath/);
+    expect(resolveProject({ background: { kind: "image", imagePath: "builtin:aurora", fit: "contain", inherit: false } }).background.fit).toBe("contain");
+  });
+  it("gradient stops are placed freely (one 0..1 position per colour); presets reset them", () => {
+    const p = resolveProject({ background: { kind: "gradient", colors: ["#000000", "#ffffff"], stops: [0.7, 0.2], angle: 90, inherit: false } });
+    expect(p.background.stops).toEqual([0.7, 0.2]);
+    expect(() => resolveProject({ background: { kind: "gradient", colors: ["#000000", "#ffffff"], stops: [0.5], inherit: false } })).toThrow(/stops/);
+    expect(() => resolveProject({ background: { kind: "gradient", colors: ["#000000", "#ffffff"], stops: [0, 1.5], inherit: false } })).toThrow(/stops/);
+  });
+  it("the plan carries the built-in art so the Python compositor draws the same picture", () => {
+    const p = resolveProject({ background: { kind: "image", imagePath: "builtin:ember", inherit: false }, output: { fps: 30, resolution: 360 } });
+    const plan = buildRenderPlan({ meta, events: moves(600, 300), project: p });
+    expect(plan.style.backdropArt).toMatchObject({ id: "ember", style: "rays", seed: 41 });
+    const q = resolveProject({ background: { kind: "solid", colors: ["#123456"], inherit: false }, output: { fps: 30, resolution: 360 } });
+    expect(buildRenderPlan({ meta, events: moves(600, 300), project: q }).style.backdropArt).toBeUndefined();
+  });
+});

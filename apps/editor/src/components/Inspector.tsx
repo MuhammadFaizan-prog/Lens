@@ -7,6 +7,7 @@ import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Contro
 import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
+import { BackgroundPicker } from "./BackgroundPicker";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -158,28 +159,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
   const themeCss = pal.background.colors.length > 1 ? `linear-gradient(135deg, ${pal.background.colors.join(", ")})` : pal.background.colors[0];
   return (
     <>
-      <Section title="Backdrop">
-        <div className="backdrops" data-testid="backdrops">
-          <button className={`backdrop ${p.background.inherit ? "on" : ""}`} title={p.brand.enabled ? "Brand backdrop" : "Theme backdrop (from the preset)"} aria-label="Backdrop Theme" data-testid="backdrop-theme" style={{ background: themeCss }}
-            onClick={() => store.edit("Theme backdrop", (q) => ({ ...q, background: { ...q.background, inherit: true } }))}>
-            <span>{p.brand.enabled ? "Brand" : "Theme"}</span>
-          </button>
-          {BACKDROPS.map((b) => {
-            const on = !p.background.inherit && b.kind === p.background.kind && b.colors.join() === p.background.colors.join();
-            const css = b.kind === "solid" ? b.colors[0] : `linear-gradient(135deg, ${b.colors.join(", ")})`;
-            return (
-              <button key={b.name} className={`backdrop ${on ? "on" : ""} ${b.name === "Paper" ? "light" : ""}`} title={b.name} aria-label={`Backdrop ${b.name}`} style={{ background: css }} onClick={() => store.edit(`Backdrop ${b.name}`, (q) => ({ ...q, background: { ...q.background, kind: b.kind, colors: [...b.colors], inherit: false } }))}>
-                <span>{b.name}</span>
-              </button>
-            );
-          })}
-        </div>
-        {bgNow.kind === "gradient" && <Slider label="Angle" value={bgNow.angle} min={0} max={360} step={5} format={(v) => `${v}°`} onChange={(v) => t("Backdrop angle", (q) => ({ ...q, background: { ...own(q), angle: v } }))} />}
-        <ColorInput label={bgNow.kind === "gradient" ? "From" : "Colour"} value={bgNow.colors[0] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [v, ...b.colors.slice(1)] } }; })} />
-        {bgNow.kind === "gradient" && (
-          <ColorInput label="To" value={bgNow.colors[bgNow.colors.length - 1] ?? "#000000"} onChange={(v) => t("Backdrop colour", (q) => { const b = own(q); return { ...q, background: { ...b, colors: [...b.colors.slice(0, -1), v] } }; })} />
-        )}
-      </Section>
+      <BackgroundPicker p={p} />
       <Section title="Frame">
         <Slider label="Padding" value={p.frame.padding} min={0} max={0.25} step={0.005} format={pct} testId="padding" onChange={(v) => t("Padding", (q) => ({ ...q, frame: { ...q.frame, padding: v } }))} />
         <Slider label="Radius" value={p.frame.radius} min={0} max={60} step={1} format={px} testId="radius" onChange={(v) => t("Corner radius", (q) => ({ ...q, frame: { ...q.frame, radius: v } }))} />

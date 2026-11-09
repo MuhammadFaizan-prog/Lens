@@ -32,6 +32,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import annotations as ann
 from .annotations import draw_items, image_premul, resolve_asset, set_fonts, shaped_font, text_font
 from .audio import build_audio, export_gif, mux_audio
+from .backdrop_art import draw_backdrop_art
 
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -62,18 +63,48 @@ def hex_to_rgb(h: str) -> tuple[int, int, int]:
 
 # ---------------------------------------------------------------- background
 
+def gradient_stops(colors: list, stops) -> list:
+    """[(position, colour)] sorted by position: background.stops when it gives one in 0..1 per colour
+    (stops placed freely, Windows bug #20), else evenly spaced. Same rule as the editor's gradientStops()."""
+    n = len(colors)
+    ok = isinstance(stops, list) and len(stops) == n and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in stops)
+    pos = [float(v) for v in stops] if ok else [i / (n - 1) if n > 1 else 0.0 for i in range(n)]
+    return sorted(zip(pos, colors), key=lambda pc: pc[0])
+
+
 def make_background(style: dict, w: int, h: int) -> np.ndarray:
     bg = style["background"]
     kind = bg.get("kind", "solid")
-    colors = [np.array(hex_to_bgr(c), dtype=np.float32) for c in bg.get("colors", ["#202020"])]
-    if kind == "image" and bg.get("imagePath") and Path(bg["imagePath"]).exists():
+    colors = [np.array(hex_to_bgr(c), dtype=np.float32) for c in bg.get("colors", ["#202020"])] or [np.array(hex_to_bgr("#202020"), np.float32)]
+    blur = float(bg.get("blur", 0) or 0)
+    art = style.get("backdropArt")
+    if kind == "hidden":
+        # no backdrop (Windows bug #20): black behind a recording that fills the frame (as the editor)
+        return np.zeros((h, w, 3), np.float32)
+    if kind == "image" and art:
+        # Lens's own procedural art, drawn larger when blurred so the edges stay solid (as the editor)
+        m = math.ceil(blur * 3)
+        out = draw_backdrop_art(art, w + 2 * m, h + 2 * m)
+        if blur > 0:
+            out = cv2.GaussianBlur(out, (0, 0), blur)
+        out = out[m:m + h, m:m + w]
+        blur = 0
+    elif kind == "image" and bg.get("imagePath") and Path(bg["imagePath"]).exists():
         img = cv2.imread(bg["imagePath"])
         ih, iw = img.shape[:2]
-        s = max(w / iw, h / ih)
-        img = cv2.resize(img, (math.ceil(iw * s), math.ceil(ih * s)), interpolation=cv2.INTER_AREA)
-        y0 = (img.shape[0] - h) // 2
-        x0 = (img.shape[1] - w) // 2
-        out = img[y0:y0 + h, x0:x0 + w].astype(np.float32)
+        contain = bg.get("fit") == "contain"
+        s = min(w / iw, h / ih) if contain else max(w / iw, h / ih)
+        img = cv2.resize(img, (max(1, round(iw * s)), max(1, round(ih * s))), interpolation=cv2.INTER_AREA).astype(np.float32)
+        if contain:
+            # the image inside the frame, colors[0] around it
+            out = np.broadcast_to(colors[0], (h, w, 3)).copy()
+            y0 = (h - img.shape[0]) // 2
+            x0 = (w - img.shape[1]) // 2
+            out[y0:y0 + img.shape[0], x0:x0 + img.shape[1]] = img[:h, :w]
+        else:
+            y0 = (img.shape[0] - h) // 2
+            x0 = (img.shape[1] - w) // 2
+            out = img[y0:y0 + h, x0:x0 + w]
     elif kind == "gradient" and len(colors) >= 2:
         ang = math.radians(bg.get("angle", 135))
         yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -81,15 +112,15 @@ def make_background(style: dict, w: int, h: int) -> np.ndarray:
         proj = (xx - w / 2) * dx + (yy - h / 2) * dy
         span = abs(w / 2 * dx) + abs(h / 2 * dy)
         u = np.clip((proj / span + 1) / 2, 0, 1)
-        n = len(colors) - 1
-        idx = np.minimum((u * n).astype(int), n - 1)
-        frac = (u * n - idx)[..., None]
-        c = np.stack(colors)
-        out = c[idx] * (1 - frac) + c[idx + 1] * frac
+        st = gradient_stops([c for c in colors], bg.get("stops"))
+        pos = np.array([p for p, _ in st], np.float32)
+        out = np.empty((h, w, 3), np.float32)
+        for ch in range(3):
+            out[..., ch] = np.interp(u, pos, np.array([c[ch] for _, c in st], np.float32))
     else:
         out = np.broadcast_to(colors[0], (h, w, 3)).copy()
-    if bg.get("blur", 0) > 0:
-        out = cv2.GaussianBlur(out, (0, 0), bg["blur"])
+    if blur > 0:
+        out = cv2.GaussianBlur(out, (0, 0), blur)
     # Subtle dither so gradients do not band after 8-bit encode (Screen Studio calls this debanding).
     rng = np.random.default_rng(1)
     out = out + rng.uniform(-0.5, 0.5, out.shape).astype(np.float32)

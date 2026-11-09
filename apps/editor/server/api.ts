@@ -384,6 +384,9 @@ export function parseFfmpegVideoInfo(text: string): { width: number; height: num
 function exportProject(bundle: string, raw: unknown) {
   const p = resolveProject(raw);
   p.audio.tracks = p.audio.tracks.map((t) => ({ ...t, path: path.isAbsolute(t.path) ? t.path : path.join(bundle, t.path) }));
+  // an uploaded backdrop lives in the bundle (Windows bug #20); built-in art ("builtin:<id>") is drawn
+  const ip = p.background.imagePath;
+  if (ip && !ip.startsWith("builtin:") && !path.isAbsolute(ip)) p.background.imagePath = path.join(bundle, ip);
   return p;
 }
 

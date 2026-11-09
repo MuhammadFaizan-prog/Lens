@@ -543,6 +543,18 @@ export class EditorStore {
     }
   }
 
+  /** Upload an image into the bundle and use it as the backdrop (Windows bug #20; stays offline, in the bundle). */
+  async uploadBackground(file: File): Promise<void> {
+    try {
+      const bm = await createImageBitmap(file);
+      bm.close();
+      const path = await this.upload(file);
+      this.edit("Backdrop image", (p) => ({ ...p, background: { ...p.background, kind: "image", imagePath: path, fit: p.background.fit ?? "cover", inherit: false } }));
+    } catch (e) {
+      this.notify(`Could not use ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /** Add the user's own font files (regular, and bold if given) and make it the brand font. */
   async addBrandFont(files: File[]): Promise<void> {
     if (!files.length) return;

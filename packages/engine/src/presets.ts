@@ -30,6 +30,8 @@ export interface PresetSections {
     aspect?: string;
     /** "fill": crop in and follow the action when the output aspect differs from the screen's. */
     fit?: "fit" | "fill";
+    /** An image or hidden backdrop (Windows bug #20); solid / gradient backdrops live in the palette. */
+    backdrop?: { kind: "image" | "hidden"; imagePath?: string; fit?: "cover" | "contain"; blur?: number };
     /** Theme palette: primary, accent, caption highlight, backdrop, font. */
     palette?: Partial<Palette>;
     background?: { blur?: number };
@@ -110,6 +112,13 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
     else delete p.output.fit;
     p.background = { ...p.background, kind: bg.kind, colors: [...bg.colors], angle: bg.angle, blur: L.background?.blur ?? 0, inherit: true };
     delete p.background.imagePath;
+    delete p.background.fit;
+    delete p.background.stops; // the palette's gradient is evenly spaced
+    if (L.backdrop) {
+      p.background = { ...p.background, kind: L.backdrop.kind, inherit: false, blur: L.backdrop.blur ?? p.background.blur };
+      if (L.backdrop.imagePath) p.background.imagePath = L.backdrop.imagePath;
+      if (L.backdrop.fit) p.background.fit = L.backdrop.fit;
+    }
     p.frame = merge(d.frame, L.frame);
     p.motionBlur = merge(d.motionBlur, L.motionBlur);
     p.theme = { ...p.theme, palette };
@@ -200,7 +209,11 @@ export function presetFromProject(project: ProjectConfig, name: string, opts: { 
     description: opts.description ?? "",
     revision: opts.revision ?? 1,
     sections: {
-      look: { aspect: p.output.aspect, ...(p.output.fit === "fill" ? { fit: "fill" as const } : {}), palette, background: { blur: p.background.blur }, frame: p.frame, motionBlur: p.motionBlur },
+      look: { aspect: p.output.aspect, ...(p.output.fit === "fill" ? { fit: "fill" as const } : {}),
+        ...(p.background.kind === "image" || p.background.kind === "hidden"
+          ? { backdrop: { kind: p.background.kind, ...(p.background.imagePath ? { imagePath: p.background.imagePath } : {}), ...(p.background.fit ? { fit: p.background.fit } : {}), blur: p.background.blur } }
+          : {}),
+        palette, background: { blur: p.background.blur }, frame: p.frame, motionBlur: p.motionBlur },
       zoom,
       cursor: p.cursor,
       webcam: pickWebcam(p.camera),
@@ -302,7 +315,7 @@ function templates(): Record<PresetSection, Template> {
   const { segments: _s, ...zoom } = d.zoom;
   void _s;
   return {
-    look: { aspect: "", fit: "", palette: { primary: "", accent: "", highlight: "", background: { kind: "", colors: [], angle: 0 }, font: "" }, background: { blur: 0 }, frame: d.frame, motionBlur: d.motionBlur },
+    look: { aspect: "", fit: "", backdrop: { kind: "", imagePath: "", fit: "", blur: 0 }, palette: { primary: "", accent: "", highlight: "", background: { kind: "", colors: [], angle: 0 }, font: "" }, background: { blur: 0 }, frame: d.frame, motionBlur: d.motionBlur },
     zoom,
     cursor: d.cursor,
     webcam: pickWebcam(d.camera),

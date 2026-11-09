@@ -84,6 +84,8 @@ function loadImage(path: string): Promise<ImageBitmap | null> {
 export function planImages(plan: RenderPlan): string[] {
   const out = new Set<string>();
   if (plan.watermark) out.add(plan.watermark.path);
+  const bg = plan.style.background;
+  if (bg.kind === "image" && bg.imagePath && !bg.imagePath.startsWith("builtin:")) out.add(bg.imagePath);
   for (const f of plan.frames) if (f.slide) for (const o of f.slide.ops) if (o.op === "image") out.add(o.path);
   return [...out];
 }
@@ -191,4 +193,14 @@ export function imageAt(path: string, w: number, h: number): AnyCanvas | null {
   }
   scaled.set(key, out);
   return out;
+}
+
+/** Width / height of a loaded image, or null while it loads (starts loading it). */
+export function imageAspect(path: string): number | null {
+  const bm = ready.get(`${dirQuery}|${path}`);
+  if (!bm) {
+    void loadImage(path);
+    return null;
+  }
+  return bm.width / Math.max(1, bm.height);
 }
