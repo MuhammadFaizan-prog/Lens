@@ -334,7 +334,13 @@ export function App() {
   const error = useEditor((s) => s.error);
   useKeys();
   useEffect(() => {
-    void loadCaptionFont().then(() => store.load(new URLSearchParams(location.search).get("dir") ?? undefined));
+    const q = new URLSearchParams(location.search);
+    void loadCaptionFont()
+      .then(() => store.load(q.get("dir") ?? undefined))
+      // desktop Settings > "Auto-play when entering the editor" (Windows #19)
+      .then(() => {
+        if (q.get("autoplay") === "1" && store.get().status === "ready") store.play();
+      });
   }, []);
   return (
     <div className="app" data-status={status}>

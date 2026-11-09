@@ -12,6 +12,7 @@ import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
 import { IMPORT_EXTENSIONS, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
+import { defaultSettings, loadSettings, normalize, saveSettings, shortcutConflict, type Settings } from "./settings";
 
 const APP_ID = "io.github.muhammadfaizanprog.lens"; // = electron-builder appId (scripts/dist-win.mjs)
 export const HOTKEY = process.env.LENS_HOTKEY || "CommandOrControl+Shift+R";
@@ -25,6 +26,23 @@ if (process.env.LENS_USER_DATA) app.setPath("userData", process.env.LENS_USER_DA
 // Windows groups taskbar buttons and picks their icon by AppUserModelID; without it the windows group
 // under electron.exe. Must equal the appId the installer writes on the Start-menu shortcut.
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+
+// ---- settings (Windows #19): loaded before ready (hardware acceleration must be decided now)
+const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+const settingsDefaults = (): Settings => {
+  const d = defaultSettings(app.getPath("videos"), HOTKEY);
+  if (process.env.LENS_RECORDINGS_DIR) d.general.saveDir = process.env.LENS_RECORDINGS_DIR;
+  if (process.env.LENS_RECORDINGS_DIR) d.general.exportDir = path.join(process.env.LENS_RECORDINGS_DIR, "Exports");
+  return d;
+};
+let settings: Settings = loadSettings(settingsFile(), settingsDefaults());
+let hotkey = settings.shortcuts.startStop;
+function applySettingsEnv(): void {
+  process.env.LENS_SAVE_DIR = settings.general.saveDir;
+  process.env.LENS_EXPORT_DIR = settings.general.exportDir;
+}
+applySettingsEnv();
+if (!settings.general.hardwareAcceleration) app.disableHardwareAcceleration();
 
 let recorderWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -101,11 +119,12 @@ function trayIcon(): Electron.NativeImage {
 function updateTray(): void {
   if (!tray) return;
   const recording = !!rec;
-    tray.setToolTip(recording ? "Lens: recording (Ctrl+Shift+R to stop)" : "Lens: ready (Ctrl+Shift+R to record)");
+    tray.setToolTip(recording ? `Lens: recording (${keyLabel(hotkey)} to stop)` : `Lens: ready (${keyLabel(hotkey)} to record)`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: recording ? "Stop recording" : "Start recording", accelerator: HOTKEY, click: () => toggle() },
+      { label: recording ? "Stop recording" : "Start recording", accelerator: hotkey, click: () => toggle() },
       { label: "Show recorder", click: () => showRecorder() },
+      { label: "Settings…", click: () => openSettings() },
       { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() },
       { type: "separator" },
       { label: "Quit Lens", click: () => app.quit() },
@@ -194,7 +213,7 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
   });
   editorWindows.push(win);
   win.on("closed", () => editorWindows.splice(editorWindows.indexOf(win), 1));
-  await win.loadURL(editor.urlFor(dir));
+  await win.loadURL(editor.urlFor(dir) + (settings.general.autoPlay ? "&autoplay=1" : ""));
   return win;
 }
 
@@ -288,6 +307,91 @@ function toggleTeleprompter(): { open: boolean } {
   return { open: true };
 }
 
+const keyLabel = (a: string) => a.replace("CommandOrControl", process.platform === "darwin" ? "Cmd" : "Ctrl");
+
+/** Bind the global shortcuts; on failure nothing is left half-bound (the caller restores the old set). */
+function registerShortcuts(s: Settings["shortcuts"]): { error: string | null } {
+  globalShortcut.unregisterAll();
+  const binds: Array<[keyof Settings["shortcuts"], string, () => void]> = [
+    ["startStop", s.startStop, toggle],
+    ["region", s.region, () => {
+      showRecorder();
+      recorderWin?.webContents.send("lens:mode", "region");
+    }],
+  ];
+  for (const [name, acc, fn] of binds) {
+    if (!acc) continue;
+    let ok = false;
+    try {
+      ok = globalShortcut.register(acc, fn);
+    } catch (e) {
+      return { error: `${name}: "${acc}" is not a valid shortcut (${e instanceof Error ? e.message : String(e)})` };
+    }
+    if (!ok) return { error: `${name}: ${keyLabel(acc)} is already used by another app` };
+  }
+  return { error: null };
+}
+
+function applyLoginItem(): void {
+  // Windows / macOS only (Electron has no login items on Linux); started hidden in the tray
+  if (process.platform === "win32" || process.platform === "darwin") app.setLoginItemSettings({ openAtLogin: settings.general.autoStart, args: ["--hidden"] });
+}
+
+async function gpuSummary(): Promise<{ name: string; acceleration: string }> {
+  try {
+    const info = (await app.getGPUInfo("basic")) as { gpuDevice?: Array<{ active?: boolean; vendorString?: string; deviceString?: string; vendorId?: number; deviceId?: number }> };
+    const devs = info.gpuDevice ?? [];
+    const d = devs.find((x) => x.active) ?? devs[0];
+    const name = d ? [d.vendorString, d.deviceString].filter(Boolean).join(" ") || `vendor 0x${(d.vendorId ?? 0).toString(16)} device 0x${(d.deviceId ?? 0).toString(16)}` : "unknown";
+    const st = app.getGPUFeatureStatus();
+    return { name, acceleration: settings.general.hardwareAcceleration ? `on (${st.gpu_compositing ?? "?"})` : "off" };
+  } catch (e) {
+    return { name: "unavailable", acceleration: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Validate, apply and persist new settings. Shortcut problems are reported and nothing is changed. */
+function setSettings(next: unknown): { ok: boolean; error?: string; settings: Settings; restartNeeded?: boolean } {
+  const n = normalize(next, settingsDefaults());
+  const clash = shortcutConflict(n.shortcuts);
+  if (clash) return { ok: false, error: `${clash[0]} and ${clash[1]} use the same keys`, settings };
+  if (JSON.stringify(n.shortcuts) !== JSON.stringify(settings.shortcuts)) {
+    const r = registerShortcuts(n.shortcuts);
+    if (r.error) {
+      registerShortcuts(settings.shortcuts);
+      return { ok: false, error: r.error, settings };
+    }
+  }
+  const restartNeeded = n.general.hardwareAcceleration !== settings.general.hardwareAcceleration;
+  settings = n;
+  hotkey = n.shortcuts.startStop;
+  applySettingsEnv();
+  applyLoginItem();
+  saveSettings(settingsFile(), settings);
+  updateTray();
+  recorderWin?.webContents.send("lens:settings", settings);
+  return { ok: true, settings, restartNeeded };
+}
+
+let settingsWin: BrowserWindow | null = null;
+function openSettings(): void {
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.show();
+    settingsWin.focus();
+    return;
+  }
+  settingsWin = new BrowserWindow({
+    width: 640, height: 560, title: "Lens Settings", icon: appIcon(), backgroundColor: "#0f1115", autoHideMenuBar: true, show: false,
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: false },
+  });
+  void settingsWin.loadFile(rendererFile("settings.html"));
+  const me = settingsWin;
+  me.once("ready-to-show", () => me.show());
+  me.on("closed", () => {
+    if (settingsWin === me) settingsWin = null;
+  });
+}
+
 function registerIpc(): void {
   ipcMain.handle("lens:capture-source", (_e, id: string, opts?: { systemAudio?: boolean }) => {
     captureSourceId = id;
@@ -304,7 +408,7 @@ function registerIpc(): void {
       return { id: s.id, name: s.name, kind, displayId: d ? String(d.id) : s.display_id || undefined, thumbnail: s.thumbnail.toDataURL(), size: phys ? { width: phys.width, height: phys.height } : null };
     });
   });
-  ipcMain.handle("lens:status", () => ({ hotkey: HOTKEY, hook: !!hook, hookError, recording: !!rec, recordingsDir: recordingsDir(), platform: process.platform }));
+  ipcMain.handle("lens:status", () => ({ hotkey, hook: !!hook, hookError, recording: !!rec, recordingsDir: recordingsDir(), platform: process.platform }));
   ipcMain.handle("lens:begin", () => {
     if (rec) throw new Error("already recording");
     rec = new Recording(recordingsDir(), hook, (batch) => recorderWin?.webContents.send("lens:live", batch));
@@ -315,9 +419,17 @@ function registerIpc(): void {
     if (!rec) throw new Error("no recording");
     const displays = displayGeoms();
     const captured = info.kind === "screen" ? displayForSource(info.displayId, info.sourceId, displays) : null;
-    rec.start(info, captured);
+    rec.start({ ...info, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
+    if (settings.record.hideWhileRecording) recorderWin?.hide();
     return { ok: true };
   });
+  ipcMain.handle("lens:settings-get", async () => ({ settings, defaults: settingsDefaults(), platform: process.platform, gpu: await gpuSummary() }));
+  ipcMain.handle("lens:settings-set", (_e, next: unknown) => setSettings(next));
+  ipcMain.handle("lens:settings-pick-dir", async (e, current: string) => {
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) ?? undefined!, { defaultPath: current, properties: ["openDirectory", "createDirectory"] });
+    return r.canceled ? null : (r.filePaths[0] ?? null);
+  });
+  ipcMain.handle("lens:settings-open", () => openSettings());
   ipcMain.handle("lens:history", () => listHistory(recordingsDir(), ffmpegPath()));
   ipcMain.handle("lens:history-open", async (_e, dir: string) => {
     await openEditor(dir);
@@ -394,7 +506,9 @@ app.whenReady().then(async () => {
   tray.on("double-click", () => showRecorder());
   if (process.env.LENS_E2E) (globalThis as Record<string, unknown>).lensTray = tray;
   updateTray();
-  if (!globalShortcut.register(HOTKEY, toggle)) console.error(`[lens] could not register ${HOTKEY}`);
+  const sc = registerShortcuts(settings.shortcuts);
+  if (sc.error) console.error(`[lens] ${sc.error}`);
+  applyLoginItem();
   buildAppMenu();
   updates.init();
   if (process.env.LENS_OPEN_BUNDLE) await openEditor(process.env.LENS_OPEN_BUNDLE);

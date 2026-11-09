@@ -83,6 +83,10 @@ test("File menu: import a video, export it, history lists and deletes", async ()
     const a = p.streams.find((s: any) => s.codec_type === "audio");
     report.export.video = Number(v?.duration);
     report.export.audio = a ? Number(a.duration) : null;
+    // Settings > Export location (#19): default <save folder>/Exports gets a copy
+    const exDir = path.join(recDir, "Exports");
+    report.export.copies = fs.existsSync(exDir) ? fs.readdirSync(exDir).filter((f) => f.endsWith(".mp4")).map((f) => ({ f, size: fs.statSync(path.join(exDir, f)).size })) : [];
+    report.export.size = fs.statSync(out).size;
   }
 
   // history
@@ -108,6 +112,8 @@ test("File menu: import a video, export it, history lists and deletes", async ()
   expect(report.export.state).toBe("done");
   expect(report.export.audio).not.toBeNull();
   expect(Math.abs(report.export.audio - report.export.video)).toBeLessThanOrEqual(0.1);
+  expect(report.export.copies.length).toBe(1);
+  expect(report.export.copies[0].size).toBe(report.export.size);
   expect(report.historyCount).toBe(3);
   expect(report.historyRows).toBe(3);
   expect(report.historyFirst).toBe(dir);

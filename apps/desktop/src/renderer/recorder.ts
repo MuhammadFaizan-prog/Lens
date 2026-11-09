@@ -25,6 +25,10 @@ interface Bridge {
   historyReveal(dir: string): Promise<void>;
   historyDelete(dir: string): Promise<void>;
   importVideo(file?: string): Promise<{ dir: string } | null>;
+  settingsGet(): Promise<{ settings: AppSettings }>;
+  settingsOpen(): Promise<void>;
+  onSettings(fn: (s: AppSettings) => void): void;
+  onMode(fn: (m: string) => void): void;
   status(): Promise<{ hotkey: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
   begin(): Promise<{ dir: string }>;
   started(info: unknown): Promise<unknown>;
@@ -52,7 +56,24 @@ interface UpdateUi {
 
 const lens = (window as unknown as { lensDesktop: Bridge }).lensDesktop;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;
+interface AppSettings {
+  record: { fps: 30 | 60; quality: "standard" | "high" | "max"; countdown: 0 | 3 | 5; hideWhileRecording: boolean; showSystemCursor: boolean };
+  shortcuts: { startStop: string };
+}
+const QUALITY_BPP = { standard: 0.08, high: 0.12, max: 0.2 } as const;
+// Settings > Record (Windows #19); ?fps= still overrides for tests
+let FPS = Number(new URLSearchParams(location.search).get("fps")) || 30;
+let BPP: number = QUALITY_BPP.high;
+let COUNTDOWN = 0;
+function applySettings(s: AppSettings): void {
+  if (!new URLSearchParams(location.search).get("fps")) FPS = s.record.fps;
+  BPP = QUALITY_BPP[s.record.quality] ?? QUALITY_BPP.high;
+  COUNTDOWN = s.record.countdown;
+  const sc = document.getElementById("syscursor") as HTMLInputElement | null;
+  if (sc && state === "idle") sc.checked = s.record.showSystemCursor;
+  const hk = document.getElementById("hotkey");
+  if (hk) hk.textContent = s.shortcuts.startStop.replace("CommandOrControl", "Ctrl");
+}
 const nowEpoch = () => performance.timeOrigin + performance.now();
 
 let sources: Source[] = [];
@@ -226,6 +247,15 @@ async function start(sourceId?: string): Promise<void> {
   if (!src) throw new Error("no capture source");
   state = "starting";
   lastError = null;
+  if (COUNTDOWN > 0) {
+    const cd = $("countdown");
+    cd.hidden = false;
+    for (let n = COUNTDOWN; n > 0; n--) {
+      cd.textContent = String(n);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    cd.hidden = true;
+  }
   setStatus("Starting…");
   $<HTMLButtonElement>("go").disabled = true;
   try {
@@ -252,7 +282,7 @@ async function start(sourceId?: string): Promise<void> {
     const sysStream = sysTracks.length ? new MediaStream(sysTracks) : null;
     await lens.begin();
     const vMime = pickMime("video");
-    videoRec = new MediaRecorder(video, { mimeType: vMime, videoBitsPerSecond: Math.round(capture.width * capture.height * FPS * 0.12) });
+    videoRec = new MediaRecorder(video, { mimeType: vMime, videoBitsPerSecond: Math.round(capture.width * capture.height * FPS * BPP) });
     videoRec.ondataavailable = (e) => queueChunk("video", e.data);
     audioRec = mic ? new MediaRecorder(mic, { mimeType: pickMime("audio"), audioBitsPerSecond: 128000 }) : null;
     if (audioRec) audioRec.ondataavailable = (e) => queueChunk("audio", e.data);
@@ -570,6 +600,11 @@ async function importVideo(file?: string): Promise<unknown> {
     return null;
   }
 }
+$("gear").onclick = () => void lens.settingsOpen();
+lens.onSettings(applySettings);
+lens.onMode((m) => {
+  if (m === "region" && state === "idle") setMode("region");
+});
 $("file-btn").onclick = (e) => {
   e.stopPropagation();
   $("file-menu").hidden = !$("file-menu").hidden;
@@ -592,6 +627,7 @@ void (async () => {
   const st = await lens.status();
   $("hotkey").textContent = st.hotkey.replace("CommandOrControl", st.platform === "darwin" ? "Cmd" : "Ctrl");
   if (!st.hook) $("hookwarn").textContent = "Click logging is off (input hook unavailable).";
+  await lens.settingsGet().then((r) => applySettings(r.settings)).catch(() => undefined);
   await loadSources();
   if (st.platform !== "win32") {
     // Chromium captures system audio (loopback) on Windows only
@@ -657,6 +693,7 @@ void lens.updateState().then((u) => {
   importVideo,
   setRegion: (r: typeof region) => ((region = r), setMode("region")),
   devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
+  settings: () => ({ FPS, BPP, COUNTDOWN }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,
     zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update }),
 };

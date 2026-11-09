@@ -40,6 +40,8 @@ export interface StartInfo {
   system?: { mime: string; start: number } | null;
   /** Custom mode: the area to keep, in capture px (written as the project's crop). */
   crop?: { x: number; y: number; w: number; h: number } | null;
+  /** Settings > Export defaults, written as the new project's output (Windows #19). */
+  output?: { resolution: number; fps: number } | null;
   cursor?: { requested: "never" | "always"; reported: string | null; api: "getDisplayMedia" | "getUserMedia" };
 }
 
@@ -240,7 +242,7 @@ export class Recording {
     // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
     // and export never show two cursors; it turns on by itself once the capture really excludes it.
     const baked = cursorBaked(info.cursor);
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}) }, null, 2));
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,

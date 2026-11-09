@@ -28,6 +28,7 @@ kbd { background: #1b1e26; border: 1px solid #2a2e39; border-radius: 4px; paddin
 .update button { background: #2b5cff; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .update button:disabled { opacity: 0.6; cursor: default; }
 a { color: #8fb0ff; }
+.countdown { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 120px; font-weight: 700; background: #0f1115cc; z-index: 20; }
 .brand { display: flex; align-items: center; gap: 12px; }
 .menu { position: relative; }
 .menu-list { position: absolute; top: 28px; left: 0; z-index: 10; background: #171a21; border: 1px solid #2a2e39; border-radius: 8px; padding: 4px; min-width: 250px; box-shadow: 0 8px 24px #0008; }

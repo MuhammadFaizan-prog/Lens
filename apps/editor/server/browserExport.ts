@@ -102,6 +102,9 @@ export interface BrowserExportJob {
   total: number;
   error?: string;
   out: string;
+  /** Copy in the desktop export folder (LENS_EXPORT_DIR), or why it failed. */
+  copiedTo?: string;
+  copyError?: string;
   startedAt: number;
   finishedAt?: number;
   ff: ChildProcessWithoutNullStreams;
@@ -145,6 +148,20 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
         if (a) await mux(ffmpeg, video, a, out, outputMs(plan));
         else fs.renameSync(video, out);
         job.state = "done";
+        // desktop Settings > Export location (Windows #19): a copy of the finished export lands there
+        const exportDir = process.env.LENS_EXPORT_DIR;
+        if (exportDir) {
+          try {
+            fs.mkdirSync(exportDir, { recursive: true });
+            const bundle = path.basename(path.dirname(path.dirname(dir)));
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+            const dest = path.join(exportDir, `${bundle}-${stamp}.mp4`);
+            fs.copyFileSync(out, dest);
+            job.copiedTo = dest;
+          } catch (e) {
+            job.copyError = e instanceof Error ? e.message : String(e);
+          }
+        }
       } catch (e) {
         job.state = "error";
         job.error = `audio: ${e instanceof Error ? e.message : String(e)}`;

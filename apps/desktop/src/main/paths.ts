@@ -38,7 +38,8 @@ export function ffmpegPath(): string {
 
 /** Recordings: LENS_RECORDINGS_DIR or <Videos>/Lens. */
 export function recordingsDir(): string {
-  const d = process.env.LENS_RECORDINGS_DIR || path.join(app.getPath("videos"), "Lens");
+  // LENS_SAVE_DIR = Settings > General > Save location (main.ts), else the test / default folder
+  const d = process.env.LENS_SAVE_DIR || process.env.LENS_RECORDINGS_DIR || path.join(app.getPath("videos"), "Lens");
   fs.mkdirSync(d, { recursive: true });
   return d;
 }
