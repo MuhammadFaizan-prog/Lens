@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { writeIcon } from "./make-icon.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP = path.resolve(HERE, "..");
@@ -65,6 +66,11 @@ if (fs.existsSync("/usr/share/doc/fonts-dejavu-core/copyright")) fs.copyFileSync
 fs.cpSync(path.join(REPO, "apps", "editor", "dist"), path.join(res, "editor"), { recursive: true, filter: (f) => !f.endsWith(".map") });
 if (fs.existsSync(path.join(REPO, "assets", "fonts"))) fs.cpSync(path.join(REPO, "assets", "fonts"), path.join(res, "lens", "assets", "fonts"), { recursive: true });
 
+// installer and uninstaller share one icon: NSIS patches the uninstaller icon into the exe header
+// when it writes the uninstaller, and the no-wine path (eb-nowine.cjs) reads the uninstaller out
+// without that patch, so the two must be identical for the uninstaller's CRC to hold
+const icon = path.join(CACHE, "lens.ico");
+writeIcon(icon);
 const config = {
   appId: "io.github.muhammadfaizanprog.lens",
   productName: "Lens",
@@ -94,16 +100,50 @@ const config = {
     deleteAppDataOnUninstall: false,
     differentialPackage: true,
     shortcutName: "Lens",
+    installerIcon: icon,
+    uninstallerIcon: icon,
     artifactName: "Lens-Setup-${version}.${ext}",
   },
   publish: [{ provider: "github", owner: "MuhammadFaizan-prog", repo: "Lens", releaseType: "release" }],
 };
 fs.writeFileSync(path.join(CACHE, "electron-builder.json"), JSON.stringify(config, null, 2));
+// electron-builder's bundled Linux makensis is an x86-64 binary. On other hosts (arm64) or with
+// USE_SYSTEM_MAKENSIS=1, point it at the system NSIS (apt install nsis): a folder laid out like its own
+// download (linux/makensis + Stubs / Include / Contrib / Plugins / Bin), all from the system NSIS so the
+// compiler and its stubs match.
+let nsisDir = process.env.ELECTRON_BUILDER_NSIS_DIR ?? "";
+const wantSystemNsis = (process.env.USE_SYSTEM_MAKENSIS && process.env.USE_SYSTEM_MAKENSIS !== "0") || (process.platform === "linux" && process.arch !== "x64");
+if (!nsisDir && wantSystemNsis) {
+  const sysMakensis = ["/usr/bin/makensis", "/usr/local/bin/makensis"].find((f) => fs.existsSync(f));
+  const sysShare = ["/usr/share/nsis", "/usr/local/share/nsis"].find((d) => fs.existsSync(path.join(d, "Stubs")));
+  if (!sysMakensis || !sysShare) throw new Error("system NSIS not found: apt install nsis (needed on non-x64 Linux)");
+  nsisDir = path.join(CACHE, "nsis-system");
+  fs.rmSync(nsisDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(nsisDir, "linux"), { recursive: true });
+  for (const d of ["Stubs", "Include", "Contrib", "Plugins", "Bin"]) if (fs.existsSync(path.join(sysShare, d))) fs.symlinkSync(path.join(sysShare, d), path.join(nsisDir, d));
+  // electron-builder also copies its elevate.exe helper from the NSIS folder into the app resources;
+  // it ships in electron-builder's own NSIS download (nsis-3.0.4.1), not in NSIS itself
+  const ebNsis = path.join(CACHE, "electron-builder", "nsis", "nsis-3.0.4.1");
+  if (!fs.existsSync(path.join(ebNsis, "elevate.exe"))) {
+    const z = path.join(CACHE, "nsis-3.0.4.1.7z");
+    if (!fs.existsSync(z)) curl("https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z", z);
+    const sevenZip = (await import("7zip-bin")).default.path7za;
+    fs.mkdirSync(ebNsis, { recursive: true });
+    execFileSync(sevenZip, ["x", "-y", `-o${ebNsis}`, z, "elevate.exe"], { stdio: "ignore" });
+  }
+  fs.copyFileSync(path.join(ebNsis, "elevate.exe"), path.join(nsisDir, "elevate.exe"));
+  fs.writeFileSync(path.join(nsisDir, "linux", "makensis"), `#!/bin/sh\nexec ${sysMakensis} "$@"\n`, { mode: 0o755 });
+  console.log(`using system NSIS: ${sysMakensis} (${execFileSync(sysMakensis, ["-VERSION"], { encoding: "utf8" }).trim()}), data ${sysShare}`);
+}
 const builder = path.join(REPO, "node_modules", ".bin", "electron-builder");
-execFileSync(builder, ["--win", "--x64", "--config", path.join(CACHE, "electron-builder.json"), "--publish", "never"], {
+// without wine (non-x64 Linux, or no wine installed) run electron-builder through eb-nowine.cjs, which
+// extracts the NSIS uninstaller instead of running the helper installer under wine
+const hasWine = (() => { try { execFileSync("wine", ["--version"], { stdio: "ignore" }); return process.arch === "x64"; } catch { return false; } })();
+const ebCmd = process.platform !== "win32" && !hasWine ? [process.execPath, [path.join(HERE, "eb-nowine.cjs")]] : [builder, []];
+execFileSync(ebCmd[0], [...ebCmd[1], "--win", "--x64", "--config", path.join(CACHE, "electron-builder.json"), "--publish", "never"], {
   cwd: STAGE,
   stdio: "inherit",
-  env: { ...process.env, ELECTRON_BUILDER_CACHE: path.join(CACHE, "electron-builder"), electron_config_cache: path.join(CACHE, "electron"), USE_SYSTEM_MAKENSIS: process.env.USE_SYSTEM_MAKENSIS ?? "" },
+  env: { ...process.env, ELECTRON_BUILDER_CACHE: path.join(CACHE, "electron-builder"), electron_config_cache: path.join(CACHE, "electron"), ...(nsisDir ? { ELECTRON_BUILDER_NSIS_DIR: nsisDir } : {}) },
 });
 for (const f of fs.readdirSync(OUT)) {
   const st = fs.statSync(path.join(OUT, f));

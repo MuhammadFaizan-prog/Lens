@@ -49,7 +49,17 @@ npm run dist:win -w @lens/desktop
 ffmpeg-static b6.0 release (GPL, licence bundled), DejaVu Sans fonts, uiohook-napi with only its
 `win32-x64` prebuild, electron-updater) and runs electron-builder: NSIS one-click per-user installer,
 x64, unsigned (`signAndEditExecutable: false`, so no rcedit / wine; the exe keeps Electron's icon and
-version resource). Output in `out/desktop/` (git-ignored): `Lens-Setup-<version>.exe`, its
+version resource). The installer / uninstaller icon (a red record dot) is generated at build time by
+`scripts/make-icon.mjs`, so no binary icon is committed.
+
+No wine needed, also on arm64 Linux: electron-builder's bundled `linux/makensis` is x86-64 only, so on
+other hosts (or with `USE_SYSTEM_MAKENSIS=1`) `dist-win.mjs` points `ELECTRON_BUILDER_NSIS_DIR` at the
+system NSIS (`apt install nsis`, 3.11 tested). electron-builder normally builds the uninstaller by
+running a helper installer under wine; without wine, `scripts/eb-nowine.cjs` runs electron-builder
+with its macOS code path that reads the uninstaller out of the helper's NSIS data instead, and checks
+the extracted uninstaller's NSIS CRC (installer and uninstaller icons are identical so the CRC holds).
+Checked for v0.1.0: installer CRC valid, `7z l -tNsis` shows `Uninstall Lens.exe` (154 947 bytes) and
+`app-64.7z` inside. Output in `out/desktop/` (git-ignored): `Lens-Setup-<version>.exe`, its
 `.blockmap`, `latest.yml`, `win-unpacked/`. Never commit the binary.
 
 ## Tests (Linux, Xvfb)
