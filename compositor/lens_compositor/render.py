@@ -404,6 +404,27 @@ def has_arabic_script(s: str) -> bool:
     return any(a <= ord(c) <= b for c in s for a, b in _ARABIC_RANGES)
 
 
+_FINE = 64
+
+
+@lru_cache(maxsize=64)
+def _fine_variant(font, size: int):
+    """The same font file at 64 x size: its advances are (nearly) unhinted, the fractional widths
+    Chrome measures, where FreeType at the real size rounds each glyph's advance to whole pixels."""
+    return font.font_variant(size=size * _FINE)
+
+
+def fine_textlength(d: ImageDraw.ImageDraw, text: str, font, size: int) -> float:
+    """Width of ``text`` as the preview's measureText gives it (within ~0.02 px): measured from the
+    same font at 64 x size, divided by 64 (Rules.md section 4, caption text metrics)."""
+    if isinstance(font, ImageFont.FreeTypeFont):
+        try:
+            return d.textlength(text, font=_fine_variant(font, size)) / _FINE
+        except (OSError, ValueError):
+            pass
+    return d.textlength(text, font=font)
+
+
 def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Optional[Image.Image] = None) -> None:
     """Styled caption: wrapped lines, optional pill background, per-word highlight.
 
@@ -434,12 +455,12 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
     # a right-to-left line is one Arabic-script run: its spaces come from the script font, shaped, as
     # a full-line shaper (HarfBuzz itemising by script) would take them; left-to-right lines unchanged
     rtl_line = bool(cap.get("visual")) and any(script)
-    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else d.textlength(" ", font=font)
+    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else fine_textlength(d, " ", font, size)
 
     def wlen(j: int) -> float:
         if script[j]:
             return d.textlength(words[j], font=sfont, direction="rtl", features=["-kern"])
-        return d.textlength(words[j], font=font)
+        return fine_textlength(d, words[j], font, size)
 
     lines, i = [], 0
     for n in cap["lines"]:
@@ -492,7 +513,7 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
         dy = -_js_round(size * lift)
         if hs == "bounce" or scale == 1:
             return x, dy, False
-        return x + (wj - d.textlength(words[j], font=big_font)) / 2, dy, True
+        return x + (wj - fine_textlength(d, words[j], big_font, big)) / 2, dy, True
 
     def draw_word(dr: ImageDraw.ImageDraw, j: int, x: float, y: float, dy: int, scaled: bool, fill, sk: dict) -> None:
         if script[j]:

@@ -22,7 +22,7 @@ import { CARD_PAD, Gl3dPass } from "./gl3d";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
-import { fontCss, imageAspect, imageAt } from "./assets";
+import { fontCss, fontSet, imageAspect, imageAt } from "./assets";
 import { backdropById, drawBackdrop, gradientStops } from "./backdrops";
 
 export { makeCanvas };
@@ -911,21 +911,43 @@ function captionLayout(g: Canvas2D, plan: RenderPlan, f: PlanFrame, W: number, H
   g.font = mainFont;
   (g as unknown as { direction: string }).direction = "ltr";
   const lineW = widths.map((ws) => ws.reduce((a, b) => a + b, 0) + space * (ws.length - 1));
-  const fm = g.measureText("Hg");
-  let asc = Math.ceil(fm.fontBoundingBoxAscent);
-  let desc = Math.ceil(fm.fontBoundingBoxDescent);
+  let [asc, desc] = fontVMetrics(g, wt, size, fontCss((cs as { font?: string }).font, FONT_STACK), "Hg");
   if (isScript.some(Boolean)) {
-    g.font = scriptFont!;
-    const sm = g.measureText("\u0628");
-    asc = Math.max(asc, Math.ceil(sm.fontBoundingBoxAscent));
-    desc = Math.max(desc, Math.ceil(sm.fontBoundingBoxDescent));
-    g.font = mainFont;
+    const [sa, sd] = fontVMetrics(g, wt, size, fontCss(cs.scriptFont, FONT_STACK), "\u0628");
+    asc = Math.max(asc, sa);
+    desc = Math.max(desc, sd);
   }
+  g.font = mainFont;
   const lh = Math.trunc((asc + desc) * 1.12);
   const blockH = lh * lines.length;
   const pos = cs.position ?? "bottom";
   const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
   return { cs, size, words, lines, widths, lineW, space, asc, lh, blockH, top, active: cap.active, visual: cap.visual, look, isScript, useFont };
+}
+
+const vMetricsCache = new Map<string, [number, number]>();
+
+/**
+ * Line ascent / descent of a font in whole pixels, as FreeType (PIL getmetrics in render.py) rounds
+ * them: measured at 64 x size, so Chrome's per-size rounding of fontBoundingBox* does not leak in,
+ * then ceil(v / 64) like FreeType's 26.6 ceiling (Fira Sans 27 px: 26 / 8, where measuring at 27 px
+ * gives 26 / 7). Cached per font string once the font has loaded. Leaves g.font changed.
+ */
+function fontVMetrics(g: Canvas2D, wt: string, size: number, family: string, sample: string): [number, number] {
+  const key = `${wt} ${size}px ${family}|${sample}`;
+  const hit = vMetricsCache.get(key);
+  if (hit) return hit;
+  g.font = `${wt} ${size * 64}px ${family}`;
+  const m = g.measureText(sample);
+  const v: [number, number] = [Math.ceil(m.fontBoundingBoxAscent / 64 - 1e-6), Math.ceil(m.fontBoundingBoxDescent / 64 - 1e-6)];
+  let loaded = true;
+  try {
+    loaded = fontSet().check(`${wt} ${size}px ${family}`, sample);
+  } catch {
+    loaded = true;
+  }
+  if (loaded) vMetricsCache.set(key, v);
+  return v;
 }
 
 function setNoKerning(g: Canvas2D): void {
