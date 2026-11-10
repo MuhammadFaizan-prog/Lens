@@ -246,6 +246,12 @@ exports[`project > open / info 2`] = `
     "plannedCuts": "number",
     "speed": "number",
   },
+  "freezes": {
+    "holdMs": "number",
+    "holds": "number",
+    "images": "number",
+    "pauses": "number",
+  },
   "id": "string",
   "output": {
     "durationMs": "number",

@@ -67,3 +67,10 @@ render exactly as before. No engine default changed.
   (red square centroid drift inside the hold, cursor still moving, pause frames identical, image and
   title-card pixels, preview vs export difference, the exported audio tone shifted by the pause and
   silence during it). Run with `LENS_EXPORT=browser` for the desktop export path.
+- `packages/cli/test/integration/cli.test.ts` (open / info): `lens project info` reports
+  `freezes: { holds, holdMs, pauses, images }`.
+
+## CLI
+
+`lens project info` counts the holds (and their total length), pauses and image slides; the project
+JSON can be edited with `lens set /freezes '[...]' --create`.

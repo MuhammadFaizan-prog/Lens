@@ -465,6 +465,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Size:** S. **Test:** Unit render tests; usage share in beta.
 
+**Status (2026-11-11): built, first version (branch feat/freeze-frames-015, not merged).** Hold freeze on a range (the screen picture stops, the cursor can keep moving or be hidden, audio / captions / zooms / webcam / annotations keep playing, length unchanged), pause (the whole video stops, silent, the rest shifts), image slides (Fit / Fill, caption) and title cards that follow the brand kit; Freeze lane and an Insert group in the editor, the same plan in the preview and the browser export the desktop app uses; old projects plan byte-identically (see `docs/FreezeFrames.md`). Measured on the exported MP4 (desktop export path): held picture drift 0.00 px (bound 1.5) while the cursor moved 63 px; pause frames identical (0.01, bound 3); preview vs export 2.2–3.0 mean |RGB| (bound 12); 351 frames = plan; audio −14 dBFS around the pause, −120 dBFS inside it. Not done: usage share in beta, video clips as inserts.
+
 ---
 
 ## 21. Light on the machine: background render, bounded RAM, no demo lag — 72 · M

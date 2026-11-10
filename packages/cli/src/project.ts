@@ -298,6 +298,12 @@ export function projectInfo(ctx: Ctx, dirArg: string | undefined) {
     },
     annotations: p.annotations.length,
     slides: p.slides.length,
+    freezes: {
+      holds: (p.freezes ?? []).length,
+      holdMs: (p.freezes ?? []).reduce((t, f) => t + Math.max(0, f.endMs - f.startMs), 0),
+      pauses: p.slides.filter((s) => s.kind === "freeze").length,
+      images: p.slides.filter((s) => s.kind === "image").length,
+    },
     brand: { enabled: p.brand.enabled, name: p.brand.name, primary: p.brand.colors.primary, accent: p.brand.colors.accent },
   };
 }
