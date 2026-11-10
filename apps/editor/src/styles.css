@@ -758,3 +758,17 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .insp-section .note.warn { color: #f5b14c; }
 .ctl.disabled { opacity: 0.45; }
 .ctl.disabled button, .ctl.disabled select, .ctl.disabled input { cursor: not-allowed; }
+
+/* framing (fix/aspect-framing-014) */
+.framing { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.framing-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.framing-tile { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border-radius: 8px; border: 1px solid var(--line, #2a2f37); background: rgba(255, 255, 255, 0.03); color: inherit; font-size: 11px; cursor: pointer; line-height: 1.15; text-align: center; }
+.framing-tile:hover { background: rgba(255, 255, 255, 0.07); }
+.framing-tile.on { border-color: var(--accent); background: rgba(94, 234, 212, 0.1); }
+.framing-tile .fg-canvas { fill: none; stroke: currentColor; stroke-width: 1.2; opacity: 0.85; }
+.framing-tile .fg-rec { fill: currentColor; opacity: 0.35; }
+.framing-tile .fg-crop { fill: none; stroke: var(--accent); stroke-width: 1.3; }
+.framing-tile .fg-cursor { fill: #fff; stroke: #0b0d10; stroke-width: 0.5; }
+.framing-custom { display: flex; flex-direction: column; gap: 6px; }
+.canvas-overlay .co-dim { fill: rgba(0, 0, 0, 0.55); pointer-events: none; }
+.canvas-overlay .co-framing .co-body { fill: transparent; stroke-width: 2; }

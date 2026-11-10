@@ -112,6 +112,11 @@ export interface EditorState {
   translateRun: TranslateRunState | null;
   /** A just-added zoom waits for a click on the preview to aim it (Z / Zoom lane "+"). */
   zoomPlacing: boolean;
+  /**
+   * Custom framing edit (fix/aspect-framing-014): the preview shows the whole recording with the
+   * custom window over it to drag / resize. View state only, never saved or undone.
+   */
+  framingEdit: boolean;
   /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
   canvasSel: "screen" | "logo" | "webcam" | "caption" | null;
   /** Selected keyframe of the selected 3D motion block (0 = from, n + 1 = to; see motion3dOps). */
@@ -185,6 +190,7 @@ export class EditorStore {
     stepsExport: {},
     translateRun: null,
     zoomPlacing: false,
+    framingEdit: false,
     canvasSel: null,
     m3dKey: 0,
     motion3dTemplates: m3dLib.allMotion3dTemplates(),
@@ -642,6 +648,10 @@ export class EditorStore {
 
   setZoomPlacing(on: boolean): void {
     this.set({ zoomPlacing: on });
+  }
+
+  setFramingEdit(on: boolean): void {
+    if (on !== this.s.framingEdit) this.set({ framingEdit: on, ...(on ? { canvasSel: null, selection: null } : {}) });
   }
 
   // ------------------------------------------------------------------ hand-written captions (Windows bug #15)

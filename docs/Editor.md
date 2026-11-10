@@ -118,6 +118,42 @@ any cut are left out of captions (engine `plan.ts`). "Remove fillers" cuts every
 cut, as one undo step. Zoom intensity presets and the zoom budget are engine features
 (`zoomPreset`, `applyZoomBudget`), see Tracker.
 
+## Framing (fix/aspect-framing-014)
+
+Which part of the recording fills a canvas of another shape (a 16:9 screen on a 9:16 canvas). Picked
+with the tiles under the aspect picker (Look > Output), in the Screen section, or the toolbar select
+next to the aspect:
+
+| Mode | Plan | Notes |
+|---|---|---|
+| Fit | card = the source fitted inside the padding, centred (`fittedCardRect`) | the whole recording; the default |
+| Fill | source crop = the largest centred window of the canvas aspect (`fillWindow`), card = the canvas | square corners, no shadow (nothing to show around it) |
+| Follow cursor | the Fill-mode pan of Windows bug #8: an over-size screen rect panned by `buildPanTrack` (cursor deadzone, fixed zoom targets, the zoom spring) | what `fit: "fill"` always drew |
+| Custom | source crop = `output.framingRect` made valid by `customWindow` (aspect locked to the canvas about its centre keeping the area, shrunk / moved inside the user crop), card = the canvas | the window is edited on the preview (below) or with X / Y / W / H (source px) |
+
+Stored as `project.output.framing` (+ `output.framingRect`, source px, the same space as `crop`).
+**Default unchanged (Rules.md §4):** a project without `framing` takes its mode from `output.fit`
+(`"fill"` = follow, anything else = fit), so every older project plans byte-for-byte as before; this
+was checked by planning 8 legacy projects (16:9, 9:16 fit / fill, 1:1 fill + webcam, free cards,
+crop + fill, hidden backdrop) with the engine at de0daa3 and with this branch: identical JSON. Picking
+a mode also writes `fit` (follow = `"fill"`, the rest `"fit"`) so presets and older builds read the
+same thing; applying a preset's look drops `framing` (its `fit` decides). A free card (`project.card`,
+a dragged / resized screen) still wins over the mode; picking a mode clears it.
+
+Design choices: an aspect change keeps the framing mode (it used to force Fit) and always clears the
+free card, so the card re-fits **centred**; a Custom window re-locks to the new canvas shape about its
+centre. A click on the screen card no longer nudges it: the card waits for a 4 screen-px move before
+it drags (Faizi's 9:16 report showed the card stored low on the canvas; a fitted card is always
+centred, so only a stored free card can sit there).
+
+Editing Custom: "Adjust on preview" (on when Custom is picked) switches the preview to an edit view,
+`framingEditPlan`: the whole user crop fitted and centred, unzoomed, no cursor / clicks / masks /
+screen annotations, the outside of the window dimmed; drag the window to pan, corners resize with the
+aspect locked; one gesture is one undo step. In Fill / Custom, dragging the picture on the normal
+preview pans the window too (it becomes Custom). The Screen section's card X / Y / W / H, Scale and
+card buttons show only for Fit or a free card (Fill / Follow / Custom cover the canvas). The edit view is preview-only; export renders the
+plan as built, through the same `PlanRenderer` as the preview.
+
 ## Preview vs export
 
 Parity test: `e2e/parity.spec.ts` builds the plan for the sample project in the browser, renders 14

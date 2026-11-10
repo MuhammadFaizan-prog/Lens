@@ -116,6 +116,8 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
     p.output = { ...p.output, aspect };
     if (L.fit) p.output.fit = L.fit;
     else delete p.output.fit;
+    // the look's fit decides the framing (fit / follow); a hand-picked framing does not survive it
+    delete p.output.framing;
     p.background = { ...p.background, kind: bg.kind, colors: [...bg.colors], angle: bg.angle, blur: L.background?.blur ?? 0, inherit: true };
     delete p.background.imagePath;
     delete p.background.fit;

@@ -13,7 +13,7 @@ import { layoutText } from "../render/annotations";
 import { makeCanvas } from "../render/canvas";
 import { selectedZoomDocIndex, store, useEditor } from "../state/store";
 import { newId, updateBlock } from "../state/timelineOps";
-import { pickCanvasObject, zoomEditFrame } from "./CanvasOverlay";
+import { framingEditing, pickCanvasObject, zoomEditFrame } from "./CanvasOverlay";
 
 type Handle = "nw" | "ne" | "sw" | "se" | "from" | "to" | "curve" | "tip";
 
@@ -284,7 +284,7 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
       store.setZoomPlacing(false);
       return;
     }
-    if (tool !== "select") {
+    if (tool !== "select" && !framingEditing()) {
       store.pause();
       const sp = spaceOf(plan, f, anchor);
       const a = createAt(tool, anchor, sp.fromOut(p), f.src, plan.source.durationMs);
@@ -294,7 +294,8 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
       store.selectAnnotation(a.id);
       return;
     }
-    const h = hit(p);
+    // placing the custom framing window: only the window is pickable
+    const h = framingEditing() ? null : hit(p);
     if (!h) {
       // not an annotation: a mask, the logo, the webcam, the caption or a zoom target?
       if (!pickCanvasObject(p)) {

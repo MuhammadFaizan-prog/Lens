@@ -51,6 +51,14 @@ export interface ProjectConfig {
      * frame and pans to follow the cursor or a fixed zoom target (Windows bug #8).
      */
     fit?: "fit" | "fill";
+    /**
+     * Framing (fix/aspect-framing-014): fit (whole, letterboxed, centred), fill (cover the canvas,
+     * centred crop), follow (fill + pan with the cursor / zoom target), custom (the framingRect
+     * window). Absent = derived from fit ("fill" = follow), so older projects render as before.
+     */
+    framing?: "fit" | "fill" | "follow" | "custom";
+    /** Custom framing window in source px (same space as crop); its aspect is locked to the canvas. */
+    framingRect?: Rect | null;
   };
   background: {
     /** "hidden": no backdrop at all, the recording fills the frame (no padding, corners or shadow). */
@@ -525,6 +533,9 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.transcription.track !== null && !p.audio.tracks.some((t) => t.id === p.transcription.track))
     errs.push(`transcription.track ${String(p.transcription.track)} is not an audio track id`);
   if (p.output.fit !== undefined && p.output.fit !== "fit" && p.output.fit !== "fill") errs.push("output.fit must be fit or fill");
+  if (p.output.framing !== undefined && !["fit", "fill", "follow", "custom"].includes(p.output.framing)) errs.push("output.framing must be fit, fill, follow or custom");
+  const fr = p.output.framingRect;
+  if (fr !== undefined && fr !== null && !(isPlainObject(fr) && [fr.x, fr.y, fr.w, fr.h].every(Number.isFinite) && fr.w > 0 && fr.h > 0)) errs.push("output.framingRect must be {x, y, w, h} source px with positive w and h");
   const cp = p.camera.position;
   if (cp && !(Number.isFinite(cp.x) && Number.isFinite(cp.y))) errs.push("camera.position must be {x, y} fractions");
   for (const c of p.captions.cues ?? []) {

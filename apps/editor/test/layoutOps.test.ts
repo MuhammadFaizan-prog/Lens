@@ -8,13 +8,14 @@ const base = (): ProjectConfig => defaultProject();
 const out = { width: 1920, height: 1080 };
 
 describe("aspect picker (feat/canvas-layout)", () => {
-  it("every choice re-fits the card, drops a custom size and fits whole (never crops)", () => {
+  it("every choice re-fits the card (centred), drops a custom size and keeps the framing choice", () => {
     const p0: ProjectConfig = { ...base(), card: { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }, output: { ...base().output, size: { w: 800, h: 600 }, fit: "fill" } };
     for (const a of ["auto", "16:9", "9:16", "1:1", "4:5", "4:3", "21:9"] as const) {
       const p = setAspect(p0, a);
       expect(p.output.aspect).toBe(a);
       expect(p.output.size).toBeNull();
-      expect(p.output.fit).toBe("fit");
+      expect(p.output.fit).toBe("fill"); // the framing picked (fix/aspect-framing-014) survives an aspect change
+      expect(setAspect({ ...p0, output: { ...p0.output, fit: "fit" } }, a).output.fit).toBe("fit");
       expect(p.card).toBeNull();
       expect(aspectChoiceOf(p)).toBe(a);
       expect(() => resolveProject(JSON.parse(JSON.stringify(p)))).not.toThrow();
