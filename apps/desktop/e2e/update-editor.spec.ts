@@ -69,6 +69,11 @@ test("editor header shows a release found by a focus re-check; tray + About have
   report.bannerBefore = await ed!.locator('[data-testid="update-banner"]').count();
   report.tray = await app.evaluate(() => (globalThis as any).lensTrayItems);
 
+  // On a slow box the editor can take longer than the 4 s throttle to get ready, so the first check is
+  // already stale here: start a fresh check (feed still at the current version) so the next focus falls
+  // inside the throttle window, as it would 1.5 s after a check in the app.
+  await app.evaluate(() => (globalThis as any).lensUpdates.check());
+  report.checkAgeAtFocusMs = await app.evaluate(() => Date.now() - (globalThis as any).lensUpdates.lastCheckAt);
   feedVersion = "9.9.9";
   const focusEditor = () =>
     app!.evaluate(({ BrowserWindow, app: a }) => {
