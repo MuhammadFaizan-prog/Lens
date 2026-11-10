@@ -98,3 +98,61 @@ export function applyTemplate(s: Motion3DSegment, t: Motion3DTemplate, maxEndMs:
 export function mapSegment(p: ProjectConfig, i: number, fn: (s: Motion3DSegment) => Motion3DSegment): ProjectConfig {
   return { ...p, motion3d: p.motion3d.map((s, j) => (j === i ? fn(s) : s)) };
 }
+
+/** Smallest gap between two keyframes, as a fraction of the block (the same 1 % addKeyAt keeps). */
+export const KEY_GAP = 0.01;
+
+/** Allowed `at` range of interior keyframe k: strictly between its neighbours, KEY_GAP away. */
+export function keyAtRange(s: Motion3DSegment, k: number): [number, number] {
+  const n = s.keys?.length ?? 0;
+  if (k <= 0 || k > n) return [keyAt(s, k), keyAt(s, k)];
+  return [keyAt(s, k - 1) + KEY_GAP, keyAt(s, k + 1) - KEY_GAP];
+}
+
+/**
+ * Move interior keyframe k to fraction `at` of the block (clamped between its neighbours, so the key
+ * order and its index never change). Start / End stay at 0 / 1 (move the block edges instead).
+ */
+export function setKeyAt(s: Motion3DSegment, k: number, at: number): Motion3DSegment {
+  const n = s.keys?.length ?? 0;
+  if (k <= 0 || k > n || !Number.isFinite(at)) return s;
+  const [lo, hi] = keyAtRange(s, k);
+  if (!(hi >= lo)) return s;
+  const v = Math.round(Math.max(lo, Math.min(hi, at)) * 1000) / 1000;
+  return { ...s, keys: s.keys!.map((key, j) => (j === k - 1 ? { ...key, at: v } : key)) };
+}
+
+/** Keyframe k back to the flat card (identity pose). */
+export function resetKeyPose(s: Motion3DSegment, k: number): Motion3DSegment {
+  const n = s.keys?.length ?? 0;
+  if (k <= 0) return { ...s, from: {} };
+  if (k > n) return { ...s, to: {} };
+  return { ...s, keys: s.keys!.map((key, j) => (j === k - 1 ? { ...key, pose: {} } : key)) };
+}
+
+/**
+ * Pose shown on a template tile: halfway between its first and last pose (linear, so a spring's
+ * overshoot does not flatten it). A pose that would show the card edge-on (a flip at 90 degrees) is
+ * taken a third of the way instead; a loop shows its first pose.
+ */
+export function templateTilePose(t: Pick<Motion3DTemplate, "from" | "to" | "keys" | "easing">): Pose3D {
+  const a = fullPose(t.from);
+  const b = fullPose(t.to);
+  if (t.easing === "loop") return a;
+  const at = (u: number) => {
+    const o = {} as Pose3D;
+    for (const key of Object.keys(a) as Array<keyof Pose3D>) o[key] = a[key] + (b[key] - a[key]) * u;
+    return o;
+  };
+  const edgeOn = (p: Pose3D) => Math.abs(Math.cos((p.rx * Math.PI) / 180)) < 0.3 || Math.abs(Math.cos((p.ry * Math.PI) / 180)) < 0.3;
+  if (t.keys?.length) {
+    const mid = [...t.keys].sort((x, y) => Math.abs(x.at - 0.5) - Math.abs(y.at - 0.5))[0]!;
+    const p = fullPose(mid.pose);
+    if (!edgeOn(p)) return p;
+  }
+  for (const u of [0.5, 0.35, 0.2]) {
+    const p = at(u);
+    if (!edgeOn(p)) return p;
+  }
+  return a;
+}

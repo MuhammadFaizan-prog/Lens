@@ -725,6 +725,20 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .m3d-tpl.user > button:first-child { font-style: italic; padding-right: 16px; }
 .m3d-tpl-del { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 0 3px; }
 .m3d-tpl-del:hover { color: var(--danger); }
+.m3d-edit-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.m3d-edit-head .note { margin: 0; }
+.m3d-edit-head .chip-btn { white-space: nowrap; }
+.m3d-key-dia { display: inline-block; width: 7px; height: 7px; transform: rotate(45deg); background: currentColor; margin-right: 5px; vertical-align: 1px; opacity: 0.8; }
+.m3d-key.unused { opacity: 0.45; }
+/* keyframe diamonds on the 3D timeline block (click: select the key, drag an inner one: move it) */
+.m3d-dia {
+  position: absolute; top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; transform: rotate(45deg); z-index: 3;
+  background: #fff; border: 1px solid rgba(11, 13, 16, 0.75); border-radius: 1px; padding: 0; cursor: pointer; touch-action: none;
+}
+.m3d-dia.inner { cursor: ew-resize; }
+.m3d-dia.on { background: #ffd84d; box-shadow: 0 0 0 2px rgba(255, 216, 77, 0.35); }
+.m3d-dia:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.m3d-card { padding-left: 10px; padding-right: 10px; }
 .m3d-keys { display: flex; flex-direction: column; gap: 4px; }
 .m3d-key-list { display: flex; flex-wrap: wrap; gap: 4px; }
 .m3d-key { border: 1px solid var(--line-2); background: transparent; color: var(--text-2); border-radius: 6px; padding: 3px 7px; font: 550 11px var(--font); cursor: pointer; }

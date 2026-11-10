@@ -331,6 +331,8 @@ function useKeys() {
         case "Delete":
         case "Backspace": {
           e.preventDefault();
+          // a 3D keyframe chip / timeline diamond has focus: Delete removes that keyframe, not the block
+          if ((el as HTMLElement | null)?.closest?.("[data-m3d-key]") && store.deleteSelectedMotion3dKey()) break;
           if (deleteSelection()) break;
           if (removeCanvasSelection()) break;
           const sel = store.get().selectedWords;
