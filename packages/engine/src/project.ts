@@ -248,6 +248,8 @@ export interface ProjectConfig {
   theme: ThemeSettings;
   /** Brand kit: colours, logo watermark, fonts, intro / outro cards (demand #9). */
   brand: BrandKit;
+  /** Fonts the user imported for captions ("My fonts"); absent in older projects. */
+  customFonts?: ProjectFont[];
   /** Interactive demo + step guide export (demand #7, docs/InteractiveDemo.md). */
   demo: DemoSettings;
 }
@@ -315,14 +317,58 @@ export interface CaptionStyle {
   uppercase?: boolean;
   /** Outline around every glyph; width is a fraction of the font size (0.02..0.25). Absent = none. */
   stroke?: { enabled: boolean; color: string; width: number };
-  /** How the spoken word is marked: "color" (absent) recolours it, "box" puts it on a highlight-coloured box. */
+  /**
+   * How the spoken word is marked: "color" (absent) recolours it, "box" puts it on a highlight-coloured
+   * box, "pill" on a fully rounded pill, "underline" sweeps a bar under it, "karaoke" colours every word
+   * spoken so far, "pop" draws it larger, "bounce" lifts it (pop / bounce / underline follow the word's
+   * progress, CaptionFrame.progress).
+   */
   highlightStyle?: CaptionHighlightStyle;
+  /*
+   * Second batch of caption styling (Windows v0.1.3 request "add more styles"). Every field is optional
+   * and absent in older projects; absent = exactly the look above.
+   */
+  /** Only the words already spoken are drawn (word-by-word build, typewriter); the layout is the full caption's. */
+  reveal?: boolean;
+  /** Background per caption (absent = "block"), per line, or per word. */
+  boxMode?: CaptionBoxMode;
+  /** Background corners: rounded (absent), square, or a full-width bar (lower third). */
+  boxShape?: CaptionBoxShape;
+  /** Accent stripe along the background's left edge (#rrggbb or a theme slot), or absent. */
+  accent?: string;
+  /** Vertical gradient fill for the words (top colour to bottom colour, per line); the spoken word keeps its highlight. */
+  gradient?: { enabled: boolean; from: string; to: string };
+  /** Soft glow around the glyphs; radius is the blur sigma as a fraction of the font size (0..0.5). */
+  glow?: { enabled: boolean; color: string; radius: number };
+  /** Drop shadow; dx / dy / blur (sigma) are fractions of the font size. */
+  shadow?: { enabled: boolean; color: string; opacity: number; dx: number; dy: number; blur: number };
+  /** Frosted background: the picture under the caption background is blurred (sigma, fraction of the font size, 0..1). */
+  backdropBlur?: number;
+  /** Text colour of the second and later lines (two-line split colour), or absent. */
+  line2Color?: string;
   /** Last one-click style applied (CAPTION_PRESETS), for the picker; cleared by nothing, purely informative. */
   preset?: string;
 }
 
 export type CaptionWeight = "regular" | "bold";
-export type CaptionHighlightStyle = "color" | "box";
+export type CaptionHighlightStyle = "color" | "box" | "pill" | "underline" | "karaoke" | "pop" | "bounce";
+export const CAPTION_HIGHLIGHT_STYLES: CaptionHighlightStyle[] = ["color", "box", "pill", "underline", "karaoke", "pop", "bounce"];
+export type CaptionBoxMode = "block" | "line" | "word";
+export type CaptionBoxShape = "rounded" | "square" | "bar";
+
+/**
+ * A font the user imported (from a file, a URL or Google Fonts). Its files are copied into the
+ * project folder (fonts/...), so the project renders offline and on another machine; the user
+ * brings the licence.
+ */
+export interface ProjectFont {
+  family: string;
+  /** Paths relative to the bundle (fonts/<file>). Single-weight fonts name the same file twice. */
+  regular: string;
+  bold: string;
+  /** Where it came from (shown with the licence reminder). */
+  source?: { kind: "file" | "url" | "google" | "library"; url?: string; name?: string };
+}
 
 export function defaultProject(): ProjectConfig {
   return {
@@ -539,7 +585,20 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   {
     const cs = p.captions.style;
     if (cs.weight !== undefined && cs.weight !== "regular" && cs.weight !== "bold") errs.push('captions.style.weight must be "regular" or "bold"');
-    if (cs.highlightStyle !== undefined && cs.highlightStyle !== "color" && cs.highlightStyle !== "box") errs.push('captions.style.highlightStyle must be "color" or "box"');
+    if (cs.highlightStyle !== undefined && !CAPTION_HIGHLIGHT_STYLES.includes(cs.highlightStyle)) errs.push(`captions.style.highlightStyle must be one of ${CAPTION_HIGHLIGHT_STYLES.join(", ")}`);
+    if (cs.reveal !== undefined && typeof cs.reveal !== "boolean") errs.push("captions.style.reveal must be a boolean");
+    if (cs.boxMode !== undefined && !["block", "line", "word"].includes(cs.boxMode)) errs.push("captions.style.boxMode must be block, line or word");
+    if (cs.boxShape !== undefined && !["rounded", "square", "bar"].includes(cs.boxShape)) errs.push("captions.style.boxShape must be rounded, square or bar");
+    if (cs.accent !== undefined && !isColorValue(cs.accent)) errs.push("captions.style.accent must be #rrggbb or a theme slot");
+    if (cs.line2Color !== undefined && !isColorValue(cs.line2Color)) errs.push("captions.style.line2Color must be #rrggbb or a theme slot");
+    if (cs.gradient !== undefined && !(isPlainObject(cs.gradient) && typeof cs.gradient.enabled === "boolean" && isColorValue(cs.gradient.from) && isColorValue(cs.gradient.to)))
+      errs.push("captions.style.gradient must be { enabled, from, to } colours");
+    if (cs.glow !== undefined && !(isPlainObject(cs.glow) && typeof cs.glow.enabled === "boolean" && isColorValue(cs.glow.color) && cs.glow.radius >= 0 && cs.glow.radius <= 0.5))
+      errs.push("captions.style.glow must be { enabled, color, radius 0..0.5 }");
+    const sh = cs.shadow;
+    if (sh !== undefined && !(isPlainObject(sh) && typeof sh.enabled === "boolean" && isColorValue(sh.color) && sh.opacity >= 0 && sh.opacity <= 1 && Math.abs(sh.dx) <= 0.5 && Math.abs(sh.dy) <= 0.5 && sh.blur >= 0 && sh.blur <= 0.5))
+      errs.push("captions.style.shadow must be { enabled, color, opacity 0..1, dx / dy within ±0.5, blur 0..0.5 }");
+    if (cs.backdropBlur !== undefined && !(cs.backdropBlur >= 0 && cs.backdropBlur <= 1)) errs.push("captions.style.backdropBlur must be within 0..1");
     if (cs.uppercase !== undefined && typeof cs.uppercase !== "boolean") errs.push("captions.style.uppercase must be a boolean");
     if (cs.stroke !== undefined && (typeof cs.stroke !== "object" || cs.stroke === null || !isColorValue(cs.stroke.color) || !(cs.stroke.width >= 0 && cs.stroke.width <= 0.25)))
       errs.push("captions.style.stroke must be { enabled, color #rrggbb, width 0..0.25 }");
@@ -554,6 +613,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (typeof p.background.inherit !== "boolean") errs.push("background.inherit must be true or false");
   errs.push(...validateTheme(p.theme));
   errs.push(...validateBrand(p.brand));
+  if (p.customFonts !== undefined && !(Array.isArray(p.customFonts) && p.customFonts.every((f) => isPlainObject(f) && typeof f.family === "string" && !!f.family && typeof f.regular === "string" && !!f.regular && typeof f.bold === "string" && !!f.bold)))
+    errs.push("customFonts must be [{family, regular, bold}] with bundle-relative paths");
   errs.push(...validateDemo(p.demo));
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");

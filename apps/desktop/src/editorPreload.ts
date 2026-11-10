@@ -1,6 +1,6 @@
 // Editor windows (Windows #21): the update state and actions, so the editor header can show the
 // "Update available" banner; and the File menu (Import Video, History, New Recording, Open log folder),
-// the same desktop calls as the recorder's File menu. Nothing else is exposed to the editor page.
+// the same desktop calls as the recorder's File menu, plus the font Open dialog. Nothing else is exposed to the editor page.
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("lensUpdates", {
@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld("lensDesktopFile", {
   historyOpen: (dir: string) => ipcRenderer.invoke("lens:history-open", dir),
   newRecording: () => ipcRenderer.invoke("lens:show-recorder"),
   openLogFolder: () => ipcRenderer.invoke("lens:open-log-folder"),
+  // caption font import: native Open dialog (.ttf / .otf / .woff / .woff2), returns up to two paths
+  pickFonts: (): Promise<string[]> => ipcRenderer.invoke("lens:pick-fonts"),
 });

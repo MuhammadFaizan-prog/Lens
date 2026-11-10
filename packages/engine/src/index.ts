@@ -28,3 +28,5 @@ export * from "./captionsManual.js";
 export * from "./captionStyles.js";
 export * from "./backdropArt.js";
 export * from "./motion3d.js";
+export * from "./fontCatalog.js";
+export * from "./fontFile.js";
