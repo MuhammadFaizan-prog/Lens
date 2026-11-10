@@ -356,6 +356,11 @@ export class EditorStore {
     this.gestureTimer = setTimeout(() => this.flushGesture(), 400);
   }
 
+  /** Close a pending slider tweak now, so the next change is its own undo step (typed values, reset). */
+  commitPending(): void {
+    this.flushGesture();
+  }
+
   private flushGesture(): void {
     if (this.gestureTimer) {
       clearTimeout(this.gestureTimer);

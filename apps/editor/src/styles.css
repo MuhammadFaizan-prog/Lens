@@ -199,6 +199,17 @@ button { font: inherit; color: inherit; }
 .ctl { display: grid; grid-template-columns: 92px minmax(0, 1fr) 58px; align-items: center; gap: 10px; min-height: 30px; }
 .ctl-label { color: var(--text-2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctl-value { color: var(--text); font: 12px var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+/* slider rows: label / range (all the free width) / editable number / reset (fix/3d-inspector-014) */
+.ctl.slider { grid-template-columns: minmax(48px, 76px) minmax(60px, 1fr) 52px; gap: 6px; }
+.ctl.slider.has-reset { grid-template-columns: minmax(48px, 76px) minmax(60px, 1fr) 52px 18px; }
+.ctl-num {
+  width: 100%; min-width: 0; box-sizing: border-box; height: 22px; padding: 0 4px; border-radius: 5px;
+  border: 1px solid transparent; background: transparent; cursor: text;
+}
+.ctl-num:hover { border-color: var(--line-2); }
+.ctl-num:focus { outline: none; border-color: var(--accent); background: var(--panel); text-align: right; }
+.ctl.slider .mini-reset { width: 18px; height: 18px; line-height: 14px; font-size: 11px; }
+.ctl.slider .mini-reset:disabled { opacity: 0.3; cursor: default; }
 .ctl.toggle { grid-template-columns: minmax(0, 1fr) auto; }
 .ctl.select { grid-template-columns: 92px minmax(0, 1fr); }
 .segmented-row { grid-template-columns: 92px minmax(0, 1fr); }

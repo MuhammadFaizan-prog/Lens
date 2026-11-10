@@ -1,6 +1,7 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { projectPalette, resolveColor } from "@lens/engine";
-import { useEditor } from "../state/store";
+import { store, useEditor } from "../state/store";
+import { fieldDecimals, fieldSpec, fieldText, parseField, stepField } from "../state/numberField";
 
 export function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
   return (
@@ -14,7 +15,16 @@ export function Section({ title, children, aside }: { title: string; children: R
   );
 }
 
-export function Slider({ label, value, min, max, step, format, onChange, testId, disabled }: {
+/**
+ * A labelled slider row: label / range (takes the free width) / editable number / reset.
+ *  - The number is a text field in the slider's display units (read off `format`): type a value and
+ *    press Enter or leave the field to set it, Esc puts the old value back, Up/Down step it by 1
+ *    (Shift: 10). Typed values are clamped to [inputMin, inputMax] (default the slider range), so a
+ *    control whose engine accepts more than its slider shows (3D angles) can take 360 or -720.
+ *  - `defaultValue` adds a reset button (↺) and double-click on the range resets too.
+ * Typed values, steps and resets are each committed as their own undo step.
+ */
+export function Slider({ label, value, min, max, step, format, onChange, testId, disabled, defaultValue, inputMin, inputMax }: {
   label: string;
   value: number;
   min: number;
@@ -24,11 +34,37 @@ export function Slider({ label, value, min, max, step, format, onChange, testId,
   onChange: (v: number) => void;
   testId?: string;
   disabled?: boolean;
+  /** The control's default: shows the reset button and enables double-click reset. */
+  defaultValue?: number;
+  /** Bounds for typed values (default min / max). */
+  inputMin?: number;
+  inputMax?: number;
 }) {
   const pct = ((value - min) / (max - min)) * 100;
+  const spec = useMemo(() => fieldSpec(format, min, max), [format, min, max]);
+  const decimals = fieldDecimals(step, spec.scale);
+  const lo = inputMin ?? min;
+  const hi = inputMax ?? max;
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (v: number) => {
+    if (disabled) return;
+    if (v !== value) {
+      store.commitPending();
+      onChange(v);
+    }
+    // close the tweak gesture so this value is one undo step of its own
+    store.commitPending();
+  };
+  const finish = () => {
+    if (draft === null) return;
+    const v = parseField(draft, spec, lo, hi);
+    setDraft(null);
+    if (v !== null) commit(v);
+  };
+  const isDefault = defaultValue !== undefined && Math.abs(value - defaultValue) < 1e-9;
   return (
-    <label className={`ctl slider ${disabled ? "disabled" : ""}`}>
-      <span className="ctl-label">{label}</span>
+    <div className={`ctl slider ${disabled ? "disabled" : ""} ${defaultValue !== undefined ? "has-reset" : ""}`}>
+      <span className="ctl-label" title={label}>{label}</span>
       <input
         type="range"
         min={min}
@@ -38,11 +74,58 @@ export function Slider({ label, value, min, max, step, format, onChange, testId,
         aria-label={label}
         data-testid={testId}
         disabled={disabled}
+        title={defaultValue !== undefined ? "Double-click to reset" : undefined}
         style={{ ["--pct" as string]: `${Math.max(0, Math.min(100, pct))}%` }}
         onChange={(e) => onChange(Number(e.target.value))}
+        onDoubleClick={() => defaultValue !== undefined && commit(defaultValue)}
       />
-      <span className="ctl-value">{format ? format(value) : value}</span>
-    </label>
+      <input
+        type="text"
+        inputMode="decimal"
+        className="ctl-value ctl-num"
+        aria-label={`${label} value`}
+        data-testid={testId ? `${testId}-value` : undefined}
+        disabled={disabled}
+        spellCheck={false}
+        value={draft ?? (format ? format(value) : String(value))}
+        onFocus={(e) => {
+          setDraft(fieldText(value, spec, decimals));
+          const el = e.currentTarget;
+          requestAnimationFrame(() => el.select());
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={finish}
+        onKeyDown={(e) => {
+          // the editor's shortcuts (space = play, Delete, J/K/L, Alt+arrows) stay out of a typed value
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            finish();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            e.currentTarget.blur();
+          } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const v = stepField(value, e.key === "ArrowUp" ? 1 : -1, e.shiftKey, spec, lo, hi, step, min, max);
+            commit(v);
+            setDraft(fieldText(v, spec, decimals));
+          }
+        }}
+      />
+      {defaultValue !== undefined && (
+        <button
+          type="button"
+          className="mini-reset"
+          title={`Reset ${label} to ${format ? format(defaultValue) : defaultValue}`}
+          aria-label={`Reset ${label}`}
+          data-testid={testId ? `${testId}-reset` : undefined}
+          disabled={disabled || isDefault}
+          onClick={() => commit(defaultValue)}
+        >
+          ↺
+        </button>
+      )}
+    </div>
   );
 }
 

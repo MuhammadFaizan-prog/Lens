@@ -115,7 +115,7 @@ export function BackgroundPicker({ p }: { p: ProjectConfig }) {
           {cur.kind === "image" && (
             <>
               <Segmented label="Fit" value={cur.fit ?? "cover"} testId="bg-fit" options={[{ value: "cover", label: "Cover" }, { value: "contain", label: "Contain" }]} onChange={(v) => set("Backdrop fit", { fit: v as "cover" | "contain" })} />
-              <Slider label="Blur" value={cur.blur} min={0} max={60} step={1} format={(v) => `${v} px`} testId="bg-blur" onChange={(v) => set("Backdrop blur", { blur: v }, true)} />
+              <Slider defaultValue={0} label="Blur" value={cur.blur} min={0} max={60} step={1} format={(v) => `${v} px`} testId="bg-blur" onChange={(v) => set("Backdrop blur", { blur: v }, true)} />
             </>
           )}
         </>
@@ -134,7 +134,7 @@ export function BackgroundPicker({ p }: { p: ProjectConfig }) {
           </div>
           <GradientStops colors={gradColors} stops={cur.kind === "gradient" ? cur.stops : undefined} angle={cur.kind === "gradient" ? cur.angle : 135}
             onChange={(colors, stops, live) => set(live ? "Gradient stop" : "Gradient stops", { kind: "gradient", colors, stops, angle: cur.kind === "gradient" ? cur.angle : 135 }, live)} />
-          <Slider label="Angle" value={cur.kind === "gradient" ? cur.angle : 135} min={0} max={360} step={5} format={(v) => `${v}°`} testId="bg-angle" onChange={(v) => set("Gradient angle", { kind: "gradient", colors: gradColors, angle: v }, true)} />
+          <Slider defaultValue={135} label="Angle" value={cur.kind === "gradient" ? cur.angle : 135} min={0} max={360} step={5} format={(v) => `${v}°`} testId="bg-angle" onChange={(v) => set("Gradient angle", { kind: "gradient", colors: gradColors, angle: v }, true)} />
         </>
       )}
       {tab === "color" && (

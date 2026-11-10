@@ -97,7 +97,7 @@ export function CaptionStyleControls({ p }: { p: ProjectConfig }) {
       <Toggle label="Outline" value={stroke.enabled} testId="caption-stroke" onChange={(v) => edit(v ? "Caption outline" : "No caption outline", () => ({ stroke: { ...stroke, enabled: v } }))} />
       {stroke.enabled && (
         <>
-          <Slider label="Outline width" value={stroke.width} min={0.02} max={0.25} step={0.01} format={(v) => `${Math.round(v * 100)}%`} testId="caption-stroke-width" onChange={(v) => tweak("Outline width", () => ({ stroke: { ...stroke, width: v } }))} />
+          <Slider defaultValue={0.08} label="Outline width" value={stroke.width} min={0.02} max={0.25} step={0.01} format={(v) => `${Math.round(v * 100)}%`} testId="caption-stroke-width" onChange={(v) => tweak("Outline width", () => ({ stroke: { ...stroke, width: v } }))} />
           <ColorInput label="Outline" value={stroke.color} testId="caption-stroke-color" onChange={(v) => tweak("Outline colour", () => ({ stroke: { ...stroke, color: v } }))} />
         </>
       )}
