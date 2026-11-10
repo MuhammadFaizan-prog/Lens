@@ -61,10 +61,15 @@ export function loadFont(f: FontFiles): Promise<boolean> {
   return p;
 }
 
+/** Drop a family's cached load (a re-imported font is loaded again). */
+export function forgetFont(family: string): void {
+  for (const k of [...fonts.keys()]) if (k.startsWith(`${family}|`)) fonts.delete(k);
+}
+
 /**
  * Families of `plan` that are not usable: listed in plan.fonts but a file failed to load, or named by
- * the caption style without any files (an unknown family). The export refuses to start on any of
- * these instead of silently drawing the fallback font (the preview shows them as a warning).
+ * the caption style without any files (an unknown family). They are drawn in the default font
+ * (engine withFontFallback) in the preview and the export alike, and named in a warning.
  */
 export async function missingPlanFonts(plan: RenderPlan): Promise<string[]> {
   const fs = (plan.fonts ?? []).filter((f) => f.family !== DEFAULT_FONT_FAMILY);

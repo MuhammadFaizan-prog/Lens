@@ -93,8 +93,11 @@ export function brandPalette(b: BrandKit | null | undefined): Partial<Palette> |
   };
 }
 
-export function fontFiles(family: string, b: BrandKit | null | undefined): FontFiles | null {
-  return b?.customFonts.find((f) => f.family === family) ?? BUILTIN_FONTS.find((f) => f.family === family) ?? null;
+/** Files of a font family: the brand kit's fonts, then the project's imported fonts, then Lens's built-ins. */
+export function fontFiles(family: string, b: BrandKit | null | undefined, project?: FontFiles[] | null): FontFiles | null {
+  const own = b?.customFonts.find((f) => f.family === family) ?? project?.find((f) => f.family === family);
+  if (own) return { family: own.family, regular: own.regular, bold: own.bold };
+  return BUILTIN_FONTS.find((f) => f.family === family) ?? null;
 }
 
 export interface WatermarkPlan {

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeIcon } from "./make-icon.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -95,16 +95,21 @@ fs.mkdirSync(path.join(res, "fonts"), { recursive: true });
 for (const f of ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"]) fs.copyFileSync(path.join("/usr/share/fonts/truetype/dejavu", f), path.join(res, "fonts", f));
 if (fs.existsSync("/usr/share/doc/fonts-dejavu-core/copyright")) fs.copyFileSync("/usr/share/doc/fonts-dejavu-core/copyright", path.join(res, "fonts", "LICENSE.txt"));
 fs.cpSync(path.join(REPO, "apps", "editor", "dist"), path.join(res, "editor"), { recursive: true, filter: (f) => !f.endsWith(".map") });
+// second batch of caption fonts (Windows v0.1.3): git-ignored TTFs, fetched and SHA-256 checked (no-op when present)
+execFileSync(process.execPath, [path.join(REPO, "assets", "fonts", "fetch_extra_fonts.mjs")], { stdio: "inherit" });
 if (fs.existsSync(path.join(REPO, "assets", "fonts"))) fs.cpSync(path.join(REPO, "assets", "fonts"), path.join(res, "lens", "assets", "fonts"), { recursive: true, filter: (f) => !f.endsWith(".py") });
 // every builtin font the engine names (caption picker, themes, Arabic captions) must be staged with its
 // licence: a missing file would make the export refuse (or, before that check, draw a fallback face)
 {
   const src = ["palette.ts", "translation.ts"].map((f) => fs.readFileSync(path.join(REPO, "packages", "engine", "src", f), "utf8")).join("\n");
-  const names = [...new Set([...src.matchAll(/builtin:([A-Za-z0-9-]+\.ttf)/g)].map((m) => m[1]))];
+  const { readCatalog, outNames } = await import(pathToFileURL(path.join(REPO, "assets", "fonts", "fetch_extra_fonts.mjs")).href);
+  const extra = readCatalog().fonts.flatMap((f) => { const o = outNames(f); return [o.regular, o.bold].filter(Boolean); });
+  const names = [...new Set([...[...src.matchAll(/builtin:([A-Za-z0-9-]+\.ttf)/g)].map((m) => m[1]), ...extra])];
   for (const n of names) {
     const dir = path.join(res, "lens", "assets", "fonts");
     if (!fs.existsSync(path.join(dir, n))) throw new Error(`dist-win: builtin font ${n} not staged`);
-    if (!fs.existsSync(path.join(dir, `${n.split("-")[0]}-OFL.txt`))) throw new Error(`dist-win: licence for ${n} not staged`);
+    const stem = n.split("-")[0];
+    if (!fs.existsSync(path.join(dir, `${stem}-OFL.txt`)) && !fs.existsSync(path.join(dir, `${stem}-Apache.txt`))) throw new Error(`dist-win: licence for ${n} not staged`);
   }
   console.log(`dist-win: ${names.length} builtin font files staged`);
 }

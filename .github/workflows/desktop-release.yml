@@ -40,6 +40,9 @@ jobs:
         # whisper.cpp v1.8.2 Windows CLI zip (in-app speech-to-text), and the MSVC runtime DLLs it links
         # (MSVCP140 / VCRUNTIME140 / VCRUNTIME140_1 / VCOMP140). dist-win runs it again (a no-op when done).
         run: node apps/editor/scripts/fetch-models.mjs
+      - name: Fetch the second batch of caption fonts (SHA-256 pinned, git-ignored)
+        # google/fonts static TTFs (OFL / Apache) listed in packages/engine/src/fontCatalog.ts; dist-win runs it again (a no-op when done)
+        run: node assets/fonts/fetch_extra_fonts.mjs
       - name: Build editor + installer
         env:
           USE_SYSTEM_MAKENSIS: "1"
@@ -68,9 +71,10 @@ jobs:
           done
           if grep -E "$m/whisper/linux-|\.sha256$|\.conda$" "$RUNNER_TEMP/app.txt"; then echo "unexpected files in the payload"; exit 1; fi
           # caption / theme fonts (every builtin: font the engine names) and their licences
-          for f in $(grep -oE 'builtin:[A-Za-z0-9-]+\.ttf' packages/engine/src/palette.ts packages/engine/src/translation.ts | sed 's/.*builtin://' | sort -u); do
+          extra=$(node --input-type=module -e "import('./assets/fonts/fetch_extra_fonts.mjs').then(({ readCatalog, outNames }) => console.log(readCatalog().fonts.flatMap((f) => { const o = outNames(f); return [o.regular, o.bold].filter(Boolean); }).join(' ')))")
+          for f in $( (grep -oE 'builtin:[A-Za-z0-9-]+\.ttf' packages/engine/src/palette.ts packages/engine/src/translation.ts | sed 's/.*builtin://'; echo $extra | tr ' ' '\n') | sort -u); do
             grep -F " resources/lens/assets/fonts/$f" "$RUNNER_TEMP/app.txt" || { echo "missing font $f"; exit 1; }
-            fam=${f%%-*}; grep -F " resources/lens/assets/fonts/$fam-OFL.txt" "$RUNNER_TEMP/app.txt" > /dev/null || { echo "missing licence for $f"; exit 1; }
+            fam=${f%%-*}; grep -E " resources/lens/assets/fonts/$fam-(OFL|Apache)\.txt" "$RUNNER_TEMP/app.txt" > /dev/null || { echo "missing licence for $f"; exit 1; }
           done
           sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
       - name: Check Lens.exe carries the Lens icon and version info

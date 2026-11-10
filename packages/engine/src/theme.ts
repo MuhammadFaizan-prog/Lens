@@ -62,7 +62,13 @@ export function applyTheme(p: ProjectConfig, durationMs: number, out?: { width: 
     ...p.captions,
     // the default font is left out so plans without a theme stay byte-identical
     style: { ...cs, highlightColor: resolveColor(cs.highlightColor, pal), textColor: resolveColor(cs.textColor, pal), font: ((f) => (f === DEFAULT_FONT ? undefined : f))(font(cs.font)),
-      ...(cs.stroke ? { stroke: { ...cs.stroke, color: resolveColor(cs.stroke.color, pal) } } : {}) },
+      ...(cs.stroke ? { stroke: { ...cs.stroke, color: resolveColor(cs.stroke.color, pal) } } : {}),
+      // second-batch colour fields take theme slots too; absent ones stay absent (old plans unchanged)
+      ...(cs.accent !== undefined ? { accent: resolveColor(cs.accent, pal) } : {}),
+      ...(cs.line2Color !== undefined ? { line2Color: resolveColor(cs.line2Color, pal) } : {}),
+      ...(cs.gradient ? { gradient: { ...cs.gradient, from: resolveColor(cs.gradient.from, pal), to: resolveColor(cs.gradient.to, pal) } } : {}),
+      ...(cs.glow ? { glow: { ...cs.glow, color: resolveColor(cs.glow.color, pal) } } : {}),
+      ...(cs.shadow ? { shadow: { ...cs.shadow, color: resolveColor(cs.shadow.color, pal) } } : {}) },
   };
   const annotations: Annotation[] = p.annotations.map((a) => {
     const st = themedStyle(a.style, pal);
@@ -82,7 +88,7 @@ export function applyTheme(p: ProjectConfig, durationMs: number, out?: { width: 
   const fonts: FontFiles[] = [];
   for (const f of used) {
     if (f === DEFAULT_FONT) continue;
-    const files = fontFiles(f, p.brand);
+    const files = fontFiles(f, p.brand, p.customFonts);
     if (files) fonts.push(files);
   }
   const project: ProjectConfig = { ...p, background, captions, annotations, slides };

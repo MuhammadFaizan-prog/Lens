@@ -13,7 +13,7 @@
  * The built-in palette reproduces the pre-#9 defaults exactly, so a project without a preset or a
  * brand kit renders the same pixels as before (Rules.md 4: defaults unchanged).
  *
- * This file has no imports so annotations.ts, project.ts and theme.ts can all use it.
+ * This file imports only fontCatalog.ts (which has no imports), so annotations.ts, project.ts and theme.ts can all use it.
  */
 
 export type ColorSlot = "primary" | "accent" | "highlight";
@@ -142,6 +142,8 @@ export function luminance(h: string): number {
 
 // ------------------------------------------------------------------------------ fonts
 
+import { catalogFiles, EXTRA_FONTS } from "./fontCatalog.js";
+
 export interface FontFiles {
   family: string;
   /** "builtin:<file>" (Lens's assets/fonts, OFL), "system:<file>" (the OS font the defaults use), or a path relative to the bundle. */
@@ -168,4 +170,9 @@ export const BUILTIN_FONTS: FontFiles[] = [
   { family: "Bebas Neue", regular: "builtin:BebasNeue-Regular.ttf", bold: "builtin:BebasNeue-Regular.ttf" },
   { family: "DM Serif Display", regular: "builtin:DMSerifDisplay-Regular.ttf", bold: "builtin:DMSerifDisplay-Regular.ttf" },
   { family: "Caveat", regular: "builtin:Caveat-Regular.ttf", bold: "builtin:Caveat-Bold.ttf" },
+  // second batch (Windows v0.1.3 "add more styles n fonts"): OFL / Apache, fetched at build time, see fontCatalog.ts
+  ...EXTRA_FONTS.map((f) => {
+    const files = catalogFiles(f);
+    return { family: f.family, regular: `builtin:${files.regular}`, bold: `builtin:${files.bold}` };
+  }),
 ];
