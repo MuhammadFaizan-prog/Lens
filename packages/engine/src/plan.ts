@@ -7,7 +7,7 @@ import { stepSpring, type SpringState } from "./spring.js";
 import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalizeCrop, zoomableEvents } from "./crop.js";
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
-import { fillScreenRect, layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
+import { canvasSize, cardCrop, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
@@ -137,14 +137,17 @@ const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
 export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: rawProject, words = [], pauses, onlyFrames }: PlanInputs): RenderPlan {
   const fps = rawProject.output.fps;
-  const out = outputSize(rawProject.output.aspect, rawProject.output.resolution);
+  // Canvas (feat/canvas-layout): custom W x H, aspect "auto" (the user crop's shape) or aspect x resolution.
+  const userCrop: Rect = normalizeCrop(rawProject.crop, fullMeta);
+  const out = canvasSize(rawProject.output, { width: userCrop.w, height: userCrop.h });
   // Theme (demand #9): resolve "@slot" references (built-in < preset < brand < item), add brand cards.
   const theme = applyTheme(rawProject, fullMeta.durationMs, out);
   const project = theme.project;
   const resScale = Math.min(out.width, out.height) / 1080;
 
-  // 0. Crop (LOOK-14): move everything into cropped space.
-  const crop: Rect = normalizeCrop(project.crop, fullMeta);
+  // 0. Crop (LOOK-14): move everything into cropped space. A custom card trims the crop to its own
+  // shape first (cardCrop, centred), so the card never stretches and every conversion below agrees.
+  const crop: Rect = cardCrop(normalizeCrop(project.crop, fullMeta), out, project);
   const meta = cropMeta(fullMeta, crop);
   const events = cropEvents(rawEvents, crop);
   const masks = project.masks.map((m) => ({ ...m, rect: cropRect(m.rect, crop), keys: m.keys?.map((k) => ({ tMs: k.tMs, rect: cropRect(k.rect, crop) })) }));
@@ -155,7 +158,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const zoomSegments = effectiveZoomSegments(zoomableEvents(events, crop), meta, { ...project.zoom, segments: cropZoomSegments(project.zoom.segments, crop) });
   const staticLayout = layoutFor(project.camera.enabled ? "camera-overlay" : "screen-only", out, sourceAspect, project);
   // Fill mode (Windows bug #8): crop in to fill a differently shaped output and pan with the action.
-  const fill = project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
+  // A custom card owns the placement: fill mode (and its pan-follow) is off while one is set.
+  const fill = !validCard(project.card) && project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
   const camera: CameraSample[] = buildCameraTrack(cursor, zoomSegments, meta, {
     spring: project.zoom.spring,
     followDeadzone: project.zoom.followDeadzone,

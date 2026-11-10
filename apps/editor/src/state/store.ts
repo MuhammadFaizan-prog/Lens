@@ -103,7 +103,7 @@ export interface EditorState {
   /** A just-added zoom waits for a click on the preview to aim it (Z / Zoom lane "+"). */
   zoomPlacing: boolean;
   /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
-  canvasSel: "logo" | "webcam" | "caption" | null;
+  canvasSel: "screen" | "logo" | "webcam" | "caption" | null;
 }
 
 export interface TranslateRunState {

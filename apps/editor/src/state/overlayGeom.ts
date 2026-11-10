@@ -60,6 +60,35 @@ export function resizeBox(b: Box, h: Corner, p: Pt, keepAspect = false, minSize 
   return { x, y, w, h: hh };
 }
 
+/**
+ * resizeBox with Alt: the box grows about its centre (the dragged corner and its mirror move
+ * together); keepAspect (Shift) keeps w/h. Without fromCentre this is resizeBox.
+ */
+export function resizeBoxFrom(b: Box, h: Corner, p: Pt, keepAspect = false, minSize = 4, fromCentre = false): Box {
+  if (!fromCentre) return resizeBox(b, h, p, keepAspect, minSize);
+  const c = centre(b);
+  let w = Math.max(minSize, 2 * Math.abs(p.x - c.x));
+  let hh = Math.max(minSize, 2 * Math.abs(p.y - c.y));
+  if (keepAspect) {
+    const r = b.w / b.h;
+    if (w / r >= hh) hh = w / r;
+    else w = hh * r;
+  }
+  return { x: c.x - w / 2, y: c.y - hh / 2, w, h: hh };
+}
+
+/** Frame snap lines: edges and centre, plus the rule-of-thirds lines when thirds is set (the screen card). */
+export function snapLines(W: number, H: number, thirds = false): { xs: number[]; ys: number[] } {
+  return thirds ? { xs: [0, W / 3, W / 2, (2 * W) / 3, W], ys: [0, H / 3, H / 2, (2 * H) / 3, H] } : { xs: [0, W / 2, W], ys: [0, H / 2, H] };
+}
+
+/** Snap a dragged corner point to the snap lines (resize); returns the point and guides hit. */
+export function snapPoint(p: Pt, lines: { xs: number[]; ys: number[] }, threshold: number): { p: Pt; gx: number[]; gy: number[] } {
+  const sx = snap1(p.x, lines.xs, threshold);
+  const sy = snap1(p.y, lines.ys, threshold);
+  return { p: { x: sx.v, y: sy.v }, gx: sx.at === null ? [] : [sx.at], gy: sy.at === null ? [] : [sy.at] };
+}
+
 /** Snap v to the nearest target within threshold; returns the value and the target hit (or null). */
 export function snap1(v: number, targets: number[], threshold: number): { v: number; at: number | null } {
   let best: number | null = null;
@@ -71,9 +100,8 @@ export function snap1(v: number, targets: number[], threshold: number): { v: num
  * Snap a moving box to the frame's edges and centre lines (and its own edges / centre to them).
  * Returns the snapped box and the guide lines to draw (output px).
  */
-export function snapBox(b: Box, W: number, H: number, threshold: number): { box: Box; gx: number[]; gy: number[] } {
-  const xs = [0, W / 2, W];
-  const ys = [0, H / 2, H];
+export function snapBox(b: Box, W: number, H: number, threshold: number, thirds = false): { box: Box; gx: number[]; gy: number[] } {
+  const { xs, ys } = snapLines(W, H, thirds);
   let dx = 0;
   let dy = 0;
   const gx: number[] = [];
