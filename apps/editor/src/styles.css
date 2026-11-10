@@ -758,3 +758,25 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .insp-section .note.warn { color: #f5b14c; }
 .ctl.disabled { opacity: 0.45; }
 .ctl.disabled button, .ctl.disabled select, .ctl.disabled input { cursor: not-allowed; }
+/* resizable panes (Windows v0.1.3 report "i cant shrink or grow this window left or right"):
+   the lane-header column has a drag handle on its right edge; the Inspector splitter gets a wider
+   invisible grab area so it is easy to find on a high-DPI Windows screen. */
+.tl-labels { flex: none; }
+.tl-labels-resizer { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; touch-action: none; }
+.tl-labels-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background 0.12s; }
+.tl-labels-resizer:hover::after, body.resizing .tl-labels-resizer:hover::after { background: var(--accent-2); }
+.tl-label { padding-right: 10px; }
+.tl-label .lane-name { flex: 0 1 auto; }
+.splitter-right::before, .splitter-left::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; cursor: col-resize; }
+/* a narrow lane-header column keeps a readable start of every name: the count and the "⋯" go first
+   (the lane menu is also on right-click), the name keeps >= 28 px, the "+" always stays */
+.tl-labels { container-type: inline-size; }
+.tl-label .lane-name { min-width: 28px; }
+@container (max-width: 150px) {
+  .tl-label { gap: 4px; padding: 0 6px 0 8px; }
+  .tl-label .lane-count { display: none; }
+}
+@container (max-width: 124px) {
+  .tl-label .lane-menu-btn { display: none; }
+  .tl-label .lane-name + .mini-add, .tl-label .lane-name ~ .mini-add { margin-left: auto; }
+}
