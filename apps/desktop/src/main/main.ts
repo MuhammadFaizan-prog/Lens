@@ -12,7 +12,9 @@ import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
 import { initLog, logDir, logLine } from "./log";
 import { IMPORT_EXTENSIONS, ImportCancelled, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
-import { UpdateController, type UpdateState } from "./updater";
+import { UpdateController, releasePage, type UpdateState } from "./updater";
+import { killChildren, trackChildProcesses } from "./children";
+import { cancelQuit, hideToTrayOnClose } from "./quitPolicy";
 import { pickH264 } from "../../../editor/server/h264";
 import { defaultSettings, loadSettings, normalize, saveSettings, shortcutConflict, type Settings } from "./settings";
 
@@ -26,6 +28,8 @@ if (process.env.LENS_LOWMEM === "1") {
 }
 if (process.env.LENS_USER_DATA) app.setPath("userData", process.env.LENS_USER_DATA);
 initLog(app.getPath("userData"), app.getVersion());
+// every ffmpeg / whisper-cli child is recorded so an update can stop them first (children.ts)
+trackChildProcesses();
 const openLogFolder = () => void shell.openPath(logDir(app.getPath("userData")));
 // Windows groups taskbar buttons and picks their icon by AppUserModelID; without it the windows group
 // under electron.exe. Must equal the appId the installer writes on the Start-menu shortcut.
@@ -66,12 +70,42 @@ const updates = new UpdateController((st) => {
   updateTray();
   buildAppMenu();
 });
+updates.hooks = {
+  // Restart to update (updater.ts install()): quit for real (no hide-to-tray), and nothing of ours may
+  // keep running from the install folder when the installer starts replacing it
+  prepare: async () => {
+    quitting = true;
+    logLine("INFO", `[update] quit for update: ${BrowserWindow.getAllWindows().length} window(s)`);
+    await killChildren(3000, (m) => logLine("INFO", `[update] ${m}`));
+    stopHook();
+    globalShortcut.unregisterAll();
+    // the editor server holds no files open between requests; it stops with the process
+  },
+  restore: () => {
+    quitting = false;
+    if (!hook) loadHook();
+    registerShortcuts(settings.shortcuts);
+  },
+  showInstallError: (message, version) => {
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.isVisible());
+    const opts: Electron.MessageBoxOptions = {
+      type: "error", title: "Lens update failed", message: "Lens could not install the update.",
+      detail: `${message}\n\nDownload the installer from the release page and run it; your settings and recordings are kept.\nLog: ${path.join(logDir(app.getPath("userData")), "lens.log")}`,
+      buttons: ["Download installer manually", "Open log folder", "Close"], defaultId: 0, cancelId: 2, noLink: true,
+    };
+    void (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then((r) => {
+      if (r.response === 0) void shell.openExternal(releasePage(version));
+      if (r.response === 1) openLogFolder();
+    });
+  },
+};
 
 function updateLabel(st: UpdateState): string {
   switch (st.status) {
     case "available": return `Update available v${st.version}: download`;
     case "downloading": return `Downloading update ${Math.round(st.percent)}%`;
     case "downloaded": return `Restart to update to v${st.version}`;
+    case "installing": return `Installing v${st.version}…`;
     case "checking": return "Checking for updates…";
     default: return "Check for updates";
   }
@@ -90,15 +124,25 @@ async function showAbout(): Promise<void> {
 function updateAction(): void {
   const st = updates.state;
   if (st.status === "available") void updates.download();
-  else if (st.status === "downloaded") updates.install();
+  else if (st.status === "downloaded") return installUpdate(); // the app is about to go away: do not pop the recorder up
+  else if (st.status === "installing") return;
   else if (st.status !== "downloading" && st.status !== "checking") void updates.check();
   showRecorder();
+}
+
+/** Restart to update, from any window, the tray or the menu. Never while a recording is running. */
+function installUpdate(): void {
+  if (rec) {
+    void dialog.showMessageBox({ type: "info", title: "Lens", message: "Stop the recording before restarting to update.", buttons: ["OK"], noLink: true });
+    return;
+  }
+  void updates.install();
 }
 
 function buildAppMenu(): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { label: "Lens", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() }, { label: "Open log folder", click: openLogFolder }, { type: "separator" }, { role: "quit" }] },
+      { label: "Lens", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled" && updates.state.status !== "installing", click: () => updateAction() }, { label: "Open log folder", click: openLogFolder }, { type: "separator" }, { role: "quit" }] },
       { role: "help", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: "Open log folder", click: openLogFolder }] },
       { role: "editMenu" },
       { role: "viewMenu" },
@@ -115,10 +159,22 @@ function loadHook(): void {
     setKeyTable(m.UiohookKey);
     hook = m.uIOhook;
     hook!.start();
+    hookError = null;
   } catch (e) {
     hookError = e instanceof Error ? e.message : String(e);
     hook = null;
     console.error("[lens] uiohook-napi unavailable:", hookError);
+  }
+}
+
+/** Stop the global input hook once (stopping it twice, at update and again in will-quit, is avoided). */
+function stopHook(): void {
+  const h = hook;
+  hook = null;
+  try {
+    h?.stop();
+  } catch {
+    // already stopped
   }
 }
 
@@ -146,7 +202,7 @@ function updateTray(): void {
       { label: "Show recorder", click: () => showRecorder() },
       { label: "Settings…", click: () => openSettings() },
       { label: "About Lens", click: () => void showAbout() },
-      { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() },
+      { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled" && updates.state.status !== "installing", click: () => updateAction() },
       { label: "Open log folder", click: openLogFolder },
       { type: "separator" },
       { label: "Quit Lens", click: () => app.quit() },
@@ -202,7 +258,8 @@ function createRecorder(): void {
   const me = recorderWin;
   // closing the recorder hides it (Lens keeps running in the tray; the tray / a second launch brings it back)
   recorderWin.on("close", (e) => {
-    if (quitting || recorderWin !== me) return;
+    // quitting (incl. quit for update, updater.ts): let the window close so the app can exit
+    if (!hideToTrayOnClose({ quitting, quittingForUpdate: updates.quittingForUpdate }, recorderWin === me)) return;
     e.preventDefault();
     me.hide();
   });
@@ -542,7 +599,7 @@ function registerIpc(): void {
   ipcMain.handle("lens:update-state", () => ({ ...updates.state, current: app.getVersion() }));
   ipcMain.handle("lens:update-check", () => updates.check());
   ipcMain.handle("lens:update-download", () => updates.download());
-  ipcMain.handle("lens:update-install", () => updates.install());
+  ipcMain.handle("lens:update-install", () => installUpdate());
 }
 
 // one Lens at a time: a second launch (Start menu / desktop shortcut while Lens is in the tray) shows
@@ -552,7 +609,15 @@ if (!firstInstance) app.quit();
 app.on("second-instance", () => {
   if (app.isReady()) showRecorder();
 });
-app.on("before-quit", () => {
+app.on("before-quit", (e) => {
+  // the update installer could not be started (updater.ts failInstall): electron-updater may still
+  // have a quit queued; keep running and show the error instead of vanishing without an update
+  if (cancelQuit(updates.cancelQueuedQuit)) {
+    logLine("WARN", "[update] quit cancelled: the update did not start");
+    updates.cancelQueuedQuit = false;
+    e.preventDefault();
+    return;
+  }
   quitting = true;
 });
 
@@ -582,15 +647,15 @@ app.whenReady().then(async () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   updates.dispose();
-  try {
-    hook?.stop();
-  } catch {
-    // already stopped
-  }
+  stopHook();
   editor?.close();
+  // a downloaded update installs on this quit (autoInstallOnAppQuit): no ffmpeg / whisper-cli of ours
+  // may hold files in the install folder (fire and forget: the app is exiting)
+  void killChildren(0);
+  logLine("INFO", `quit${updates.quittingForUpdate ? " for update" : ""}`);
 });
 
 // the tray keeps the app alive with no windows on Windows / Linux
 app.on("window-all-closed", () => {
-  if (!tray) app.quit();
+  if (!tray || updates.quittingForUpdate) app.quit();
 });
