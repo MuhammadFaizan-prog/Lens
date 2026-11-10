@@ -520,6 +520,13 @@ function registerIpc(): void {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle("lens:settings-open", () => openSettings());
+  // caption font import (Windows v0.1.3): the native file dialog; the editor server copies and checks the files
+  ipcMain.handle("lens:pick-fonts", async (e) => {
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) ?? undefined!, {
+      title: "Import font", properties: ["openFile", "multiSelections"], filters: [{ name: "Fonts", extensions: ["ttf", "otf", "woff", "woff2"] }],
+    });
+    return r.canceled ? [] : r.filePaths.slice(0, 2);
+  });
   ipcMain.handle("lens:history", () => listHistory(recordingsDir(), ffmpegPath()));
   ipcMain.handle("lens:history-open", async (_e, dir: string) => {
     await openEditor(dir);

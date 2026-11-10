@@ -19,6 +19,8 @@ import { ARABIC_FONT, hasArabicScript, trackWords } from "./translation.js";
 import { subtitleCues, captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
 import { applyTheme } from "./theme.js";
+import { DEFAULT_FONT } from "./palette.js";
+import { captionNeedsProgress } from "./captionStyles.js";
 import type { WatermarkPlan } from "./brand.js";
 import type { FontFiles } from "./palette.js";
 
@@ -84,6 +86,8 @@ export interface RenderPlan {
    * assets/fonts, else relative to the bundle). Text ops and the caption style name the family.
    */
   fonts?: FontFiles[];
+  /** Families that were missing and are drawn in the default font instead (withFontFallback); absent when none. */
+  fontFallbacks?: string[];
   /** Brand logo watermark (demand #9), whole output px, drawn on every frame above the caption and under slides. */
   watermark?: WatermarkPlan | null;
   frames: PlanFrame[];
@@ -210,6 +214,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const track = project.translations.language ? project.translations.tracks.find((tr) => tr.language === project.translations.language) : undefined;
   const capWords = track ? trackWords(track, words.length ? words : null, allCuts) : shownWords;
   const capChars = project.captions.style.maxCharsPerLine;
+  const capMotion = { progress: captionNeedsProgress(project.captions.style), reveal: project.captions.style.reveal === true };
   // hand-written cues (Windows bug #15) replace the transcript blocks they overlap
   const captions = project.captions.enabled ? mergeCaptionCues(captionBlocks(capWords, project.captions.maxWordsPerBlock, project.captions.maxBlockMs, capChars), project.captions.cues) : [];
   const capRtl = !!track?.rtl;
@@ -266,7 +271,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       },
       masks: masksAt(masks, src),
       shortcut: sc ? sc.label : null,
-      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl) : null,
+      caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl, capMotion) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
       ...(m3 ? { m3d: motion3dFrame(m3, screenR, out, resScale) } : {}),
@@ -370,4 +375,37 @@ function buildPanTrack(
     res.push({ t: cur.t, x: sx.x, y: sy.x });
   }
   return res;
+}
+
+/**
+ * The plan with `missing` font families replaced by the default font (Windows v0.1.3, imported fonts):
+ * a font whose files are gone (a project copied without its fonts/ folder, a deleted library font, a
+ * built-in that was not fetched) falls back to DejaVu Sans in the caption, text slides and annotation
+ * text instead of stopping the export. Both export paths and the preview apply it, so they still agree;
+ * the editor shows the families in `fontFallbacks` as a warning.
+ */
+export function withFontFallback(plan: RenderPlan, missing: string[]): RenderPlan {
+  const gone = new Set(missing.filter((f) => f && f !== DEFAULT_FONT));
+  if (!gone.size) return plan;
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") {
+      const o: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v)) if (!(k === "font" && typeof x === "string" && gone.has(x))) o[k] = walk(x);
+      return o;
+    }
+    return v;
+  };
+  const caps = { ...plan.style.captions };
+  if (caps.font && gone.has(caps.font)) delete caps.font;
+  if (caps.scriptFont && gone.has(caps.scriptFont)) delete caps.scriptFont;
+  const fonts = (plan.fonts ?? []).filter((f) => !gone.has(f.family));
+  const used = [...gone].filter((f) => plan.style.captions.font === f || (plan.fonts ?? []).some((x) => x.family === f));
+  return {
+    ...plan,
+    style: { ...plan.style, captions: caps },
+    fonts,
+    frames: plan.frames.map((f) => walk(f) as PlanFrame),
+    fontFallbacks: [...new Set([...(plan.fontFallbacks ?? []), ...used])],
+  };
 }

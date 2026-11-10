@@ -10,3 +10,7 @@ out/
 !research/bars/.gitkeep
 *.egg-info/
 assets/models/
+
+# second-batch caption fonts: fetched + SHA-256 checked by assets/fonts/fetch_extra_fonts.mjs (never committed);
+# the first batch (tracked before this rule) stays tracked
+assets/fonts/*.ttf

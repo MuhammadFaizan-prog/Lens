@@ -338,6 +338,10 @@ export interface CaptionFrame {
    * order (word-level bidi). Absent for left-to-right captions, which draw in index order.
    */
   visual?: number[][];
+  /** Reveal styles: how many words (from the first) are drawn; absent = all. */
+  shown?: number;
+  /** Pop / bounce / underline styles: 0..1 through the active word (1 after it ends); absent = 1. */
+  progress?: number;
 }
 
 export function wrapWords(count: number, maxWordsPerLine: number): number[] {
@@ -415,7 +419,8 @@ export function activeWordIndex(words: Word[], tMs: number): number {
   return idx;
 }
 
-export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: number, highlight: boolean, maxCharsPerLine = 0, rtl = false): CaptionFrame {
+export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: number, highlight: boolean, maxCharsPerLine = 0, rtl = false,
+  motion: { progress?: boolean; reveal?: boolean } = {}): CaptionFrame {
   const words = block.words.map((w) => w.text);
   const lines = wrapLines(words, maxWordsPerLine, maxCharsPerLine);
   const f: CaptionFrame = {
@@ -424,6 +429,13 @@ export function captionFrame(block: CaptionBlock, tMs: number, maxWordsPerLine: 
     lines,
     active: highlight ? activeWordIndex(block.words, tMs) : -1,
   };
+  // second-batch styles: only added when the style uses them, so other plans stay byte-identical
+  if (highlight && motion.reveal) f.shown = f.active + 1;
+  if (highlight && motion.progress && f.active >= 0) {
+    const w = block.words[f.active]!;
+    const p = w.endMs > w.startMs ? (tMs - w.startMs) / (w.endMs - w.startMs) : 1;
+    f.progress = Math.round(Math.min(1, Math.max(0, p)) * 1000) / 1000;
+  }
   if (rtl) {
     let i = 0;
     f.visual = lines.map((n) => {

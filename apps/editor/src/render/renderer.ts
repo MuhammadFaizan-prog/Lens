@@ -17,12 +17,12 @@
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
  */
-import { boxHighlightText, captionLook, captionStrokePx, cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
+import { boxHighlightText, captionEffects, captionLook, captionMotion, captionStrokePx, cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
 import { CARD_PAD, Gl3dPass } from "./gl3d";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
-import { fontCss, imageAspect, imageAt } from "./assets";
+import { fontCss, fontSet, imageAspect, imageAt } from "./assets";
 import { backdropById, drawBackdrop, gradientStops } from "./backdrops";
 
 export { makeCanvas };
@@ -611,23 +611,20 @@ export class PlanRenderer {
       return;
     }
     const { cs, size, words, lines, widths, lineW, asc, lh, blockH, top, look, useFont } = L;
+    const fx = captionEffects(cs);
     const padx = size * 0.55;
     const pady = size * 0.28;
     const bg = cs.background ?? { enabled: true, color: "#000000", opacity: 0.66 };
-    if (bg.enabled !== false) {
-      const bw = Math.max(...lineW);
-      const x0 = (W - bw) / 2 - padx;
-      const [r, gg, b] = hexRgb(bg.color ?? "#000000");
-      g.fillStyle = `rgba(${r},${gg},${b},${Math.trunc(255 * (bg.opacity ?? 0.66)) / 255})`;
-      roundRectPath(g, x0, top - pady, bw + 2 * padx + 1, blockH + 2 * pady + 1, Math.trunc(size * 0.45));
-      g.fill();
-    }
     const active = cs.wordHighlight !== false ? L.active : -1;
+    const hs = look.highlightStyle;
+    const shown = f.caption!.shown;
+    const visible = (j: number) => shown === undefined || j < shown;
+    const motion = captionMotion(hs, f.caption!.progress);
     const hiColor = cs.highlightColor ?? "#ffd23f";
-    const boxHi = look.highlightStyle === "box" && active >= 0;
+    const boxHi = (hs === "box" || hs === "pill") && active >= 0;
     const strokePx = look.stroke.enabled ? captionStrokePx(size, look.stroke.width) : 0;
-    // word x positions, line by line (shared by the highlight box and the text passes)
-    const placed: Array<{ j: number; x: number; y: number; w: number }> = [];
+    // word x positions, line by line (shared by the backgrounds, highlight and text passes)
+    const placed: Array<{ j: number; li: number; x: number; y: number; w: number }> = [];
     lines.forEach((ln, li) => {
       let x = (W - lineW[li]!) / 2;
       const y = top + li * lh;
@@ -635,21 +632,116 @@ export class PlanRenderer {
       const order = L.visual?.[li] ?? ln;
       for (const j of order) {
         const n = ln.indexOf(j);
-        placed.push({ j, x, y, w: widths[li]![n]! });
+        placed.push({ j, li, x, y, w: widths[li]![n]! });
         x += widths[li]![n]! + L.space;
       }
     });
-    if (boxHi) {
-      const p = placed.find((q) => q.j === active);
-      if (p) {
-        const [bx, by, bw, bh] = highlightBoxRect(p.x, p.y + asc, p.w, size);
-        g.fillStyle = hiColor;
-        roundRectPath(g, bx, by, bw + 1, bh + 1, Math.trunc(size * 0.22));
+    // the spoken word under pop / bounce: its own size (whole px), centred on its slot, lifted
+    const wordFont = (j: number): { x: (p: { x: number; w: number }) => number; dy: number; scaled: boolean } => {
+      if (j !== active || (hs !== "pop" && hs !== "bounce")) return { x: (p) => p.x, dy: 0, scaled: false };
+      const dy = -jsRound(size * motion.lift);
+      if (hs === "bounce" || motion.scale === 1) return { x: (p) => p.x, dy, scaled: false };
+      return { x: (p) => p.x + (p.w - measureScaled(j)) / 2, dy, scaled: true };
+    };
+    const big = Math.max(1, jsRound(size * motion.scale));
+    const setWord = (j: number, scaled: boolean) => {
+      useFont(j);
+      if (scaled) g.font = g.font.replace(`${size}px`, `${big}px`);
+    };
+    const measureScaled = (j: number) => {
+      setWord(j, true);
+      return g.measureText(words[j]!).width;
+    };
+
+    // 1. background(s)
+    if (bg.enabled !== false) {
+      const rects = captionBackgroundRects(fx, placed.filter((p) => visible(p.j)), lines.length, lineW, W, top, blockH, asc, size, padx, pady);
+      const [r, gg, b] = hexRgb(bg.color ?? "#000000");
+      if (fx.backdropBlur > 0 && rects.length) this.blurUnder(g, rects, size * fx.backdropBlur, W, H);
+      g.fillStyle = `rgba(${r},${gg},${b},${Math.trunc(255 * (bg.opacity ?? 0.66)) / 255})`;
+      for (const q of rects) {
+        roundRectPath(g, q.x, q.y, q.w + 1, q.h + 1, q.r);
         g.fill();
       }
+      if (fx.accent && rects.length) {
+        const q = rects[0]!;
+        const ax = fx.boxShape === "bar" ? Math.round((W - Math.max(...lineW)) / 2 - padx) : Math.round(q.x);
+        g.fillStyle = fx.accent;
+        g.fillRect(ax, Math.round(q.y), Math.max(2, jsRound(size * 0.12)), Math.round(q.h) + 1);
+      }
     }
-    for (const { j, x, y } of placed) {
-      useFont(j);
+
+    // 2. glow, then drop shadow: the words' silhouette (with outline), blurred, under everything else
+    const silhouette = (color: string): AnyCanvas => {
+      const c = this.scratch(W, H);
+      const sg = c.getContext("2d") as Canvas2D;
+      sg.clearRect(0, 0, W, H);
+      sg.save();
+      sg.textBaseline = "alphabetic";
+      sg.textAlign = "left";
+      (sg as unknown as { fontKerning: string }).fontKerning = "none";
+      sg.fillStyle = color;
+      sg.strokeStyle = color;
+      sg.lineJoin = "round";
+      sg.miterLimit = 2;
+      sg.lineWidth = 2 * strokePx;
+      for (const p of placed) {
+        if (!visible(p.j)) continue;
+        const wf = wordFont(p.j);
+        useFont(p.j);
+        sg.font = wf.scaled ? g.font.replace(`${size}px`, `${big}px`) : g.font;
+        (sg as unknown as { direction: string }).direction = (g as unknown as { direction: string }).direction;
+        const x = wf.x(p);
+        const y = p.y + asc + wf.dy;
+        if (strokePx > 0) sg.strokeText(words[p.j]!, x, y);
+        sg.fillText(words[p.j]!, x, y);
+      }
+      sg.restore();
+      return c;
+    };
+    const ghost = (color: string, opacity: number, dx: number, dy: number, sigma: number) => {
+      const c = silhouette(color);
+      // only the caption's neighbourhood (the compositor's region): blur margin + offset + one font size
+      const m = Math.ceil(sigma * 3) + 2 + Math.max(Math.abs(dx), Math.abs(dy));
+      const x0 = Math.max(0, Math.floor(Math.min(...placed.map((p) => p.x))) - m - size);
+      const x1 = Math.min(W, Math.ceil(Math.max(...placed.map((p) => p.x + p.w))) + m + size);
+      const y0 = Math.max(0, Math.trunc(top) - m - size);
+      const y1 = Math.min(H, Math.trunc(top + blockH) + m + size);
+      if (x1 <= x0 || y1 <= y0) return;
+      g.save();
+      g.globalAlpha = opacity;
+      if (sigma > 0) g.filter = `blur(${sigma}px)`;
+      g.drawImage(c as CanvasImageSource, x0 - dx, y0 - dy, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+      g.restore();
+    };
+    if (fx.glow) ghost(fx.glow.color, 1, 0, 0, size * fx.glow.radius);
+    if (fx.shadow) ghost(fx.shadow.color, fx.shadow.opacity, jsRound(size * fx.shadow.dx), jsRound(size * fx.shadow.dy), size * fx.shadow.blur);
+
+    // 3. highlight decorations under the text
+    const ap = active >= 0 ? placed.find((q) => q.j === active && visible(q.j)) : undefined;
+    if (boxHi && ap) {
+      const wf = wordFont(active);
+      const [bx, by, bw, bh, br] = hs === "pill" ? highlightPillRect(ap.x, ap.y + asc, ap.w, size) : [...highlightBoxRect(ap.x, ap.y + asc, ap.w, size), Math.trunc(size * 0.22)];
+      g.fillStyle = hiColor;
+      roundRectPath(g, bx, by + wf.dy, bw + 1, bh + 1, br);
+      g.fill();
+    }
+    if (hs === "underline" && ap) {
+      const [ux, uy, uw, uh] = underlineRect(ap.x, ap.y + asc, ap.w, size, motion.sweep);
+      if (uw > 0) {
+        g.fillStyle = hiColor;
+        g.fillRect(ux, uy, uw, uh);
+      }
+    }
+
+    // 4. words: outline, then fill (highlight colour, gradient, second-line colour or the text colour)
+    for (const p of placed) {
+      const j = p.j;
+      if (!visible(j)) continue;
+      const wf = wordFont(j);
+      setWord(j, wf.scaled);
+      const x = wf.x(p);
+      const y = p.y + asc + wf.dy;
       const onBox = boxHi && j === active;
       // every word sits on the line's baseline (line top + the taller font's ascent), as in the compositor
       if (strokePx > 0 && !onBox) {
@@ -657,13 +749,99 @@ export class PlanRenderer {
         g.miterLimit = 2;
         g.lineWidth = 2 * strokePx;
         g.strokeStyle = look.stroke.color;
-        g.strokeText(words[j]!, x, y + asc);
+        g.strokeText(words[j]!, x, y);
       }
-      g.fillStyle = onBox ? boxHighlightText(hiColor) : j === active && !boxHi ? hiColor : cs.textColor ?? "#ffffff";
-      g.fillText(words[j]!, x, y + asc);
+      const base = p.li >= 1 && fx.line2Color ? fx.line2Color : cs.textColor ?? "#ffffff";
+      const lit = active >= 0 && (hs === "karaoke" ? j <= active : j === active && (hs === "color" || hs === "pop" || hs === "bounce"));
+      if (onBox) g.fillStyle = boxHighlightText(hiColor);
+      else if (lit) g.fillStyle = hiColor;
+      else if (fx.gradient) {
+        const gr = g.createLinearGradient(0, p.y, 0, p.y + lh);
+        gr.addColorStop(0, fx.gradient.from);
+        gr.addColorStop(1, fx.gradient.to);
+        g.fillStyle = gr;
+      } else g.fillStyle = base;
+      g.fillText(words[j]!, x, y);
     }
     g.restore();
   }
+
+  private scratchCanvas: AnyCanvas | null = null;
+  /** A reusable W x H canvas for the caption glow / shadow silhouette. */
+  private scratch(W: number, H: number): AnyCanvas {
+    if (!this.scratchCanvas || this.scratchCanvas.width !== W || this.scratchCanvas.height !== H) this.scratchCanvas = makeCanvas(W, H);
+    return this.scratchCanvas;
+  }
+
+  /** Frosted caption background: the picture under the rects, Gaussian-blurred (sigma px), clipped to them. */
+  private blurUnder(g: Canvas2D, rects: CaptionRect[], sigma: number, W: number, H: number): void {
+    const m = Math.ceil(sigma * 3);
+    const x0 = Math.max(0, Math.floor(Math.min(...rects.map((q) => q.x))) - m);
+    const y0 = Math.max(0, Math.floor(Math.min(...rects.map((q) => q.y))) - m);
+    const x1 = Math.min(W, Math.ceil(Math.max(...rects.map((q) => q.x + q.w + 1))) + m);
+    const y1 = Math.min(H, Math.ceil(Math.max(...rects.map((q) => q.y + q.h + 1))) + m);
+    if (x1 <= x0 || y1 <= y0) return;
+    const tmp = makeCanvas(x1 - x0, y1 - y0);
+    const tg = tmp.getContext("2d") as Canvas2D;
+    tg.drawImage(g.canvas as CanvasImageSource, x0, y0, x1 - x0, y1 - y0, 0, 0, x1 - x0, y1 - y0);
+    g.save();
+    g.beginPath();
+    for (const q of rects) {
+      roundRectPath(g, q.x, q.y, q.w + 1, q.h + 1, q.r);
+    }
+    g.clip();
+    g.filter = `blur(${sigma}px)`;
+    g.drawImage(tmp as CanvasImageSource, x0, y0);
+    g.restore();
+  }
+}
+
+/** JavaScript Math.round, named for the compositor's _js_round. */
+const jsRound = Math.round;
+
+interface CaptionRect { x: number; y: number; w: number; h: number; r: number }
+
+/**
+ * Caption background rects (output px; w / h exclusive of the +1 both renderers add): one pill for the
+ * block (the original look), a full-width bar, one box per line, or one per (shown) word.
+ */
+function captionBackgroundRects(fx: ReturnType<typeof captionEffects>, placed: Array<{ j: number; li: number; x: number; y: number; w: number }>, nLines: number,
+  lineW: number[], W: number, top: number, blockH: number, asc: number, size: number, padx: number, pady: number): CaptionRect[] {
+  const square = fx.boxShape !== "rounded";
+  if (fx.boxShape === "bar") return [{ x: 0, y: top - pady, w: W, h: blockH + 2 * pady, r: 0 }];
+  if (fx.boxMode === "block") {
+    const bw = Math.max(...lineW);
+    return [{ x: (W - bw) / 2 - padx, y: top - pady, w: bw + 2 * padx, h: blockH + 2 * pady, r: square ? 0 : Math.trunc(size * 0.45) }];
+  }
+  const by = (y: number) => y + asc - jsRound(size * 0.95);
+  const bh = jsRound(size * 1.25);
+  const r = square ? 0 : Math.trunc(size * 0.3);
+  if (fx.boxMode === "line") {
+    const out: CaptionRect[] = [];
+    for (let li = 0; li < nLines; li++) {
+      const ws = placed.filter((p) => p.li === li);
+      if (!ws.length) continue;
+      const lx = Math.min(...ws.map((p) => p.x));
+      const rx = Math.max(...ws.map((p) => p.x + p.w));
+      const px = jsRound(size * 0.3);
+      out.push({ x: jsRound(lx) - px, y: by(ws[0]!.y), w: jsRound(rx - lx) + 2 * px, h: bh, r });
+    }
+    return out;
+  }
+  const px = jsRound(size * 0.16);
+  return placed.map((p) => ({ x: jsRound(p.x) - px, y: by(p.y), w: jsRound(p.w) + 2 * px, h: bh, r }));
+}
+
+/** The pill highlight (karaoke pill): wider padding, fully rounded. */
+function highlightPillRect(x: number, baseline: number, w: number, size: number): [number, number, number, number, number] {
+  const pad = jsRound(size * 0.28);
+  const h = jsRound(size * 1.14);
+  return [jsRound(x) - pad, baseline - jsRound(size * 0.88), jsRound(w) + 2 * pad, h, Math.trunc(h / 2)];
+}
+
+/** The underline under the spoken word, `sweep` (0..1) of its width. */
+function underlineRect(x: number, baseline: number, w: number, size: number, sweep: number): [number, number, number, number] {
+  return [jsRound(x), baseline + jsRound(size * 0.12), jsRound(w * sweep), Math.max(2, jsRound(size * 0.08))];
 }
 
 /** The active word's highlight box (output px x, y, w, h) around a word drawn at (x, baseline). */
@@ -734,21 +912,64 @@ function captionLayout(g: Canvas2D, plan: RenderPlan, f: PlanFrame, W: number, H
   g.font = mainFont;
   (g as unknown as { direction: string }).direction = "ltr";
   const lineW = widths.map((ws) => ws.reduce((a, b) => a + b, 0) + space * (ws.length - 1));
-  const fm = g.measureText("Hg");
-  let asc = Math.ceil(fm.fontBoundingBoxAscent);
-  let desc = Math.ceil(fm.fontBoundingBoxDescent);
+  let [asc, desc] = fontVMetrics(g, wt, size, fontCss((cs as { font?: string }).font, FONT_STACK), "Hg");
   if (isScript.some(Boolean)) {
-    g.font = scriptFont!;
-    const sm = g.measureText("\u0628");
-    asc = Math.max(asc, Math.ceil(sm.fontBoundingBoxAscent));
-    desc = Math.max(desc, Math.ceil(sm.fontBoundingBoxDescent));
-    g.font = mainFont;
+    const [sa, sd] = fontVMetrics(g, wt, size, fontCss(cs.scriptFont, FONT_STACK), "\u0628");
+    asc = Math.max(asc, sa);
+    desc = Math.max(desc, sd);
   }
+  g.font = mainFont;
   const lh = Math.trunc((asc + desc) * 1.12);
   const blockH = lh * lines.length;
   const pos = cs.position ?? "bottom";
   const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
   return { cs, size, words, lines, widths, lineW, space, asc, lh, blockH, top, active: cap.active, visual: cap.visual, look, isScript, useFont };
+}
+
+const vMetricsCache = new Map<string, [number, number]>();
+
+/**
+ * Line ascent / descent of a font in whole pixels, as FreeType (PIL getmetrics in render.py) rounds
+ * them: measured at 64 x size, so Chrome's per-size rounding of fontBoundingBox* does not leak in,
+ * then ceil(v / 64) like FreeType's 26.6 ceiling (Fira Sans 27 px: 26 / 8, where measuring at 27 px
+ * gives 26 / 7). Cached per font string once the font has loaded. Leaves g.font changed.
+ */
+function fontVMetrics(g: Canvas2D, wt: string, size: number, family: string, sample: string): [number, number] {
+  const key = `${wt} ${size}px ${family}|${sample}`;
+  const hit = vMetricsCache.get(key);
+  if (hit) return hit;
+  g.font = `${wt} ${size * 64}px ${family}`;
+  const m = g.measureText(sample);
+  const v: [number, number] = [Math.ceil(m.fontBoundingBoxAscent / 64 - 1e-6), Math.ceil(m.fontBoundingBoxDescent / 64 - 1e-6)];
+  if (primaryFaceReady(family) && checkLoaded(`${wt} ${size}px ${family}`, sample)) vMetricsCache.set(key, v);
+  return v;
+}
+
+function checkLoaded(font: string, sample: string): boolean {
+  try {
+    return fontSet().check(font, sample);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether the first family of a font stack is really there to measure. FontFaceSet.check() is also
+ * true for a family that has no face in the set yet (nothing to load, the fallback is drawn), so a
+ * caption drawn while a plan font (an imported one, "Lens Lobster") was still loading cached the
+ * fallback's ascent / descent for good: the preview's lines then sat 1 px off the export's, which
+ * measures after ensurePlanAssets. Only "Lens <family>" faces are registered at run time; any other
+ * family (the built-in caption face, system stacks) counts as ready.
+ */
+function primaryFaceReady(family: string): boolean {
+  const first = family.split(",")[0]!.trim().replace(/^["']|["']$/g, "");
+  if (!first.startsWith("Lens ")) return true;
+  try {
+    for (const f of fontSet() as unknown as Iterable<FontFace>) if (f.family.replace(/^["']|["']$/g, "") === first && f.status === "loaded") return true;
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 function setNoKerning(g: Canvas2D): void {

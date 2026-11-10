@@ -13,13 +13,24 @@
  *  - every option of the font picker is drawn in its own face (the button's computed font-family names
  *    that family, and the page has the face loaded);
  *  - a style preset click + Save writes its fields to project.json (read back from disk).
+ *
+ * Export path (uxHelpers EXPORT_PATH, LENS_EXPORT): the bounds above hold for the browser export, the
+ * path the shipped desktop app takes (same Chromium text as the preview). The dev server's Python
+ * reference (/api/export, render.py, Pillow / FreeType text) gets a separate, recorded tolerance:
+ * glyph IoU >= 0.80 (mean bound unchanged). Reason, Rules.md section 4 "caption export paths": the two
+ * rasterisers place glyphs 0.3-0.6 px apart vertically and Pillow's are thinner, which no metric fix
+ * removes (measured 2026-11-10, Pillow 13.0 / FreeType 2.14.3, RAQM caption text: Poppins 0.905, Bebas
+ * Neue 0.876, Caveat 0.823).
  */
 import { test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, shot } from "./helpers";
 import { closeAll, openLens, PACKAGED } from "./lensApp";
-import { editProject, exportMp4, frameAt, proj, seekSrc, uxBundle } from "./uxHelpers";
+import { EXPORT_PATH, editProject, exportMp4, frameAt, proj, seekSrc, uxBundle } from "./uxHelpers";
+
+/** Preview-vs-export glyph IoU bound per export path (see the header). */
+const IOU_PE = EXPORT_PATH === "browser" ? 0.85 : 0.8;
 
 test.afterAll(() => closeAll());
 
@@ -131,10 +142,10 @@ test("three caption fonts: export differs per font and matches the preview", asy
     const gExp = glyphs(exp, region);
     const iouPE = iou(gPrev, gExp);
     const width = bboxW(region, prev.w);
-    console.log(`${f.family}: band px ${n}, glyph px ${gPrev.reduce((a, b) => a + b, 0)}, preview-vs-export mean |RGB| ${meanDiff.toFixed(2)} (bound 12), glyph IoU ${iouPE.toFixed(3)} (bound >= 0.85), pill width ${width} px`);
+    console.log(`${f.family}: band px ${n}, glyph px ${gPrev.reduce((a, b) => a + b, 0)}, preview-vs-export mean |RGB| ${meanDiff.toFixed(2)} (bound 12), glyph IoU ${iouPE.toFixed(3)} (bound >= ${IOU_PE}, ${EXPORT_PATH} export), pill width ${width} px`);
     expect(n).toBeGreaterThan(2000);
     expect(meanDiff).toBeLessThanOrEqual(12);
-    expect(iouPE).toBeGreaterThanOrEqual(0.85);
+    expect(iouPE).toBeGreaterThanOrEqual(IOU_PE);
     res.push({ family: f.family, prev, exp, gPrev, gExp, meanDiff, iouPE, width });
   }
   await shot(page, `caption-fonts${PACKAGED ? "-app" : ""}`);

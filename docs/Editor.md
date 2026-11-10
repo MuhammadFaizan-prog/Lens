@@ -170,9 +170,13 @@ Intentional or accepted differences:
 2. **Resampling.** Canvas "high" quality smoothing vs OpenCV INTER_AREA (down) / INTER_CUBIC (up).
    Pixel-centre conventions are matched (offset 0.5 − 0.5/k), the filters are not.
 3. **Background dither.** The compositor adds ±0.5 level noise against banding; the preview does not.
-4. **Text.** Same font (DejaVu Sans Bold, served by the dev server), same layout maths (no kerning,
-   FreeType-style rounded metrics), but Chrome and PIL rasterise differently and PIL's pill corners
-   are not anti-aliased.
+4. **Text.** Same font file (DejaVu Sans Bold by default, or the caption / theme font, served by the
+   dev server), same layout maths (no kerning). Metrics are matched explicitly: line ascent /
+   descent come from FreeType-rounded values on both sides (the preview measures at 64 × size and
+   takes `ceil(v / 64)`), and the compositor measures word, space and pop / bounce widths at
+   64 × size / 64, Chrome's fractional advances, instead of FreeType's whole-pixel hinted ones
+   (Rules.md §4). Chrome and PIL still rasterise glyphs differently and PIL's pill corners are not
+   anti-aliased.
 5. **Overlapping spotlights.** Preview dims by the product of (1 − spot); the compositor by
    1 − max(spot). Identical unless two spotlights overlap.
 6. **Viewport beyond the frame edge** (only motion-blur samples can do this): compositor replicates
@@ -203,6 +207,48 @@ Intentional or accepted differences:
     export draw the same bytes. The Python compositor's twin (`backdrop_field.py`) produces
     byte-identical output (golden hashes shared by `packages/engine/test/backdropField.test.ts`
     and `tests/test_backdrop_field.py`). Uploaded images are drawn by both.
+
+## Caption fonts, styles and import (v0.1.4, Windows v0.1.3 request "add more styles n fonts")
+
+**Fonts.** The picker (Captions tab > Style) lists the built-in families plus 44 more from
+github.com/google/fonts (OFL 1.1 or Apache 2.0, licence per entry), in categories All / Sans / Serif /
+Display / Rounded / Condensed / Mono / Handwriting / My fonts, with a search box; every option is drawn
+in its own font. The catalog is `packages/engine/src/fontCatalog.ts` (`EXTRA_FONTS`, strict JSON between
+the catalog markers, pinned google/fonts commit, SHA-256 per file). The `.ttf` files are not committed:
+`assets/fonts/fetch_extra_fonts.mjs` downloads and checks them into `assets/fonts/` (git-ignored); the
+licence texts (`<Stem>-OFL.txt` / `<Stem>-Apache.txt`) are committed. `dist-win.mjs` and the release
+workflow run the fetch and refuse to package if a catalog font or its licence is not staged.
+Single-weight families draw the same file for bold (never a synthesised bold).
+
+**Styles.** 20 more presets in `CAPTION_PRESETS` (captionStyles.ts): Reels, Karaoke pill, Word pop,
+Word boxes, Gradient, Neon, Typewriter, Lower third, Classic subtitle, Soft shadow, Comic, Emoji friendly,
+Impact, Glass, Two tone, Bounce, Underline sweep, Handwritten, Karaoke fill, Retro terminal. They are
+built from optional style fields, each mirrored in `render.py draw_caption`: background per line / per
+word (`boxMode`), square corners or a full-width bar with an accent stripe (`boxShape`, `accent`), a
+frosted backdrop (`backdropBlur`), glow, drop shadow, gradient fill, second-line colour, word-by-word
+reveal, and the pill / underline / karaoke / pop / bounce highlights. Absent fields keep the original
+look, so older projects render unchanged.
+
+**Import.** "My fonts" > Import: **From computer** (file picker; the desktop app uses the native dialog),
+**From URL** (a direct .ttf / .otf / .woff / .woff2, or a stylesheet with @font-face rules such as a
+Google Fonts css2 link) or **Google Fonts** (family name; weights 400 and 700, or what the family has).
+`apps/editor/server/fonts.ts` checks every file parses as a font (`engine/fontFile.ts`: sfnt / WOFF /
+WOFF2, required tables, a family name) and is under 10 MB, copies it into `<bundle>/fonts/` (the project
+renders offline and on another machine) and into the user font library (`LENS_FONT_LIBRARY`, default
+`~/.lens/fonts`; the desktop app uses `userData/fonts`), which lists it under My fonts in every project.
+A licence note under the picker reminds the user to check the font's licence.
+
+**Missing fonts (behaviour change).** A font whose files are gone (a project copied without `fonts/`, a
+library font deleted, a built-in that was not fetched) no longer makes the export refuse. The preview
+and both export paths apply `withFontFallback` (plan.ts): that family is drawn in DejaVu Sans, the
+plan lists it in `fontFallbacks`, and the Captions tab shows a warning ("X is missing from this project;
+captions use DejaVu Sans until you import it again"). Before, the compositor raised
+"caption font not available for the export"; that check now only guards plans built without the fallback.
+
+Tests: `packages/engine/test/captionFonts2.test.ts`, `captionStyles.test.ts`,
+`apps/editor/test/fontImport.test.ts`; Playwright `e2e/captionFonts2.spec.ts` (picker, import, My fonts,
+licence note, fallback, preview vs export) and `e2e/parity-caption-styles2.spec.ts` (all 20 styles,
+preview vs export). Text metrics: see Preview vs export item 4.
 
 ## Export dialog (demand #7)
 

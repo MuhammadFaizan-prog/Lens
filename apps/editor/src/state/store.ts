@@ -7,7 +7,8 @@ import { useSyncExternalStore } from "react";
 import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS, parseTranscript } from "@lens/engine";
 import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
 import { setDemoHotspot } from "@lens/engine";
-import { ensurePlanAssets, setAssetBundle } from "../render/assets";
+import { withFontFallback, type ProjectFont } from "@lens/engine";
+import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
 import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
@@ -89,6 +90,12 @@ export interface EditorState {
   privacyScan: PrivacyScanState | null;
   /** Export asked while privacy detections are unreviewed: the sheet asks first. */
   exportWarning: { pending: number } | null;
+  /** Font families the plan names that did not load: drawn in the default font, shown as a warning (Windows v0.1.3). */
+  missingFonts: string[];
+  /** The user's imported-font library ("My fonts" in every project), from /api/fonts/library. */
+  fontLibrary: Array<{ family: string; regular: string; bold: string; source?: { kind: string; url?: string; name?: string } }>;
+  /** A font import in flight (its label) or its last error. */
+  fontImport: { busy: string | null; error: string | null };
   /** Which panel the left column shows. */
   leftPanel: "transcript" | "privacy" | "steps" | "brand";
   /** Built-in and saved style presets (demand #9), and the default for new projects. */
@@ -178,6 +185,9 @@ export class EditorStore {
     audition: null,
     privacyScan: null,
     exportWarning: null,
+    missingFonts: [],
+    fontLibrary: [],
+    fontImport: { busy: null, error: null },
     leftPanel: "transcript",
     presets: [],
     defaultPresetId: null,
@@ -295,12 +305,21 @@ export class EditorStore {
     }
     if (planProject === project && this.s.audition) this.s = { ...this.s, audition: null };
     const t0 = performance.now();
-    const plan = buildPlan(b, planProject);
+    const plan = withFontFallback(buildPlan(b, planProject), this.s.missingFonts);
     const planMs = performance.now() - t0;
     const frame = Math.min(this.s.frame, plan.frames.length - 1);
     // fonts and logo images the plan uses: redraw once they have loaded
-    void ensurePlanAssets(plan).then((changed) => {
-      if (changed && this.s.plan === plan) this.set({ revision: this.s.revision + 1 });
+    void ensurePlanAssets(plan).then(async (changed) => {
+      if (this.s.plan !== plan) return;
+      // a font whose files are gone falls back to the default font (warning in the Captions tab)
+      const missing = await missingPlanFonts(plan);
+      if (this.s.plan !== plan) return;
+      if (missing.some((f) => !this.s.missingFonts.includes(f))) {
+        this.s = { ...this.s, missingFonts: [...new Set([...this.s.missingFonts, ...missing])] };
+        this.rebuild(this.s.project);
+        return;
+      }
+      if (changed) this.set({ revision: this.s.revision + 1 });
     });
     const h = this.history;
     this.set({
@@ -1063,6 +1082,79 @@ export class EditorStore {
   }
 
   /** Add the user's own font files (regular, and bold if given) and make it the brand font. */
+  // ------------------------------------------------------------------ imported caption fonts (Windows v0.1.3)
+
+  /** Refresh "My fonts" from the user's library. */
+  async loadFontLibrary(): Promise<void> {
+    try {
+      const r = await fetch("/api/fonts/library");
+      const j = await r.json();
+      if (r.ok && Array.isArray(j.fonts)) this.set({ fontLibrary: j.fonts });
+    } catch {
+      // no library: "My fonts" lists the project's own fonts only
+    }
+  }
+
+  /**
+   * Import a font (file bytes, desktop paths, a URL, a Google Fonts family, or one from the library):
+   * the server checks it is a font and copies it into the project's fonts/ folder; the project lists it
+   * in customFonts and the captions use it (one undo step).
+   */
+  async importCaptionFont(req: { kind: "file"; files: File[] } | { kind: "path"; paths: string[] } | { kind: "url"; url: string } | { kind: "google"; family: string } | { kind: "library"; family: string }): Promise<string | null> {
+    const label = req.kind === "file" ? req.files.map((f) => f.name).join(", ") : req.kind === "path" ? req.paths.map((p) => p.split(/[\\/]/).pop()).join(", ") : req.kind === "url" ? req.url : req.family;
+    this.set({ fontImport: { busy: label, error: null } });
+    try {
+      let body: unknown = req;
+      if (req.kind === "file") {
+        const files = [];
+        for (const f of req.files.slice(0, 2)) {
+          if (f.size > 10 * 1024 * 1024) throw new Error(`${f.name}: the file is larger than 10 MB`);
+          const buf = new Uint8Array(await f.arrayBuffer());
+          let bin = "";
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+          files.push({ name: f.name, data: btoa(bin) });
+        }
+        body = { kind: "file", files };
+      }
+      const r = await fetch(`/api/fonts/import${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? `import failed (${r.status})`);
+      const font = j.font as { family: string; regular: string; bold: string; source?: ProjectFont["source"] };
+      forgetFont(font.family);
+      this.s = { ...this.s, missingFonts: this.s.missingFonts.filter((f) => f !== font.family) };
+      this.edit(`Import font ${font.family}`, (p) => ({
+        ...p,
+        customFonts: [...(p.customFonts ?? []).filter((f) => f.family !== font.family), font],
+        captions: { ...p.captions, style: { ...p.captions.style, font: font.family, preset: undefined } },
+      }));
+      this.set({ fontImport: { busy: null, error: null } });
+      void this.loadFontLibrary();
+      this.notify(`Imported ${font.family}`);
+      return font.family;
+    } catch (e) {
+      this.set({ fontImport: { busy: null, error: e instanceof Error ? e.message : String(e) } });
+      return null;
+    }
+  }
+
+  /** Remove an imported font from the project (captions using it go back to the theme font) and, optionally, from the library. */
+  async removeCaptionFont(family: string, fromLibrary: boolean): Promise<void> {
+    const p = this.s.project;
+    if ((p.customFonts ?? []).some((f) => f.family === family) || p.captions.style.font === family)
+      this.edit(`Remove font ${family}`, (q) => {
+        const style = { ...q.captions.style };
+        if (style.font === family) delete style.font;
+        const rest = (q.customFonts ?? []).filter((f) => f.family !== family);
+        const out: ProjectConfig = { ...q, captions: { ...q.captions, style } };
+        if (rest.length || q.customFonts !== undefined) out.customFonts = rest;
+        return out;
+      });
+    if (fromLibrary) {
+      await fetch(`/api/fonts/library?family=${encodeURIComponent(family)}`, { method: "DELETE" }).catch(() => undefined);
+      await this.loadFontLibrary();
+    }
+  }
+
   async addBrandFont(files: File[]): Promise<void> {
     if (!files.length) return;
     try {
@@ -1655,7 +1747,7 @@ export class EditorStore {
     const b = this.s.bundle;
     if (!b || !this.screen) return;
     this.exportCancel = false;
-    const plan = buildPlan(b, this.s.project);
+    const plan = withFontFallback(buildPlan(b, this.s.project), this.s.missingFonts);
     const total = plan.frames.length;
     const t0 = performance.now();
     const fail = (error: string, id = "", done = 0) => this.set({ exporting: { id, state: "error", done, total, error, path: "browser" } });

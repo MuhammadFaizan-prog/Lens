@@ -9,6 +9,10 @@
  *   GET  /api/font/file?ref=         a theme / brand font: builtin:<file> (assets/fonts), system:<file>, or a bundle path
  *   GET  /api/asset?path=            a file inside the bundle (brand logo, user fonts)
  *   POST /api/asset?name=            { data: base64 } -> saves <bundle>/brand/<name>, returns { path }
+ *   GET  /api/fonts/library          { fonts }: the user's imported-font library ("My fonts")
+ *   POST /api/fonts/import           { kind: file | path | url | google | library, ... } -> { font, format, weights }:
+ *                                    validates the font and copies it into <bundle>/fonts/ and the library (server/fonts.ts)
+ *   DELETE /api/fonts/library?family= removes a family from the library
  *   POST /api/project                save project.json into the bundle
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
@@ -43,7 +47,8 @@ import { transcribe } from "./stt";
 import { detectSilences, type Range } from "./silence";
 import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
-import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
+import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
+import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
@@ -499,6 +504,18 @@ function insideBundle(bundle: string, rel: string): string | null {
   return p.startsWith(path.resolve(bundle) + path.sep) ? p : null;
 }
 
+/**
+ * Fonts the plan names whose files are not there (an imported font missing from fonts/, a built-in that
+ * was not fetched, a caption family with no files at all) are drawn in the default font, as the preview
+ * does, instead of failing the export; the editor shows them as a warning (Windows v0.1.3).
+ */
+function planFontFallback(bundle: string, plan: RenderPlan): RenderPlan {
+  const missing = missingFamilies(plan.fonts, (ref) => fontFile(bundle, ref));
+  const cap = plan.style.captions.font;
+  if (cap && !(plan.fonts ?? []).some((f) => f.family === cap)) missing.push(cap);
+  return withFontFallback(plan, missing);
+}
+
 function fontFile(bundle: string, ref: string): string | null {
   if (ref.startsWith("builtin:")) {
     const f = path.join(ROOT, "assets", "fonts", path.basename(ref.slice(8)));
@@ -512,7 +529,7 @@ function fontFile(bundle: string, ref: string): string | null {
   return p && fs.existsSync(p) ? p : null;
 }
 
-const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".otf": "font/otf" };
+const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2" };
 
 function readJson(file: string): unknown {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
@@ -579,7 +596,7 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)) });
+  const plan = planFontFallback(bundle, buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)) }));
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const job: ExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now() };
@@ -715,9 +732,24 @@ export function apiMiddleware() {
       if (url.pathname === "/api/font/file") {
         const f = fontFile(bundle, url.searchParams.get("ref") ?? "");
         if (!f) return sendJson(res, { error: "font not found" }, 404);
-        res.setHeader("content-type", "font/ttf");
-        res.setHeader("cache-control", "max-age=3600");
+        res.setHeader("content-type", MIME[path.extname(f).toLowerCase()] ?? "font/ttf");
+        // imported fonts can be replaced under the same name: never let the page keep a stale copy
+        res.setHeader("cache-control", (url.searchParams.get("ref") ?? "").startsWith("fonts/") ? "no-store" : "max-age=3600");
         return fs.createReadStream(f).pipe(res);
+      }
+      if (url.pathname === "/api/fonts/library" && req.method === "GET") return sendJson(res, { fonts: listLibrary(defaultLibraryDir()) });
+      if (url.pathname === "/api/fonts/library" && req.method === "DELETE") {
+        const ok = removeFromLibrary(defaultLibraryDir(), url.searchParams.get("family") ?? "");
+        return sendJson(res, { ok });
+      }
+      if (url.pathname === "/api/fonts/import" && req.method === "POST") {
+        try {
+          const body = JSON.parse(await readBody(req)) as ImportRequest;
+          const r = await importFont(bundle, body, { fetch: globalThis.fetch, libraryDir: defaultLibraryDir() });
+          return sendJson(res, r);
+        } catch (e) {
+          return sendJson(res, { error: e instanceof FontImportError ? e.message : `import failed: ${e instanceof Error ? e.message : String(e)}` }, 400);
+        }
       }
       if (url.pathname === "/api/asset" && req.method === "GET") {
         const f = insideBundle(bundle, url.searchParams.get("path") ?? "");

@@ -27,7 +27,8 @@ from typing import Callable, Iterator, Optional
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import features as _pil_features
 
 from . import annotations as ann
 from .annotations import draw_items, image_premul, resolve_asset, set_fonts, shaped_font, text_font
@@ -404,13 +405,59 @@ def has_arabic_script(s: str) -> bool:
     return any(a <= ord(c) <= b for c in s for a, b in _ARABIC_RANGES)
 
 
-def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
+_FINE = 64
+
+
+@lru_cache(maxsize=64)
+def _fine_variant(font, size: int):
+    """The same font file at 64 x size: its advances are (nearly) unhinted, the fractional widths
+    Chrome measures, where FreeType at the real size rounds each glyph's advance to whole pixels."""
+    return font.font_variant(size=size * _FINE)
+
+
+def fine_textlength(d: ImageDraw.ImageDraw, text: str, font, size: int) -> float:
+    """Width of ``text`` as the preview's measureText gives it (within ~0.02 px): measured from the
+    same font at 64 x size, divided by 64 (Rules.md section 4, caption text metrics)."""
+    if isinstance(font, ImageFont.FreeTypeFont):
+        try:
+            return d.textlength(text, font=_fine_variant(font, size)) / _FINE
+        except (OSError, ValueError):
+            pass
+    return d.textlength(text, font=font)
+
+
+@lru_cache(maxsize=64)
+def _shaped_variant(path: str, size: int):
+    return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.RAQM)
+
+
+def caption_face(font):
+    """(font, text kwargs) the caption words are measured and drawn with: the same file through RAQM
+    (HarfBuzz) with kerning off, as the preview draws them (fontKerning = none, default ligatures,
+    fractional advances). BASIC layout draws each glyph at its hinted whole-pixel advance, which
+    drifts along a word (Caveat 40 px "Lens" 65 px drawn vs 62.77 measured) and ignores ligatures
+    (Lobster). Falls back to the font as given when Pillow has no libraqm."""
+    if isinstance(font, ImageFont.FreeTypeFont) and getattr(font, "path", None) and _pil_features.check("raqm"):
+        try:
+            return _shaped_variant(str(font.path), int(font.size)), {"features": ["-kern"]}
+        except OSError:
+            pass
+    return font, {}
+
+
+def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Optional[Image.Image] = None) -> None:
     """Styled caption: wrapped lines, optional pill background, per-word highlight.
 
     Translated captions (demand #8): Arabic-script words use the plan's script font with RAQM
     shaping (HarfBuzz joining, right-to-left glyph order, no kerning, as the preview draws them);
     a right-to-left caption carries each line's left-to-right word order in cap["visual"]
-    (word-level bidi from the engine). All words of a line share one baseline."""
+    (word-level bidi from the engine). All words of a line share one baseline.
+
+    Second batch of styles (Windows v0.1.3 "add more styles"), each field optional (captionStyles.ts
+    captionEffects / captionMotion, mirrored here): background per line / word, square corners or a
+    full-width bar with an accent stripe, a frosted backdrop (``base`` is the frame under the caption
+    layer), glow and drop shadow (the words' silhouette blurred), gradient fill, second-line colour,
+    reveal (cap["shown"]) and the pill / underline / karaoke / pop / bounce highlights (cap["progress"])."""
     if isinstance(cap, str):  # plans from before caption styling
         cap = {"text": cap, "words": cap.split(), "lines": [len(cap.split())], "active": -1}
     # caption styling (Windows request "diff diff fonts"): absent fields = the original look
@@ -419,6 +466,7 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     words = [w.upper() for w in cap["words"]] if upper else cap["words"]
     if not words:
         return
+    layer = d._image
     size = max(10, int(round(cs.get("fontSize", H * 0.04))))
     # theme / brand font (demand #9): same BASIC-layout file the preview loads; default unchanged
     font = text_font(size, bold, cs["font"]) if cs.get("font") else (_font(size) if bold else text_font(size, False, None))
@@ -427,12 +475,13 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     # a right-to-left line is one Arabic-script run: its spaces come from the script font, shaped, as
     # a full-line shaper (HarfBuzz itemising by script) would take them; left-to-right lines unchanged
     rtl_line = bool(cap.get("visual")) and any(script)
-    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else d.textlength(" ", font=font)
+    tfont, tkw = caption_face(font)
+    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else (d.textlength(" ", font=tfont, **tkw) if tkw else fine_textlength(d, " ", font, size))
 
     def wlen(j: int) -> float:
         if script[j]:
             return d.textlength(words[j], font=sfont, direction="rtl", features=["-kern"])
-        return d.textlength(words[j], font=font)
+        return d.textlength(words[j], font=tfont, **tkw) if tkw else fine_textlength(d, words[j], font, size)
 
     lines, i = [], 0
     for n in cap["lines"]:
@@ -456,21 +505,15 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     else:
         top = int(H * 0.93) - block_h
     padx, pady = size * 0.55, size * 0.28
-    bg = cs.get("background", {})
-    if bg.get("enabled", True):
-        bw = max(line_w)
-        x0 = (W - bw) / 2 - padx
-        r, g, b = hex_to_rgb(bg.get("color", "#000000"))
-        d.rounded_rectangle((x0, top - pady, x0 + bw + 2 * padx, top + block_h + pady), radius=int(size * 0.45),
-                            fill=(r, g, b, int(255 * float(bg.get("opacity", 0.66)))))
-    text_rgb = hex_to_rgb(cs.get("textColor", "#ffffff"))
-    hi_hex = cs.get("highlightColor", "#ffd23f")
-    hi_rgb = hex_to_rgb(hi_hex)
+    fx = caption_effects(cs)
+    hs = cs.get("highlightStyle") if cs.get("highlightStyle") in HIGHLIGHT_STYLES else "color"
     active = cap.get("active", -1) if cs.get("wordHighlight", True) else -1
-    box_hi = cs.get("highlightStyle") == "box" and active >= 0
-    st = cs.get("stroke") or {}
-    stroke_px = max(1, int(_js_round(size * float(st.get("width", 0.08))))) if st.get("enabled") else 0
-    stroke_rgb = (*hex_to_rgb(st.get("color", "#000000")), 255)
+    shown = cap.get("shown")
+
+    def visible(j: int) -> bool:
+        return shown is None or j < shown
+
+    scale, lift, sweep = caption_motion(hs, cap.get("progress"))
     visual = cap.get("visual")
     placed = []
     for li, ln in enumerate(lines):
@@ -479,26 +522,223 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
         order = visual[li] if visual else ln
         for j in order:
             wj = widths[li][ln.index(j)]
-            placed.append((j, x, y, wj))
+            placed.append((j, li, x, y, wj))
             x += wj + space
-    if box_hi:
-        for j, x, y, wj in placed:
-            if j == active:
-                pad = int(_js_round(size * 0.16))
-                bx = int(_js_round(x)) - pad
-                by = y + asc - int(_js_round(size * 0.9))
-                bw_, bh_ = int(_js_round(wj)) + 2 * pad, int(_js_round(size * 1.16))
-                d.rounded_rectangle((bx, by, bx + bw_, by + bh_), radius=int(size * 0.22), fill=(*hi_rgb, 255))
-    box_text = (17, 19, 24) if _luminance(hi_rgb) > 0.45 else (255, 255, 255)
-    for j, x, y, wj in placed:
-        on_box = box_hi and j == active
-        fill = (*(box_text if on_box else hi_rgb if (j == active and not box_hi) else text_rgb), 255)
-        sk = {"stroke_width": stroke_px, "stroke_fill": stroke_rgb} if stroke_px and not on_box else {}
+    big = max(1, _js_round(size * scale))
+    big_font = text_font(big, bold, cs.get("font")) if cs.get("font") else (_font(big) if bold else text_font(big, False, None))
+    big_tfont, big_kw = caption_face(big_font)
+
+    def word_pos(j: int, x: float, y: float, wj: float):
+        """(font, x, baseline offset dy, scaled) for word j: the spoken word under pop / bounce moves."""
+        if j != active or hs not in ("pop", "bounce"):
+            return x, 0, False
+        dy = -_js_round(size * lift)
+        if hs == "bounce" or scale == 1:
+            return x, dy, False
+        bw = d.textlength(words[j], font=big_tfont, **big_kw) if big_kw else fine_textlength(d, words[j], big_font, big)
+        return x + (wj - bw) / 2, dy, True
+
+    def draw_word(dr: ImageDraw.ImageDraw, j: int, x: float, y: float, dy: int, scaled: bool, fill, sk: dict) -> None:
         if script[j]:
             # each word from its own ascender, so every word sits on the line's baseline (y + asc)
-            d.text((x, y + asc - s_asc), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"], **sk)
+            dr.text((x, y + asc - s_asc + dy), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"], **sk)
+        elif scaled:
+            b_asc = big_font.getmetrics()[0]
+            dr.text((x, y + asc - b_asc + dy), words[j], font=big_tfont, fill=fill, **big_kw, **sk)
         else:
-            d.text((x, y + asc - main_asc), words[j], font=font, fill=fill, **sk)
+            dr.text((x, y + asc - main_asc + dy), words[j], font=tfont, fill=fill, **tkw, **sk)
+
+    st = cs.get("stroke") or {}
+    stroke_px = max(1, int(_js_round(size * float(st.get("width", 0.08))))) if st.get("enabled") else 0
+    stroke_rgb = (*hex_to_rgb(st.get("color", "#000000")), 255)
+
+    # 1. background(s)
+    bg = cs.get("background", {})
+    if bg.get("enabled", True):
+        r, g, b = hex_to_rgb(bg.get("color", "#000000"))
+        rects = _caption_rects(fx, [p for p in placed if visible(p[0])], len(lines), line_w, W, top, block_h, asc, size, padx, pady)
+        if fx["backdropBlur"] > 0 and base is not None and rects:
+            _blur_under(base, rects, size * fx["backdropBlur"], W, H)
+        for (qx, qy, qw, qh, qr) in rects:
+            d.rounded_rectangle((qx, qy, qx + qw, qy + qh), radius=qr, fill=(r, g, b, int(255 * float(bg.get("opacity", 0.66)))))
+        if fx["accent"] and rects:
+            qx, qy, qw, qh, _ = rects[0]
+            ax = round_half_up((W - max(line_w)) / 2 - padx) if fx["boxShape"] == "bar" else round_half_up(qx)
+            aw = max(2, _js_round(size * 0.12))
+            d.rectangle((ax, round_half_up(qy), ax + aw - 1, round_half_up(qy) + round_half_up(qh)), fill=(*hex_to_rgb(fx["accent"]), 255))
+
+    # 2. glow, then drop shadow: the words' silhouette (with outline), blurred, under everything else
+    def ghost(color: str, opacity: float, dx: int, dy_: int, sigma: float) -> None:
+        m = int(math.ceil(sigma * 3)) + 2 + max(abs(dx), abs(dy_))
+        x0 = max(0, int(math.floor(min(p[2] for p in placed))) - m - size)
+        x1 = min(W, int(math.ceil(max(p[2] + p[4] for p in placed))) + m + size)
+        y0 = max(0, int(top) - m - size)
+        y1 = min(H, int(top + block_h) + m + size)
+        if x1 <= x0 or y1 <= y0:
+            return
+        mask = Image.new("L", (x1 - x0, y1 - y0), 0)
+        md = ImageDraw.Draw(mask)
+        sk = {"stroke_width": stroke_px, "stroke_fill": 255} if stroke_px else {}
+        for j, li, x, y, wj in placed:
+            if not visible(j):
+                continue
+            wx, wdy, sc = word_pos(j, x, y, wj)
+            draw_word(md, j, wx - x0 + dx, y - y0 + dy_, wdy, sc, 255, sk)
+        if sigma > 0:
+            mask = mask.filter(ImageFilter.GaussianBlur(sigma))
+        if opacity < 1:
+            mask = mask.point(lambda v: int(v * opacity + 0.5))
+        col = Image.new("RGBA", mask.size, (*hex_to_rgb(color), 255))
+        col.putalpha(mask)
+        layer.alpha_composite(col, (x0, y0))
+
+    if fx["glow"]:
+        ghost(fx["glow"]["color"], 1.0, 0, 0, size * fx["glow"]["radius"])
+    if fx["shadow"]:
+        sh = fx["shadow"]
+        ghost(sh["color"], float(sh["opacity"]), _js_round(size * sh["dx"]), _js_round(size * sh["dy"]), size * sh["blur"])
+
+    # 3. highlight decorations under the text
+    hi_hex = cs.get("highlightColor", "#ffd23f")
+    hi_rgb = hex_to_rgb(hi_hex)
+    box_hi = hs in ("box", "pill") and active >= 0
+    ap = next((p for p in placed if p[0] == active and visible(p[0])), None) if active >= 0 else None
+    if box_hi and ap is not None:
+        j, li, x, y, wj = ap
+        if hs == "pill":
+            pad = _js_round(size * 0.28)
+            bh_ = _js_round(size * 1.14)
+            bx, by, bw_, rad = _js_round(x) - pad, y + asc - _js_round(size * 0.88), _js_round(wj) + 2 * pad, int(bh_ / 2)
+        else:
+            pad = int(_js_round(size * 0.16))
+            bx, by = int(_js_round(x)) - pad, y + asc - int(_js_round(size * 0.9))
+            bw_, bh_, rad = int(_js_round(wj)) + 2 * pad, int(_js_round(size * 1.16)), int(size * 0.22)
+        d.rounded_rectangle((bx, by, bx + bw_, by + bh_), radius=rad, fill=(*hi_rgb, 255))
+    if hs == "underline" and ap is not None:
+        j, li, x, y, wj = ap
+        uw = _js_round(wj * sweep)
+        if uw > 0:
+            ux, uy, uh = _js_round(x), y + asc + _js_round(size * 0.12), max(2, _js_round(size * 0.08))
+            d.rectangle((ux, uy, ux + uw - 1, uy + uh - 1), fill=(*hi_rgb, 255))
+
+    # 4. words: outline, then fill (highlight colour, gradient, second-line colour or the text colour)
+    text_rgb = hex_to_rgb(cs.get("textColor", "#ffffff"))
+    line2 = hex_to_rgb(fx["line2Color"]) if fx["line2Color"] else None
+    box_text = (17, 19, 24) if _luminance(hi_rgb) > 0.45 else (255, 255, 255)
+    grad = fx["gradient"]
+    grad_words: dict[int, list] = {}
+    for j, li, x, y, wj in placed:
+        if not visible(j):
+            continue
+        wx, wdy, sc = word_pos(j, x, y, wj)
+        on_box = box_hi and j == active
+        lit = active >= 0 and ((j <= active) if hs == "karaoke" else (j == active and hs in ("color", "pop", "bounce")))
+        base_rgb = line2 if (li >= 1 and line2) else text_rgb
+        sk = {"stroke_width": stroke_px, "stroke_fill": stroke_rgb} if stroke_px and not on_box else {}
+        if on_box or lit or not grad:
+            fill = (*(box_text if on_box else hi_rgb if lit else base_rgb), 255)
+            draw_word(d, j, wx, y, wdy, sc, fill, sk)
+            continue
+        # gradient: the outline now, the glyphs below (one vertical gradient per line, y .. y + lh)
+        if sk:
+            draw_word(d, j, wx, y, wdy, sc, stroke_rgb, sk)
+        grad_words.setdefault(li, []).append((j, wx, y, wdy, sc))
+    for li, ws in grad_words.items():
+        y = ws[0][2]
+        ry0, ry1 = max(0, y - size), min(H, y + lh + size)
+        if ry1 <= ry0:
+            continue
+        mask = Image.new("L", (W, ry1 - ry0), 0)
+        md = ImageDraw.Draw(mask)
+        for j, wx, wy, wdy, sc in ws:
+            draw_word(md, j, wx, wy - ry0, wdy, sc, 255, {})
+        bbox = mask.getbbox()
+        if not bbox:
+            continue
+        c0, c1 = np.array(hex_to_rgb(grad["from"]), np.float64), np.array(hex_to_rgb(grad["to"]), np.float64)
+        t = np.clip((np.arange(ry0 + bbox[1], ry0 + bbox[3]) + 0.5 - y) / max(1e-6, lh), 0, 1)[:, None]
+        cols = np.clip(np.round(c0 * (1 - t) + c1 * t), 0, 255).astype(np.uint8)
+        gimg = np.empty((bbox[3] - bbox[1], bbox[2] - bbox[0], 4), np.uint8)
+        gimg[..., :3] = cols[:, None, :]
+        gimg[..., 3] = 255
+        layer.paste(Image.fromarray(gimg, "RGBA"), (bbox[0], ry0 + bbox[1]), mask.crop(bbox))
+
+
+HIGHLIGHT_STYLES = ("color", "box", "pill", "underline", "karaoke", "pop", "bounce")
+
+
+def round_half_up(v: float) -> int:
+    return int(math.floor(v + 0.5))
+
+
+def caption_effects(cs: dict) -> dict:
+    """captionStyles.ts captionEffects: absent / disabled fields filled in."""
+    g, gl, sh = cs.get("gradient") or {}, cs.get("glow") or {}, cs.get("shadow") or {}
+    return {
+        "boxMode": cs.get("boxMode") if cs.get("boxMode") in ("line", "word") else "block",
+        "boxShape": cs.get("boxShape") if cs.get("boxShape") in ("square", "bar") else "rounded",
+        "accent": cs.get("accent"),
+        "gradient": {"from": g["from"], "to": g["to"]} if g.get("enabled") else None,
+        "glow": {"color": gl["color"], "radius": float(gl["radius"])} if gl.get("enabled") and float(gl.get("radius", 0)) > 0 else None,
+        "shadow": dict(sh) if sh.get("enabled") and float(sh.get("opacity", 0)) > 0 else None,
+        "backdropBlur": float(cs.get("backdropBlur") or 0),
+        "line2Color": cs.get("line2Color"),
+    }
+
+
+def caption_motion(style: str, progress) -> tuple[float, float, float]:
+    """captionStyles.ts captionMotion: (scale, lift as a fraction of the size, underline sweep)."""
+    p = min(1.0, max(0.0, 1.0 if progress is None else float(progress)))
+    if style == "pop":
+        return 1.1 + 0.15 * (1 - min(1.0, p / 0.35)), 0.0, 1.0
+    if style == "bounce":
+        return 1.0, 0.18 * math.sin(math.pi * min(1.0, p / 0.45)), 1.0
+    if style == "underline":
+        q = min(1.0, p / 0.6)
+        return 1.0, 0.0, 1 - (1 - q) * (1 - q)
+    return 1.0, 0.0, 1.0
+
+
+def _caption_rects(fx: dict, placed, n_lines: int, line_w, W: int, top: int, block_h: int, asc: int, size: int, padx: float, pady: float):
+    """renderer.ts captionBackgroundRects: (x, y, w, h, radius) per background rect."""
+    square = fx["boxShape"] != "rounded"
+    if fx["boxShape"] == "bar":
+        return [(0, top - pady, W, block_h + 2 * pady, 0)]
+    if fx["boxMode"] == "block":
+        bw = max(line_w)
+        return [((W - bw) / 2 - padx, top - pady, bw + 2 * padx, block_h + 2 * pady, 0 if square else int(size * 0.45))]
+    bh = _js_round(size * 1.25)
+    rad = 0 if square else int(size * 0.3)
+    out = []
+    if fx["boxMode"] == "line":
+        px = _js_round(size * 0.3)
+        for li in range(n_lines):
+            ws = [p for p in placed if p[1] == li]
+            if not ws:
+                continue
+            lx = min(p[2] for p in ws)
+            rx = max(p[2] + p[4] for p in ws)
+            out.append((_js_round(lx) - px, ws[0][3] + asc - _js_round(size * 0.95), _js_round(rx - lx) + 2 * px, bh, rad))
+        return out
+    px = _js_round(size * 0.16)
+    return [(_js_round(p[2]) - px, p[3] + asc - _js_round(size * 0.95), _js_round(p[4]) + 2 * px, bh, rad) for p in placed]
+
+
+def _blur_under(base: Image.Image, rects, sigma: float, W: int, H: int) -> None:
+    """Frosted background: the frame under the rects, Gaussian-blurred (sigma px), pasted back inside them."""
+    m = int(math.ceil(sigma * 3))
+    x0 = max(0, int(math.floor(min(q[0] for q in rects))) - m)
+    y0 = max(0, int(math.floor(min(q[1] for q in rects))) - m)
+    x1 = min(W, int(math.ceil(max(q[0] + q[2] + 1 for q in rects))) + m)
+    y1 = min(H, int(math.ceil(max(q[1] + q[3] + 1 for q in rects))) + m)
+    if x1 <= x0 or y1 <= y0:
+        return
+    region = base.crop((x0, y0, x1, y1)).filter(ImageFilter.GaussianBlur(sigma))
+    mask = Image.new("L", (x1 - x0, y1 - y0), 0)
+    md = ImageDraw.Draw(mask)
+    for (qx, qy, qw, qh, qr) in rects:
+        md.rounded_rectangle((qx - x0, qy - y0, qx - x0 + qw, qy - y0 + qh), radius=qr, fill=255)
+    base.paste(region, (x0, y0), mask)
 
 
 def _js_round(v: float) -> int:
@@ -712,7 +952,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                 d.rounded_rectangle((bx, by, bx + tw + 2 * padx, by + th + 2 * pady), radius=int(th * 0.7), fill=(15, 15, 18, 215))
                 d.text((bx + padx - tb[0], by + pady - tb[1]), f["shortcut"], font=font_pill, fill=(255, 255, 255, 255))
             if f["caption"]:
-                draw_caption(d, f["caption"], cap_style, W, H)
+                draw_caption(d, f["caption"], cap_style, W, H, base=pil)
             pil = Image.alpha_composite(pil, layer).convert("RGB")
             out = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR).astype(np.float32)
 

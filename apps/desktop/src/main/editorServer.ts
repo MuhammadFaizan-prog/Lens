@@ -11,7 +11,7 @@ import { editorDist, ffmpegPath, fontDir, lensRoot } from "./paths";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
-  ".png": "image/png", ".jpg": "image/jpeg", ".json": "application/json", ".ttf": "font/ttf", ".woff2": "font/woff2", ".wasm": "application/wasm",
+  ".png": "image/png", ".jpg": "image/jpeg", ".json": "application/json", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2", ".wasm": "application/wasm",
 };
 
 export interface EditorServer {
@@ -28,6 +28,15 @@ export async function startEditorServer(): Promise<EditorServer> {
   process.env.LENS_FFMPEG = ffmpegPath();
   const fd = fontDir();
   if (fd) process.env.LENS_FONT_DIR = fd;
+  // imported caption fonts ("My fonts", Windows v0.1.3): a library in userData, shared by every project
+  if (!process.env.LENS_FONT_LIBRARY) {
+    try {
+      const { app } = await import("electron");
+      process.env.LENS_FONT_LIBRARY = path.join(app.getPath("userData"), "fonts");
+    } catch {
+      // not in Electron (tests): api.ts falls back to ~/.lens/fonts
+    }
+  }
   // privacy scan / step labels off the main thread (Windows #1). The worker and tesseract.js are
   // unpacked from app.asar (worker_threads cannot start a script inside an asar archive).
   const worker = path.join(__dirname, "jobWorker.cjs").replace(/app\.asar([\\/])/, "app.asar.unpacked$1");

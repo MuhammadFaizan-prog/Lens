@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   applyCaptionPreset, boxHighlightText, buildRenderPlan, BUILTIN_FONTS, captionLook, captionStrokePx, CAPTION_FONTS, CAPTION_PRESETS, DEFAULT_FONT,
-  defaultProject, resolveProject, ProjectValidationError, ARABIC_FONT,
+  defaultProject, resolveProject, ProjectValidationError, ARABIC_FONT, EXTRA_FONTS, catalogFiles,
 } from "../src/index.js";
 import type { InputEvent } from "../src/index.js";
 
@@ -64,9 +64,10 @@ describe("caption style schema and defaults", () => {
 });
 
 describe("caption presets", () => {
-  it("has 4-6 presets with distinct looks; Clean is the default look", () => {
-    expect(CAPTION_PRESETS.length).toBeGreaterThanOrEqual(4);
-    expect(CAPTION_PRESETS.length).toBeLessThanOrEqual(6);
+  // v0.1.3 shipped 6; the second batch (Windows v0.1.3 "add more styles") adds at least 18
+  it("has 24+ presets with distinct looks; Clean is the default look", () => {
+    expect(CAPTION_PRESETS.length).toBeGreaterThanOrEqual(24);
+    expect(new Set(CAPTION_PRESETS.map((p) => p.id)).size).toBe(CAPTION_PRESETS.length);
     const d = defaultProject().captions.style;
     const clean = applyCaptionPreset(d, "clean");
     const { preset, weight, uppercase, stroke, highlightStyle, ...rest } = clean;
@@ -101,10 +102,11 @@ describe("caption presets", () => {
 });
 
 describe("bundled caption fonts", () => {
-  it("offers 8-12 fonts, every one with Regular + Bold files and an OFL licence on disk", () => {
+  // v0.1.3 shipped 11 picks; the second batch (fontCatalog.ts, fetched at build time) adds at least 30
+  it("offers 41+ fonts, every one with Regular + Bold files and an OFL / Apache licence on disk", () => {
     const picks = CAPTION_FONTS.filter((f) => f.family !== "@font");
-    expect(picks.length).toBeGreaterThanOrEqual(8);
-    expect(picks.length).toBeLessThanOrEqual(12);
+    expect(picks.length).toBeGreaterThanOrEqual(41);
+    expect(new Set(picks.map((p) => p.family)).size).toBe(picks.length);
     for (const o of picks) {
       if (o.family === DEFAULT_FONT) continue; // the system DejaVu Sans the renderers always used
       const f = BUILTIN_FONTS.find((x) => x.family === o.family);
@@ -114,8 +116,11 @@ describe("bundled caption fonts", () => {
         const file = path.join(FONTS, ref.slice(8));
         expect(fs.existsSync(file), file).toBe(true);
         expect(fs.readFileSync(file).readUInt32BE(0)).toBe(0x00010000); // TrueType
-        const lic = path.join(FONTS, `${ref.slice(8).split("-")[0]}-OFL.txt`);
-        expect(fs.readFileSync(lic, "utf8")).toContain("SIL Open Font License, Version 1.1");
+        const stem = ref.slice(8).split("-")[0];
+        const ofl = path.join(FONTS, `${stem}-OFL.txt`);
+        const apache = path.join(FONTS, `${stem}-Apache.txt`);
+        if (fs.existsSync(ofl)) expect(fs.readFileSync(ofl, "utf8")).toMatch(/SIL Open Font License,?\s+Version 1\.1/i);
+        else expect(fs.readFileSync(apache, "utf8")).toContain("Apache License");
       }
       expect(o.bold).toBe(f!.regular !== f!.bold);
     }
@@ -123,10 +128,15 @@ describe("bundled caption fonts", () => {
     expect(fs.existsSync(path.join(FONTS, ARABIC_FONT.regular.slice(8)))).toBe(true);
   });
 
-  it("all bundled fonts together stay under 5 MB", () => {
-    const total = fs.readdirSync(FONTS).filter((f) => f.endsWith(".ttf")).reduce((a, f) => a + fs.statSync(path.join(FONTS, f)).size, 0);
-    console.log("assets/fonts TTF total", (total / 1e6).toFixed(2), "MB");
-    expect(total).toBeLessThan(5e6);
+  it("the committed first batch stays under 5 MB and the fetched second batch under 9 MB", () => {
+    const extra = new Set(EXTRA_FONTS.flatMap((f) => Object.values(catalogFiles(f))));
+    const size = (f: string) => fs.statSync(path.join(FONTS, f)).size;
+    const ttf = fs.readdirSync(FONTS).filter((f) => f.endsWith(".ttf"));
+    const first = ttf.filter((f) => !extra.has(f)).reduce((a, f) => a + size(f), 0);
+    const second = ttf.filter((f) => extra.has(f)).reduce((a, f) => a + size(f), 0);
+    console.log("assets/fonts TTF: first batch", (first / 1e6).toFixed(2), "MB, second batch", (second / 1e6).toFixed(2), "MB");
+    expect(first).toBeLessThan(5e6);
+    expect(second).toBeLessThan(9e6);
   });
 
   it("every preset's font is a bundled family", () => {

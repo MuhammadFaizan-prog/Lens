@@ -4,7 +4,7 @@
  * progress; a "cancel" message stops it between frames. Same renderer and plan as the preview, so
  * preview == export still holds.
  */
-import type { RenderPlan } from "@lens/engine";
+import { withFontFallback, type RenderPlan } from "@lens/engine";
 import { CAPTION_FONT, PlanRenderer } from "../render/renderer";
 import { ensurePlanAssets, fontSet, missingPlanFonts, setAssetBundle } from "../render/assets";
 import { FrameStore } from "../media/frames";
@@ -39,16 +39,16 @@ async function loadCaptionFonts(): Promise<void> {
 }
 
 async function run(m: StartMsg): Promise<void> {
-  const { plan, id, query } = m;
-  const total = plan.frames.length;
+  const { plan: plan0, id, query } = m;
+  const total = plan0.frames.length;
   let i = 0;
   try {
     setAssetBundle(query);
     await loadCaptionFonts();
-    await ensurePlanAssets(plan);
-    // a caption / theme font that did not load would silently draw the fallback face: refuse instead
-    const missing = await missingPlanFonts(plan);
-    if (missing.length) throw new Error(`font${missing.length > 1 ? "s" : ""} not available for the export: ${missing.join(", ")}`);
+    await ensurePlanAssets(plan0);
+    // a caption / theme font that did not load is drawn in the default font, as the preview draws it
+    // (Windows v0.1.3: missing fonts fall back with a warning instead of stopping the export)
+    const plan = withFontFallback(plan0, await missingPlanFonts(plan0));
     const renderer = new PlanRenderer();
     const canvas = new OffscreenCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d")!;
