@@ -27,6 +27,8 @@ export interface Bundle {
   translateUnavailable?: string | null;
   /** Measured silences on the mic track, recording clock (Cleanup pauses without a transcript, Windows #17). */
   silences?: Array<{ startMs: number; endMs: number }>;
+  /** The server is still measuring the silences: fetch them with fetchSilences (they are not in /api/bundle). */
+  silencesPending?: boolean;
   screen: TrackInfo;
   camera: TrackInfo | null;
   /** The recorder's reason a selected camera is missing or broken (recording.json), or null. */
@@ -49,10 +51,19 @@ export async function fetchBundle(dir?: string): Promise<Bundle> {
     autoTranscribe: !!j.autoTranscribe,
     translateUnavailable: typeof j.translateUnavailable === "string" ? j.translateUnavailable : null,
     silences: Array.isArray(j.silences) ? j.silences : [],
+    silencesPending: !Array.isArray(j.silences) && !!j.silencesPending,
     screen: j.screen,
     camera: j.camera,
     cameraWarning: typeof j.cameraWarning === "string" ? j.cameraWarning : null,
   };
+}
+
+/** The mic's measured silences (GET /api/silences: waits for the background measurement, cached after). */
+export async function fetchSilences(dir?: string): Promise<Array<{ startMs: number; endMs: number }>> {
+  const r = await fetch(`/api/silences${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error ?? `silences: ${r.status}`);
+  return Array.isArray(j.silences) ? j.silences : [];
 }
 
 /** Pauses Cleanup may shorten: the transcript's measured pauses, else the mic's measured silences. */

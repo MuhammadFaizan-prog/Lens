@@ -17,7 +17,7 @@ import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
-import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
+import { buildPlan, fetchBundle, fetchSilences, planPauses, type Bundle } from "./bundle";
 import { addBlock, blocksOf, createRange, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
 import * as m3dLib from "./motion3dLib";
 import { addKeyAt, applyTemplate, deleteKey, keyCount, keyPose, mapSegment, setKeyPose, type Axis3D } from "./motion3dOps";
@@ -250,8 +250,25 @@ export class EditorStore {
       else if (bundle.cameraWarning && !bundle.camera) this.notify(`No camera in this recording: ${bundle.cameraWarning}`);
       // a new recording with the mic on: transcribe it on-device right away (Windows #5)
       if (bundle.autoTranscribe && !bundle.transcript) void this.transcribe(true);
+      // the mic's measured silences arrive after the bundle (measured in the background on the server)
+      if (bundle.silencesPending) void this.loadSilences(dir);
     } catch (e) {
       this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  private async loadSilences(dir?: string): Promise<void> {
+    try {
+      const silences = await fetchSilences(dir);
+      const b = this.s.bundle;
+      if (!b) return;
+      const bundle = { ...b, silences, silencesPending: false };
+      this.set({ bundle });
+      // pauses feed the plan only without a transcript and with "Shorten pauses" on: rebuild then
+      const c = this.s.project.edits.cleanup;
+      if (!bundle.transcript && silences.length && c.enabled && c.shortenPauses && !this.s.audition) this.rebuild(this.s.project);
+    } catch {
+      // no silences: "Shorten pauses" stays unavailable without a transcript, as before
     }
   }
 
