@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { headerLine } from "../shared/eventlog";
+import { h264Args, markBroken, pickH264 } from "../../../editor/server/h264";
 
 export interface HistoryItem {
   dir: string;
@@ -79,8 +80,136 @@ export function deleteBundle(root: string, dir: string): void {
 
 export const IMPORT_EXTENSIONS = ["mp4", "mov", "webm", "mkv"];
 
-/** Import a video file as a new bundle in root. Returns the bundle directory. */
-export async function importVideo(root: string, ffmpeg: string, file: string): Promise<string> {
+export interface ImportProgress {
+  /** 0-100 over the whole import (video and audio, weighted; phase "audio" once the video is done) */
+  pct: number;
+  phase: "probe" | "video" | "audio";
+}
+export interface ImportOptions {
+  onProgress?: (p: ImportProgress) => void;
+  /** aborting kills the running ffmpeg; the half-made bundle folder is removed */
+  signal?: AbortSignal;
+  /** probe step guard (ms); a file ffmpeg cannot read the header of fails instead of hanging */
+  probeTimeoutMs?: number;
+}
+export interface ImportResult {
+  dir: string;
+  /** "copy": the source h264 stream was remuxed as is; "encode": re-encoded (H.264, constant frame rate) */
+  video: "copy" | "encode";
+  durationMs: number;
+  progressEvents: number;
+}
+
+export class ImportCancelled extends Error {
+  constructor() {
+    super("cancelled");
+    this.name = "ImportCancelled";
+  }
+}
+
+export interface ProbeInfo {
+  durationMs: number;
+  width: number;
+  height: number;
+  codec: string;
+  pixFmt: string;
+  /** average frame rate ("fps" in ffmpeg -i), and the stream's base rate ("tbr") */
+  fps: number;
+  tbr: number;
+  hasAudio: boolean;
+  rotated: boolean;
+}
+
+/** Parse the stream lines `ffmpeg -i` prints. Exported for tests. */
+export function parseProbe(info: string): ProbeInfo {
+  const line = info.split(/\r?\n/).find((l) => /Stream #\S+.*: Video:/.test(l));
+  if (!line) throw new Error("no video stream in the file");
+  const sz = / (\d{2,5})x(\d{2,5})[ ,\]]/.exec(line);
+  if (!sz) throw new Error("could not read the video size");
+  const codec = /Video: (\w+)/.exec(line)?.[1] ?? "";
+  // "Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 640x360 ..." / "yuv420p(tv, bt709, progressive)"
+  const pixFmt = /Video: [^,]+, (\w+)/.exec(line)?.[1] ?? "";
+  const fps = Number(/([\d.]+) fps/.exec(line)?.[1] ?? NaN);
+  const tbr = Number(/([\d.]+k?) tbr/.exec(line)?.[1]?.replace(/k$/, "000") ?? NaN);
+  const d = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(info);
+  const durationMs = d ? Math.round((Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3])) * 1000) : 0;
+  return {
+    durationMs, width: Number(sz[1]), height: Number(sz[2]), codec, pixFmt, fps, tbr,
+    hasAudio: /Stream #\S+.*: Audio:/.test(info),
+    rotated: /rotate\s*:\s*-?[1-9]|displaymatrix: rotation of -?[1-9]/.test(info),
+  };
+}
+
+/**
+ * The stream can be remuxed unchanged: h264, yuv420p, even size, <= 60 fps and constant frame rate
+ * (average rate = stream rate; the editor indexes frames as round(t * fps)), no rotation to apply.
+ */
+export function canCopy(p: ProbeInfo): boolean {
+  return p.codec === "h264" && p.pixFmt === "yuv420p" && p.width % 2 === 0 && p.height % 2 === 0
+    && Number.isFinite(p.fps) && p.fps > 0 && p.fps <= 60.5 && Number.isFinite(p.tbr) && Math.abs(p.fps - p.tbr) <= 0.01 * p.tbr && !p.rotated;
+}
+
+/** Run ffmpeg with -progress on stdout; reports out_time in ms. Kills the process on abort or timeout. */
+function runFfmpeg(bin: string, args: string[], o: { signal?: AbortSignal; timeoutMs?: number; onTime?: (ms: number) => void; allowFail?: boolean } = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (o.signal?.aborted) return reject(new ImportCancelled());
+    const p = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let err = "";
+    let buf = "";
+    let why: Error | null = null;
+    const kill = (e: Error) => {
+      why ??= e;
+      p.kill("SIGKILL");
+    };
+    const onAbort = () => kill(new ImportCancelled());
+    o.signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = o.timeoutMs ? setTimeout(() => kill(new Error(`ffmpeg did not answer within ${Math.round(o.timeoutMs! / 1000)} s reading the file`)), o.timeoutMs) : null;
+    p.stdout.on("data", (d: Buffer) => {
+      buf += d.toString();
+      let i: number;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const l = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        // out_time_us (newer ffmpeg) and out_time_ms (also microseconds, despite the name)
+        const m = /^out_time_(?:us|ms)=(\d+)/.exec(l);
+        if (m && o.onTime) o.onTime(Number(m[1]) / 1000);
+      }
+    });
+    p.stderr.on("data", (d) => {
+      err += d;
+      if (err.length > 200_000) err = err.slice(-100_000);
+    });
+    p.on("error", (e) => {
+      why ??= e;
+    });
+    let settled = false;
+    const finish = () => {
+      settled = true;
+      if (timer) clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
+    };
+    // killed: settle on exit (a grandchild holding the pipes open must not keep us waiting for close)
+    p.on("exit", () => {
+      if (why && !settled) {
+        finish();
+        reject(why);
+      }
+    });
+    p.on("close", (c) => {
+      if (settled) return;
+      finish();
+      if (why) return reject(why);
+      if (c === 0 || o.allowFail) return resolve(err);
+      const last = err.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" / ");
+      reject(new Error(`ffmpeg exited ${c}${last ? `: ${last.slice(-400)}` : ""}`));
+    });
+  });
+}
+
+const PROGRESS = ["-progress", "pipe:1", "-nostats"];
+
+/** Import a video file as a new bundle in root. */
+export async function importVideo(root: string, ffmpeg: string, file: string, opts: ImportOptions = {}): Promise<ImportResult> {
   const ext = path.extname(file).slice(1).toLowerCase();
   if (!IMPORT_EXTENSIONS.includes(ext)) throw new Error(`unsupported file type .${ext} (mp4, mov, webm, mkv)`);
   if (!fs.existsSync(file)) throw new Error(`file not found: ${file}`);
@@ -88,37 +217,92 @@ export async function importVideo(root: string, ffmpeg: string, file: string): P
   const base = path.basename(file, path.extname(file)).replace(/[^\w.-]+/g, "_").slice(0, 40) || "video";
   const dir = path.join(root, `Lens-import-${stamp}-${base}`);
   fs.mkdirSync(dir, { recursive: true });
+  let events = 0;
+  let lastPct = -1;
+  const report = (phase: ImportProgress["phase"], pct: number) => {
+    const v = Math.max(0, Math.min(100, Math.floor(pct)));
+    if (v === lastPct && phase !== "probe") return;
+    lastPct = v;
+    events++;
+    opts.onProgress?.({ pct: v, phase });
+  };
   try {
-    // probe: size, frame rate, audio present (ffmpeg -i prints the stream lines)
-    const info = await run(ffmpeg, ["-hide_banner", "-i", file, "-f", "null", "-t", "0", "-"]).catch((e: Error) => e.message);
-    const v = /Stream #\S+.*Video: .*?(\d{2,5})x(\d{2,5})/.exec(info);
-    if (!v) throw new Error("no video stream in the file");
-    const fpsM = /(\d+(?:\.\d+)?) fps/.exec(info);
-    const fps = Math.min(60, Math.max(24, Math.round(Number(fpsM?.[1] ?? 30)))) >= 45 ? 60 : 30;
-    const hasAudio = /Stream #\S+.*Audio:/.test(info);
-    // even dimensions for yuv420p; constant frame rate (the editor indexes frames as round(t * fps))
-    await run(ffmpeg, ["-v", "error", "-y", "-i", file, "-map", "0:v:0", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-fps_mode", "cfr", "-r", String(fps),
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(dir, "screen.mp4")]);
-    const out = await run(ffmpeg, ["-hide_banner", "-i", path.join(dir, "screen.mp4"), "-f", "null", "-"]).catch((e: Error) => e.message);
-    const d = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(out);
-    const durationMs = d ? Math.round((Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3])) * 1000) : 0;
-    const sz = /Video: .*?(\d{2,5})x(\d{2,5})/.exec(out)!;
-    const width = Number(sz[1]);
-    const height = Number(sz[2]);
+    report("probe", 0);
+    // probe: size, codec, pixel format, frame rate, duration, audio (ffmpeg -i prints them; it exits 1 without an output, so allowFail)
+    const info = await runFfmpeg(ffmpeg, ["-hide_banner", "-i", file], { signal: opts.signal, timeoutMs: opts.probeTimeoutMs ?? 30_000, allowFail: true });
+    const pr = parseProbe(info);
+    const copy = canCopy(pr);
+    const videoShare = pr.hasAudio ? (copy ? 50 : 85) : 100;
+    const total = pr.durationMs;
+    // video and audio run side by side (v0.1.3 perf: they were back to back); progress is the weighted
+    // sum of the two, so it still only goes up
+    let videoMs = 0;
+    let videoFrac = 0;
+    let audioFrac = pr.hasAudio ? 0 : 1;
+    let videoDone = false;
+    const step = () => report(videoDone ? "audio" : "video", videoFrac * videoShare + audioFrac * (100 - videoShare));
+    const onVideo = (ms: number) => {
+      videoMs = Math.max(videoMs, ms);
+      if (total > 0) videoFrac = Math.max(videoFrac, Math.min(ms, total) / total);
+      step();
+    };
+    const screen = path.join(dir, "screen.mp4");
+    let fps: number;
+    let width = pr.width;
+    let height = pr.height;
+    let video: Promise<unknown>;
+    if (copy) {
+      fps = Math.round(pr.fps * 1000) / 1000;
+      video = runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn", "-movflags", "+faststart", screen], { signal: opts.signal, onTime: onVideo });
+    } else {
+      // even dimensions for yuv420p; constant frame rate (the editor indexes frames as round(t * fps)).
+      // The encoder the recordings use (hardware H.264 when it works here, else libx264 superfast) at
+      // the "high" quality (crf 20); v0.1.2 re-encoded at veryfast crf 18.
+      fps = Number.isFinite(pr.fps) && pr.fps >= 45 ? 60 : 30;
+      width -= width % 2;
+      height -= height % 2;
+      const args = (enc: string) => ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:v:0", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-fps_mode", "cfr", "-r", String(fps),
+        ...h264Args(enc, "high"), "-an", "-movflags", "+faststart", screen];
+      const enc = await pickH264(ffmpeg);
+      video = runFfmpeg(ffmpeg, args(enc), { signal: opts.signal, onTime: onVideo }).catch((e) => {
+        if (enc === "libx264" || e instanceof ImportCancelled) throw e;
+        markBroken(ffmpeg, enc);
+        return runFfmpeg(ffmpeg, args("libx264"), { signal: opts.signal, onTime: onVideo });
+      });
+    }
+    video = video.then(() => {
+      videoDone = true;
+      videoFrac = 1;
+    });
     const tracks: unknown[] = [];
-    if (hasAudio) {
-      await run(ffmpeg, ["-v", "error", "-y", "-i", file, "-map", "0:a:0", "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")]);
+    const jobs: Array<Promise<unknown>> = [video];
+    if (pr.hasAudio) {
+      jobs.push(runFfmpeg(ffmpeg, ["-v", "error", ...PROGRESS, "-y", "-i", file, "-map", "0:a:0", "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")],
+        { signal: opts.signal, onTime: (ms) => {
+          if (total > 0) audioFrac = Math.max(audioFrac, Math.min(ms, total) / total);
+          step();
+        } }));
       tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: 0, volume: 1, muted: false });
     }
+    // both settle before anything is reported or removed (a cancelled import must not delete the folder
+    // while the other ffmpeg still holds a file in it on Windows)
+    const settled = await Promise.allSettled(jobs);
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+    // duration from the probe (the container); no second decode of screen.mp4
+    const durationMs = total > 0 ? total : Math.round(videoMs);
+    if (opts.signal?.aborted) throw new ImportCancelled();
     fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width, height, fps, durationMs, pixelRatio: 1 }));
     // no cursor / clicks: a header-only event log
     fs.writeFileSync(path.join(dir, "events.jsonl"), headerLine({ capture: { width, height }, source: "import", platform: process.platform, displayId: null }) + "\n");
     // zoom is manual only (no clicks to follow), Lens's cursor off (none was logged)
     fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, zoom: { auto: false }, cursor: { visible: false } }, null, 2));
-    fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({ app: "lens-import", source: { file: path.basename(file) }, fps, autoTranscribe: hasAudio }, null, 2));
-    return dir;
+    fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({ app: "lens-import", source: { file: path.basename(file) }, fps, autoTranscribe: pr.hasAudio, video: copy ? "copy" : "encode" }, null, 2));
+    report(pr.hasAudio ? "audio" : "video", 100);
+    return { dir, video: copy ? "copy" : "encode", durationMs, progressEvents: events };
   } catch (e) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    // ffmpeg has exited (runFfmpeg settles on close), so Windows has released screen.mp4
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     throw e;
   }
 }

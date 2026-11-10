@@ -27,6 +27,8 @@ export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingCo
     [scr, cam] = await Promise.all([scr ?? store.screen.load(si), wantCam ? cam ?? store.cam!.load(ci) : Promise.resolve(null)]);
   }
   renderer.draw(g, editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null });
+  // time from page start to the first real source frame on screen (window.__lens.state().firstPaintMs)
+  if (scr && store.firstPaintMs == null) store.firstPaintMs = Math.round(performance.now());
   return true;
 }
 
@@ -61,6 +63,7 @@ export function Preview() {
     if (!canvas) return;
     const renderer = new PlanRenderer();
     let drawnKey = "";
+    let lastError = "";
     let busy = false;
     let again = false;
     const draw = async () => {
@@ -83,7 +86,17 @@ export function Preview() {
             canvas.height = s.plan.output.height;
           }
           const g = canvas.getContext("2d")!;
-          const ok = await drawPlanFrame(renderer, g, s.plan, s.frame, ze);
+          let ok = false;
+          try {
+            ok = await drawPlanFrame(renderer, g, s.plan, s.frame, ze);
+          } catch (e) {
+            // e.g. 3D motion without WebGL2: say so instead of freezing on a stale frame
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg !== lastError) store.notify(msg);
+            lastError = msg;
+            canvas.dataset.error = msg;
+            ok = true;
+          }
           if (ok) {
             drawnKey = key;
             canvas.dataset.frame = String(s.frame);

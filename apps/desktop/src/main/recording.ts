@@ -11,9 +11,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { screen } from "electron";
+import { logLine } from "./log";
 import { dipToCapture, physicalToCapture, resolveClickPoint, type CaptureSize, type DisplayGeom, type Point } from "../shared/coords";
 import { EventLogWriter, headerLine, keyEvent, mouseButton } from "../shared/eventlog";
 import type { InputEvent } from "../../../../packages/engine/src/types";
+import { h264Args, markBroken, pickH264, type Quality } from "../../../editor/server/h264";
 
 export const nowEpoch = (): number => performance.timeOrigin + performance.now();
 
@@ -24,6 +26,8 @@ export interface StartInfo {
   displayId: string | undefined;
   capture: CaptureSize;
   fps: number;
+  /** Settings > Record quality: the finalize encoder's crf / constant quality (v0.1.3) */
+  quality?: Quality;
   videoMime: string;
   /** Epoch ms of video t = 0 (first recorded frame; see recorder.ts). */
   videoStart: number;
@@ -37,6 +41,9 @@ export interface StartInfo {
    */
   /** Webcam / system-audio recorders (Windows #7), started with the screen. */
   webcam?: { mime: string; start: number } | null;
+  /** The camera picked in the recorder (its label), and why it could not be recorded, if it could not. */
+  webcamDevice?: string | null;
+  webcamError?: string | null;
   system?: { mime: string; start: number } | null;
   /** Custom mode: the area to keep, in capture px (written as the project's crop). */
   crop?: { x: number; y: number; w: number; h: number } | null;
@@ -86,6 +93,7 @@ export class Recording {
   private stopEpoch = 0;
   clickSources = { hook: 0, "hook-dip": 0, poll: 0 };
   warnings: string[] = [];
+  finalizeInfo: { encoder: string; quality: string; ms: number; cameraError: string | null } | null = null;
 
   constructor(root: string, private readonly hook: Hook | null, private readonly onLive: LiveSink | null) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
@@ -201,40 +209,86 @@ export class Recording {
     const info = this.info;
     if (!info) throw new Error("recording never started");
     const dir = this.dir;
-    onProgress?.("video");
+    const quality: Quality = info.quality ?? "high";
+    onProgress?.("Preparing… 0%");
     // VFR webm -> constant-rate H.264 (the editor indexes frames as round(t * fps / 1000)); frame 0 = first
     // captured frame. Chromium's desktop capture sends a frame only when the screen changes, so a still
     // screen before Stop leaves the webm short: the last frame is held (tpad clone) up to the Stop time.
+    // v0.1.3: hardware H.264 when it works here (libx264 superfast otherwise), crf from Settings > Record
+    // quality, progress to the recorder, and the audio / camera conversions run alongside the screen.
     const wallS = Math.max(0.1, (this.stopEpoch - info.videoStart) / 1000);
-    await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "recording.webm"), "-map", "0:v:0", "-vf", "tpad=stop_mode=clone:stop_duration=600",
-      "-fps_mode", "cfr", "-r", String(info.fps), "-t", wallS.toFixed(3),
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(dir, "screen.mp4")]);
-    const probe = await probeDuration(ffmpeg, path.join(dir, "screen.mp4"));
-    const durationMs = probe ?? wallS * 1000;
+    const t0 = Date.now();
+    const screenArgs = (enc: string) => ["-v", "error", "-nostats", "-progress", "pipe:1", "-y", "-i", path.join(dir, "recording.webm"), "-map", "0:v:0", "-vf", "tpad=stop_mode=clone:stop_duration=600",
+      "-fps_mode", "cfr", "-r", String(info.fps), "-t", wallS.toFixed(3), ...h264Args(enc, quality), "-movflags", "+faststart", path.join(dir, "screen.mp4")];
+    let lastPct = -1;
+    const onTime = (ms: number) => {
+      const pct = Math.min(99, Math.floor((ms / 1000 / wallS) * 100));
+      if (pct > lastPct) {
+        lastPct = pct;
+        onProgress?.(`Preparing… ${pct}%`);
+      }
+    };
+    let used = "libx264";
+    // the encoder probe (a test encode per hardware candidate, ~0.7 s each when it fails) is normally done
+    // already (main.ts warms it when recording starts); if not, the audio / camera jobs below are not held up by it
+    const screen = (async () => {
+      const encoder = await pickH264(ffmpeg);
+      used = encoder;
+      await run(ffmpeg, screenArgs(encoder), onTime).catch(async (e) => {
+        if (encoder === "libx264") throw e;
+        // a hardware encoder that passed the probe but failed on the real stream: once more in software
+        markBroken(ffmpeg, encoder);
+        this.warnings.push(`hardware encoder ${encoder} failed (${e instanceof Error ? e.message.slice(0, 200) : String(e)}); used libx264`);
+        used = "libx264";
+        await run(ffmpeg, screenArgs("libx264"), onTime);
+      });
+    })();
     const tracks: unknown[] = [];
-    if (info.mic && fs.existsSync(path.join(dir, "mic.webm")) && fs.statSync(path.join(dir, "mic.webm")).size > 0) {
-      onProgress?.("audio");
-      // pinned to 48 kHz stereo here, so every later step (preview, STT, export) reads one fixed format
-      // (a mono / layout-less Opus mic broke the v0.1.0 export graph on Windows)
-      await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "mic.webm"), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "mic.wav")]);
-      tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: Math.round((info.mic.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
-    }
+    // a diagnostic log line must never throw (a missing file here used to fail the whole finalize)
+    const sizeOf = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.statSync(path.join(dir, f)).size : 0);
     const nonEmpty = (f: string) => fs.existsSync(path.join(dir, f)) && fs.statSync(path.join(dir, f)).size > 0;
+    // pinned to 48 kHz stereo, so every later step (preview, STT, export) reads one fixed format
+    // (a mono / layout-less Opus mic broke the v0.1.0 export graph on Windows)
+    const wav = (src: string, out: string) => run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, src), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, out)]);
+    const jobs: Array<Promise<unknown>> = [screen];
+    if (info.mic && nonEmpty("mic.webm")) {
+      jobs.push(wav("mic.webm", "mic.wav"));
+      tracks.push({ id: "mic", kind: "mic", path: "mic.wav", offsetMs: Math.round((info.mic.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
+    } else if (info.mic) this.warnings.push("microphone was on but mic.webm is empty: no mic track");
     if (info.system && nonEmpty("system.webm")) {
-      onProgress?.("system audio");
-      await run(ffmpeg, ["-v", "error", "-y", "-i", path.join(dir, "system.webm"), "-vn", "-af", "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo:sample_rates=48000", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", path.join(dir, "system.wav")]);
+      jobs.push(wav("system.webm", "system.wav"));
       tracks.push({ id: "system", kind: "system", path: "system.wav", offsetMs: Math.round((info.system.start - info.videoStart) * 10) / 10, volume: 1, muted: false });
     }
     let webcam = false;
+    let cameraError: string | null = null;
     if (info.webcam && nonEmpty("cam.webm")) {
-      onProgress?.("camera");
-      // on the screen's clock: a camera that started late is padded with its first frame, an early one trimmed
+      // on the screen's clock: a camera that started late is padded with its first frame, an early one trimmed;
+      // the same length as screen.mp4 (-t wallS), so it runs alongside the screen encode
       const lagS = (info.webcam.start - info.videoStart) / 1000;
       const vf = [lagS > 0 ? `tpad=start_mode=clone:start_duration=${lagS.toFixed(3)}` : null, "tpad=stop_mode=clone:stop_duration=600"].filter(Boolean).join(",");
-      await run(ffmpeg, ["-v", "error", "-y", ...(lagS < 0 ? ["-ss", (-lagS).toFixed(3)] : []), "-i", path.join(dir, "cam.webm"), "-map", "0:v:0", "-vf", vf,
-        "-fps_mode", "cfr", "-r", String(info.fps), "-t", (durationMs / 1000).toFixed(3), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(dir, "cam.mp4")]);
-      webcam = true;
+      jobs.push(run(ffmpeg, ["-v", "error", "-y", ...(lagS < 0 ? ["-ss", (-lagS).toFixed(3)] : []), "-i", path.join(dir, "cam.webm"), "-map", "0:v:0", "-vf", vf,
+        "-fps_mode", "cfr", "-r", String(info.fps), "-t", wallS.toFixed(3), "-c:v", "libx264", "-preset", "superfast", "-crf", "22", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(dir, "cam.mp4")])
+        .then(() => (webcam = true))
+        // a camera that fails to convert must not lose the screen recording; it is reported instead
+        .catch((e) => {
+          cameraError = `camera video could not be converted: ${e instanceof Error ? e.message.slice(0, 300) : String(e)}`;
+          this.warnings.push(cameraError);
+        }));
+    } else if (info.webcam) {
+      cameraError = "a camera was selected but no camera video was recorded (cam.webm missing or empty)";
+      this.warnings.push(cameraError);
+    } else if (info.webcamError) {
+      cameraError = info.webcamError;
+      this.warnings.push(cameraError);
     }
+    await Promise.all(jobs);
+    if (info.webcam || info.webcamDevice || info.webcamError) {
+      logLine(cameraError ? "WARN" : "INFO", `camera ${JSON.stringify(info.webcamDevice ?? null)}: ${webcam ? `cam.mp4 written (${sizeOf("cam.mp4")} bytes, from cam.webm ${sizeOf("cam.webm")} bytes)` : `no camera track: ${cameraError}`}`);
+    }
+    onProgress?.("Preparing… 100%");
+    const probe = await probeDuration(ffmpeg, path.join(dir, "screen.mp4"));
+    const durationMs = probe ?? wallS * 1000;
+    this.finalizeInfo = { encoder: used, quality, ms: Date.now() - t0, cameraError };
     const crop = info.crop && info.crop.w > 0 && info.crop.h > 0 ? info.crop : null;
     const pixelRatio = this.captured ? this.captured.scaleFactor * (info.capture.width / (this.captured.physical?.width ?? this.captured.bounds.width * this.captured.scaleFactor)) : 1;
     fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify({ width: info.capture.width, height: info.capture.height, fps: info.fps, durationMs, pixelRatio: Math.round(pixelRatio * 1000) / 1000 }));
@@ -249,6 +303,7 @@ export class Recording {
       displays: this.displays, captured: this.captured, counts: this.log?.counts, clickSources: this.clickSources, warnings: this.warnings,
       // the editor transcribes the mic on-device the first time it opens this recording (Windows #5)
       autoTranscribe: tracks.length > 0,
+      finalize: this.finalizeInfo,
     }, null, 2));
     return { dir, durationMs };
   }
@@ -262,10 +317,17 @@ function keyName(code: number): string | undefined {
   return KEY_NAMES?.get(code);
 }
 
-function run(cmd: string, args: string[]): Promise<void> {
+function run(cmd: string, args: string[], onTime?: (ms: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args);
+    const p = spawn(cmd, args, { windowsHide: true });
     let err = "";
+    let buf = "";
+    p.stdout.on("data", (d: Buffer) => {
+      if (!onTime) return;
+      buf += d.toString();
+      for (const m of buf.matchAll(/^out_time_(?:us|ms)=(\d+)/gm)) onTime(Number(m[1]) / 1000);
+      buf = buf.slice(buf.lastIndexOf("\n") + 1);
+    });
     p.stderr.on("data", (d: Buffer) => (err += d.toString()));
     p.on("error", reject);
     p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${path.basename(cmd)} failed (${code}): ${err.slice(-600)}`))));
@@ -275,7 +337,7 @@ function run(cmd: string, args: string[]): Promise<void> {
 /** Container duration in ms from `ffmpeg -i` ("Duration: 00:00:08.03"). */
 export async function probeDuration(ffmpeg: string, file: string): Promise<number | null> {
   return new Promise((resolve) => {
-    const p = spawn(ffmpeg, ["-hide_banner", "-i", file]);
+    const p = spawn(ffmpeg, ["-hide_banner", "-i", file], { windowsHide: true });
     let err = "";
     p.stderr.on("data", (d: Buffer) => (err += d.toString()));
     p.on("error", () => resolve(null));

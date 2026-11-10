@@ -2,6 +2,9 @@
  * Windows #7: recorder home. Mode cards (Full Screen / Custom / Window / Device-disabled), a Devices
  * column (camera with preview, mic with a level meter, system audio, teleprompter). Chromium's fake
  * capture devices stand in for a webcam and a mic (a beeping tone).
+ * Custom: clicking only the mode card opens the "Lens region" overlay and cancelling it leaves the recorder
+ * idle with no error; Record in Custom mode with no area opens the overlay (no "Could not start"), the drag
+ * sets the area and the take starts. After Stop the recorder stays hidden while the editor is open.
  * Bounds: 4 mode cards, Device disabled; Window mode lists windows (or its empty state); >= 1 camera
  * and >= 1 mic listed; mic meter peak > 5% within 2 s; camera preview playing; Custom: a drag from
  * (200,150) to (840,510) on the 1280x720 screen gives region within 1% and project.json crop within
@@ -23,6 +26,15 @@ test.afterAll(async () => {
   await app?.close().catch(() => undefined);
   xvfb?.kill();
 });
+
+async function waitRegionOverlay(a: ElectronApplication, ms = 10_000): Promise<boolean> {
+  for (let i = 0; i < ms / 100; i++) {
+    const has = await a.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === "Lens region" && w.isVisible()));
+    if (has) return true;
+    await sleep(100);
+  }
+  return false;
+}
 
 test("recorder home: modes, devices, custom region, webcam take, teleprompter", async () => {
   test.setTimeout(300_000);
@@ -61,18 +73,24 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   report.sysAudioDisabled = await rec.locator('[data-testid="sys-audio"]').isDisabled();
   await rec.screenshot({ path: path.join(run, "home-devices.png") });
 
-  // Custom region: pick the screen, drag on the overlay
+  // Custom region: clicking ONLY the mode card opens the drag overlay (v0.1.2 needed a thumbnail click, which nobody does)
   await rec.click('[data-testid="mode-region"]');
-  await rec.click('[data-testid="sources"] button.src');
-  for (let i = 0; i < 50; i++) {
-    const has = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === "Lens region" && w.isVisible()));
-    if (has) break;
-    await sleep(100);
-  }
+  report.overlayOnCard = await waitRegionOverlay(app);
+  expect(report.overlayOnCard, "Custom mode card opens the Lens region overlay").toBe(true);
+  // cancel it (closing the overlay resolves the pick with no area): idle, no area, no error
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === "Lens region")?.close());
+  await rec.waitForFunction(() => { const o = document.getElementById("region-info"); return !!o && !o.hidden; }, null, { timeout: 10_000 });
+  await sleep(300);
+  report.afterCancel = await rec.evaluate(() => ({ state: (window as any).lensRecorder.state().state, region: (window as any).lensRecorder.devices().region, status: document.getElementById("status")?.textContent }));
+
+  // Record in Custom mode with no area: the overlay opens (v0.1.2: "Could not start: drag the area to record first"); drag, and the take starts
+  app.on("window", (p) => p.on("console", (m) => console.log("[win]", m.text())));
+  await rec.click('[data-testid="go"]');
+  report.overlayOnRecord = await waitRegionOverlay(app);
+  expect(report.overlayOnRecord, "Record in Custom mode with no area opens the overlay").toBe(true);
   await sleep(500);
   report.windowsAtDrag = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => [w.getTitle(), w.isVisible(), w.getBounds()]));
   console.log("windows at drag", JSON.stringify(report.windowsAtDrag));
-  app.on("window", (p) => p.on("console", (m) => console.log("[win]", m.text())));
   xdo(DISPLAY, "mousemove", "200", "150");
   xdo(DISPLAY, "mousedown", "1");
   for (let i = 1; i <= 10; i++) {
@@ -82,9 +100,10 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   xdo(DISPLAY, "mouseup", "1");
   await rec.waitForFunction(() => !!(window as any).lensRecorder.devices().region, null, { timeout: 10_000 });
   report.region = (await rec.evaluate(() => (window as any).lensRecorder.devices())).region;
+  await rec.waitForFunction(() => (window as any).lensRecorder.state().state === "recording", null, { timeout: 30_000 });
+  report.statusOnRecord = await rec.locator('[data-testid="status"]').textContent();
 
   // a 3 s take with webcam + mic + region
-  await rec.evaluate(() => (window as any).lensRecorder.start());
   await sleep(3000);
   await rec.evaluate(() => (window as any).lensRecorder.stop());
   let result: any = null;
@@ -105,10 +124,25 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   }
   report.micWav = fs.existsSync(path.join(dir, "mic.wav"));
 
+  // after Stop the recorder stays hidden while the editor is open (it was popping back up on top), also after the recorder is recycled (+1.5 s)
+  for (let i = 0; i < 100 && !app.windows().some((p) => p.url().includes("dir=")); i++) await sleep(200);
+  await sleep(2500);
+  report.afterStop = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).map((w) => ({ title: w.getTitle(), url: w.webContents.getURL(), visible: w.isVisible() })));
+  // main recycles the recorder 1.5 s after the result (fresh renderer); under load that lands after the
+  // 2.5 s above, so wait for the NEW recorder page instead of grabbing the one about to be destroyed
+  let recNow = rec;
+  for (let i = 0; i < 150; i++) {
+    const p = app.windows().find((w) => w !== rec && !w.isClosed() && w.url().includes("recorder.html"));
+    if (p) {
+      recNow = p;
+      break;
+    }
+    await sleep(200);
+  }
+
   // teleprompter
-  const recWin = await app.browserWindow(rec);
-  void recWin;
-  await rec.click('[data-testid="teleprompter"]');
+  await recNow.waitForFunction(() => !!document.getElementById("teleprompter"), null, { timeout: 15_000 });
+  await recNow.evaluate(() => document.getElementById("teleprompter")!.click());
   await sleep(1500);
   report.prompter = await app.evaluate(({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows().find((x) => x.getTitle() === "Lens Teleprompter");
@@ -139,6 +173,12 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   expect(report.camMp4).toBe(true);
   expect(Math.abs(report.camFrames - report.expectFrames)).toBeLessThanOrEqual(2);
   expect(report.micWav).toBe(true);
+  expect(String(report.statusOnRecord)).not.toMatch(/Could not start/);
+  expect(report.afterCancel.state).toBe("idle");
+  expect(report.afterCancel.region).toBeNull();
+  expect(String(report.afterCancel.status)).not.toMatch(/Could not start/);
+  expect(report.afterStop.some((w: any) => w.url.includes("dir=") && w.visible), "editor open").toBe(true);
+  expect(report.afterStop.filter((w: any) => w.url.includes("recorder.html") && w.visible), "recorder hidden after Stop while the editor is open").toEqual([]);
   expect(report.prompter.open).toBe(true);
   expect(report.prompter.alwaysOnTop).toBe(true);
   // setContentProtection is a no-op on Linux (Electron supports it on Windows and macOS only)

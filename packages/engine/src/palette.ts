@@ -150,12 +150,22 @@ export interface FontFiles {
 }
 
 /**
- * Fonts Lens ships. Inter and JetBrains Mono are under the SIL Open Font License 1.1 (licence texts
- * next to the files in assets/fonts). DejaVu Sans is the pre-#9 default the renderers already use
+ * Fonts Lens ships, all under the SIL Open Font License 1.1 (licence texts next to the files in
+ * assets/fonts). DejaVu Sans is the pre-#9 default the renderers already use
  * from the system.
  */
 export const BUILTIN_FONTS: FontFiles[] = [
   { family: DEFAULT_FONT, regular: "system:DejaVuSans.ttf", bold: "system:DejaVuSans-Bold.ttf" },
   { family: "Inter", regular: "builtin:Inter-Regular.ttf", bold: "builtin:Inter-Bold.ttf" },
   { family: "JetBrains Mono", regular: "builtin:JetBrainsMono-Regular.ttf", bold: "builtin:JetBrainsMono-Bold.ttf" },
+  // caption fonts (Windows request "diff diff fonts for the captions"): google/fonts, OFL 1.1, see assets/fonts/fetch_fonts.py
+  { family: "Poppins", regular: "builtin:Poppins-Regular.ttf", bold: "builtin:Poppins-Bold.ttf" },
+  { family: "Montserrat", regular: "builtin:Montserrat-Regular.ttf", bold: "builtin:Montserrat-Bold.ttf" },
+  { family: "Roboto", regular: "builtin:Roboto-Regular.ttf", bold: "builtin:Roboto-Bold.ttf" },
+  { family: "Open Sans", regular: "builtin:OpenSans-Regular.ttf", bold: "builtin:OpenSans-Bold.ttf" },
+  { family: "Oswald", regular: "builtin:Oswald-Regular.ttf", bold: "builtin:Oswald-Bold.ttf" },
+  // single-weight display faces: "bold" is the same file, so neither renderer synthesises a fake bold
+  { family: "Bebas Neue", regular: "builtin:BebasNeue-Regular.ttf", bold: "builtin:BebasNeue-Regular.ttf" },
+  { family: "DM Serif Display", regular: "builtin:DMSerifDisplay-Regular.ttf", bold: "builtin:DMSerifDisplay-Regular.ttf" },
+  { family: "Caveat", regular: "builtin:Caveat-Regular.ttf", bold: "builtin:Caveat-Bold.ttf" },
 ];

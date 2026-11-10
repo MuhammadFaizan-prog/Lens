@@ -8,10 +8,17 @@
  *   -> screen-anchored annotations -> cursor (motion blur) -> rounded mask -> webcam (crop, mirror)
  *   -> frame-anchored annotations -> shortcut pill -> caption -> text slide
  *
+ * 3D motion (plan frame m3d): the rounded card (step 7) is drawn through the WebGL2 perspective pass
+ * (gl3d.ts) instead of a flat blit, and the shadow (step 2) is the projected card outline, so it
+ * follows the tilt. Everything inside the card (masks, clicks, screen annotations, cursor) moves
+ * with it; webcam, frame annotations, shortcut, caption, watermark and slides stay flat on top.
+ * Frames without m3d never touch WebGL.
+ *
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
  */
-import { hasArabicScript, type PlanFrame, type RenderPlan } from "@lens/engine";
+import { boxHighlightText, captionLook, captionStrokePx, cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
+import { CARD_PAD, Gl3dPass } from "./gl3d";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
@@ -88,7 +95,20 @@ interface ViewMap {
   ky: number;
 }
 
+/**
+ * The screen card's rect on frame f in whole output px (x, y, w, h): the one place the card rect is
+ * computed. The 2D blit, the shadow and the 3D pass all start from it.
+ */
+export function cardRect(f: PlanFrame): [number, number, number, number] {
+  const [sx, sy, sw0, sh0] = f.layout.screen.map(pyRound) as [number, number, number, number];
+  return [sx, sy, Math.max(2, sw0), Math.max(2, sh0)];
+}
+
 export class PlanRenderer {
+  private gl3d: Gl3dPass | null = null;
+  private card: AnyCanvas | null = null;
+  /** Wall-clock ms of the last 3D pass (card texture + GL draw + readback), for perf logging. */
+  last3dMs = 0;
   private bgKey = "";
   private bg: AnyCanvas | null = null;
   private shadowKey = "";
@@ -114,11 +134,11 @@ export class PlanRenderer {
     g.drawImage(this.background(plan) as CanvasImageSource, 0, 0);
 
     // 2. shadow (cached per rect, like render.py shadow_layer)
-    const [sx, sy, sw0, sh0] = f.layout.screen.map(pyRound) as [number, number, number, number];
-    const sw = Math.max(2, sw0);
-    const sh = Math.max(2, sh0);
+    const [sx, sy, sw, sh] = cardRect(f);
     const shadow = style.shadow;
-    if (f.layout.screenOpacity > 0 && shadow.opacity > 0) {
+    if (f.m3d && f.layout.screenOpacity > 0 && shadow.opacity > 0) {
+      g.drawImage(this.shadowLayer3d(W, H, f.m3d, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
+    } else if (f.layout.screenOpacity > 0 && shadow.opacity > 0) {
       g.drawImage(this.shadowLayer(W, H, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
     }
 
@@ -175,13 +195,17 @@ export class PlanRenderer {
     // 6. cursor
     if (f.cur) this.drawCursor(vg, plan, f, prev, map);
 
-    // 7. rounded composite
-    g.save();
-    g.globalAlpha = f.layout.screenOpacity;
-    roundRectPath(g, sx, sy, sw, sh, style.radius);
-    g.clip();
-    g.drawImage(view as CanvasImageSource, sx, sy);
-    g.restore();
+    // 7. rounded composite (flat, or through the 3D perspective pass)
+    if (f.m3d) {
+      this.drawCard3d(g, f.m3d, view, [sx, sy, sw, sh], style.radius, f.layout.screenOpacity, W, H);
+    } else {
+      g.save();
+      g.globalAlpha = f.layout.screenOpacity;
+      roundRectPath(g, sx, sy, sw, sh, style.radius);
+      g.clip();
+      g.drawImage(view as CanvasImageSource, sx, sy);
+      g.restore();
+    }
 
     // 8. webcam
     if (imgs.cam && f.layout.camera && f.layout.cameraOpacity > 0) this.drawWebcam(g, plan, f, imgs.cam);
@@ -298,6 +322,53 @@ export class PlanRenderer {
     g.restore();
     this.shadow = c;
     this.shadowKey = key;
+    return c;
+  }
+
+  /** The rounded card (at its opacity, CARD_PAD transparent border) through the WebGL2 pass. */
+  private drawCard3d(g: Canvas2D, m: Motion3DFrame, view: AnyCanvas, rect: [number, number, number, number], radius: number, opacity: number, W: number, H: number): void {
+    const t0 = performance.now();
+    const [, , sw, sh] = rect;
+    const cw = sw + 2 * CARD_PAD;
+    const ch = sh + 2 * CARD_PAD;
+    if (!this.card || this.card.width !== cw || this.card.height !== ch) this.card = makeCanvas(cw, ch);
+    const cg = ctx2d(this.card);
+    cg.save();
+    cg.setTransform(1, 0, 0, 1, 0, 0);
+    cg.clearRect(0, 0, cw, ch);
+    cg.globalAlpha = opacity;
+    roundRectPath(cg, CARD_PAD, CARD_PAD, sw, sh, radius);
+    cg.clip();
+    cg.drawImage(view as CanvasImageSource, CARD_PAD, CARD_PAD);
+    cg.restore();
+    if (!this.gl3d) this.gl3d = new Gl3dPass();
+    const out = this.gl3d.render(this.card, m, rect, W, H);
+    g.drawImage(out as CanvasImageSource, 0, 0);
+    this.last3dMs = performance.now() - t0;
+  }
+
+  /** Shadow of the projected card outline: same blur / offset / opacity as the flat shadow, following the tilt. */
+  private shadowLayer3d(W: number, H: number, m: Motion3DFrame, x: number, y: number, w: number, h: number, radius: number, s: RenderPlan["style"]["shadow"], opacity: number): AnyCanvas {
+    const c = this.shadow && this.shadow.width === W && this.shadow.height === H ? this.shadow : makeCanvas(W, H);
+    this.shadow = c;
+    this.shadowKey = "";
+    const g = ctx2d(c);
+    g.clearRect(0, 0, W, H);
+    const ox = s.offsetY * Math.cos((s.angle * Math.PI) / 180);
+    const oy = s.offsetY * Math.sin((s.angle * Math.PI) / 180);
+    const FAR = W + H + 1000;
+    const pts = cardOutline(m, x, y, w, h, radius, 8);
+    g.save();
+    g.shadowColor = `rgba(0,0,0,${opacity})`;
+    g.shadowBlur = s.blur;
+    g.shadowOffsetX = ox + FAR;
+    g.shadowOffsetY = oy;
+    g.fillStyle = "#000";
+    g.beginPath();
+    pts.forEach(([px, py], i) => (i ? g.lineTo(px - FAR, py) : g.moveTo(px - FAR, py)));
+    g.closePath();
+    g.fill();
+    g.restore();
     return c;
   }
 
@@ -532,56 +603,13 @@ export class PlanRenderer {
   }
 
   private drawCaption(g: Canvas2D, plan: RenderPlan, f: PlanFrame, W: number, H: number): void {
-    const cap = f.caption!;
-    const cs = plan.style.captions;
-    const words = cap.words;
-    if (!words.length) return;
-    const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
     g.save();
-    const mainFont = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
-    // demand #8: Arabic-script words (Urdu, Arabic) in the plan's script font, shaped right to left
-    const scriptFont = cs.scriptFont ? `bold ${size}px ${fontCss(cs.scriptFont, FONT_STACK)}` : null;
-    const isScript = words.map((w) => !!scriptFont && hasArabicScript(w));
-    const useFont = (j: number) => {
-      g.font = isScript[j] ? scriptFont! : mainFont;
-      (g as unknown as { direction: string }).direction = isScript[j] ? "rtl" : "ltr";
-    };
-    // a right-to-left line is one Arabic-script run: its spaces come from the script font (as in the compositor)
-    const rtlLine = !!cap.visual && isScript.some(Boolean);
-    g.font = rtlLine ? scriptFont! : mainFont;
-    setNoKerning(g);
-    g.textBaseline = "alphabetic";
-    g.textAlign = "left";
-    (g as unknown as { direction: string }).direction = rtlLine ? "rtl" : "ltr";
-    const space = g.measureText(" ").width;
-    g.font = mainFont;
-    const lines: number[][] = [];
-    let i = 0;
-    for (const n of cap.lines) {
-      lines.push(Array.from({ length: n }, (_, j) => i + j));
-      i += n;
+    const L = captionLayout(g, plan, f, W, H);
+    if (!L) {
+      g.restore();
+      return;
     }
-    const widths = lines.map((ln) => ln.map((j) => {
-      useFont(j);
-      return g.measureText(words[j]!).width;
-    }));
-    g.font = mainFont;
-    (g as unknown as { direction: string }).direction = "ltr";
-    const lineW = widths.map((ws) => ws.reduce((a, b) => a + b, 0) + space * (ws.length - 1));
-    const fm = g.measureText("Hg");
-    let asc = Math.ceil(fm.fontBoundingBoxAscent);
-    let desc = Math.ceil(fm.fontBoundingBoxDescent);
-    if (isScript.some(Boolean)) {
-      g.font = scriptFont!;
-      const sm = g.measureText("\u0628");
-      asc = Math.max(asc, Math.ceil(sm.fontBoundingBoxAscent));
-      desc = Math.max(desc, Math.ceil(sm.fontBoundingBoxDescent));
-      g.font = mainFont;
-    }
-    const lh = Math.trunc((asc + desc) * 1.12);
-    const blockH = lh * lines.length;
-    const pos = cs.position ?? "bottom";
-    const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
+    const { cs, size, words, lines, widths, lineW, asc, lh, blockH, top, look, useFont } = L;
     const padx = size * 0.55;
     const pady = size * 0.28;
     const bg = cs.background ?? { enabled: true, color: "#000000", opacity: 0.66 };
@@ -593,23 +621,133 @@ export class PlanRenderer {
       roundRectPath(g, x0, top - pady, bw + 2 * padx + 1, blockH + 2 * pady + 1, Math.trunc(size * 0.45));
       g.fill();
     }
-    const active = cs.wordHighlight !== false ? cap.active : -1;
+    const active = cs.wordHighlight !== false ? L.active : -1;
+    const hiColor = cs.highlightColor ?? "#ffd23f";
+    const boxHi = look.highlightStyle === "box" && active >= 0;
+    const strokePx = look.stroke.enabled ? captionStrokePx(size, look.stroke.width) : 0;
+    // word x positions, line by line (shared by the highlight box and the text passes)
+    const placed: Array<{ j: number; x: number; y: number; w: number }> = [];
     lines.forEach((ln, li) => {
       let x = (W - lineW[li]!) / 2;
       const y = top + li * lh;
       // right-to-left captions carry their left-to-right drawing order (word-level bidi)
-      const order = cap.visual?.[li] ?? ln;
+      const order = L.visual?.[li] ?? ln;
       for (const j of order) {
         const n = ln.indexOf(j);
-        useFont(j);
-        g.fillStyle = j === active ? cs.highlightColor ?? "#ffd23f" : cs.textColor ?? "#ffffff";
-        // every word sits on the line's baseline (line top + the taller font's ascent), as in the compositor
-        g.fillText(words[j]!, x, y + asc);
-        x += widths[li]![n]! + space;
+        placed.push({ j, x, y, w: widths[li]![n]! });
+        x += widths[li]![n]! + L.space;
       }
     });
+    if (boxHi) {
+      const p = placed.find((q) => q.j === active);
+      if (p) {
+        const [bx, by, bw, bh] = highlightBoxRect(p.x, p.y + asc, p.w, size);
+        g.fillStyle = hiColor;
+        roundRectPath(g, bx, by, bw + 1, bh + 1, Math.trunc(size * 0.22));
+        g.fill();
+      }
+    }
+    for (const { j, x, y } of placed) {
+      useFont(j);
+      const onBox = boxHi && j === active;
+      // every word sits on the line's baseline (line top + the taller font's ascent), as in the compositor
+      if (strokePx > 0 && !onBox) {
+        g.lineJoin = "round";
+        g.miterLimit = 2;
+        g.lineWidth = 2 * strokePx;
+        g.strokeStyle = look.stroke.color;
+        g.strokeText(words[j]!, x, y + asc);
+      }
+      g.fillStyle = onBox ? boxHighlightText(hiColor) : j === active && !boxHi ? hiColor : cs.textColor ?? "#ffffff";
+      g.fillText(words[j]!, x, y + asc);
+    }
     g.restore();
   }
+}
+
+/** The active word's highlight box (output px x, y, w, h) around a word drawn at (x, baseline). */
+function highlightBoxRect(x: number, baseline: number, w: number, size: number): [number, number, number, number] {
+  const pad = Math.round(size * 0.16);
+  return [Math.round(x) - pad, baseline - Math.round(size * 0.9), Math.round(w) + 2 * pad, Math.round(size * 1.16)];
+}
+
+interface CaptionLayout {
+  cs: RenderPlan["style"]["captions"];
+  size: number;
+  /** Words as drawn (capitals when uppercase is on). */
+  words: string[];
+  lines: number[][];
+  widths: number[][];
+  lineW: number[];
+  space: number;
+  asc: number;
+  lh: number;
+  blockH: number;
+  top: number;
+  active: number;
+  visual?: number[][];
+  look: ReturnType<typeof captionLook>;
+  isScript: boolean[];
+  useFont: (j: number) => void;
+}
+
+/**
+ * Measure a caption the way drawCaption draws it (fonts, weight, case, wrapping, position). Leaves
+ * g.font on the main font; callers save / restore g.
+ */
+function captionLayout(g: Canvas2D, plan: RenderPlan, f: PlanFrame, W: number, H: number): CaptionLayout | null {
+  const cap = f.caption;
+  if (!cap || !cap.words.length) return null;
+  const cs = plan.style.captions;
+  const look = captionLook(cs);
+  const words = look.uppercase ? cap.words.map((w) => w.toUpperCase()) : cap.words;
+  const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
+  const wt = look.weight === "regular" ? "normal" : "bold";
+  const mainFont = `${wt} ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
+  // demand #8: Arabic-script words (Urdu, Arabic) in the plan's script font, shaped right to left
+  const scriptFont = cs.scriptFont ? `${wt} ${size}px ${fontCss(cs.scriptFont, FONT_STACK)}` : null;
+  const isScript = words.map((w) => !!scriptFont && hasArabicScript(w));
+  const useFont = (j: number) => {
+    g.font = isScript[j] ? scriptFont! : mainFont;
+    (g as unknown as { direction: string }).direction = isScript[j] ? "rtl" : "ltr";
+  };
+  // a right-to-left line is one Arabic-script run: its spaces come from the script font (as in the compositor)
+  const rtlLine = !!cap.visual && isScript.some(Boolean);
+  g.font = rtlLine ? scriptFont! : mainFont;
+  setNoKerning(g);
+  g.textBaseline = "alphabetic";
+  g.textAlign = "left";
+  (g as unknown as { direction: string }).direction = rtlLine ? "rtl" : "ltr";
+  const space = g.measureText(" ").width;
+  g.font = mainFont;
+  const lines: number[][] = [];
+  let i = 0;
+  for (const n of cap.lines) {
+    lines.push(Array.from({ length: n }, (_, j) => i + j));
+    i += n;
+  }
+  const widths = lines.map((ln) => ln.map((j) => {
+    useFont(j);
+    return g.measureText(words[j]!).width;
+  }));
+  g.font = mainFont;
+  (g as unknown as { direction: string }).direction = "ltr";
+  const lineW = widths.map((ws) => ws.reduce((a, b) => a + b, 0) + space * (ws.length - 1));
+  const fm = g.measureText("Hg");
+  let asc = Math.ceil(fm.fontBoundingBoxAscent);
+  let desc = Math.ceil(fm.fontBoundingBoxDescent);
+  if (isScript.some(Boolean)) {
+    g.font = scriptFont!;
+    const sm = g.measureText("\u0628");
+    asc = Math.max(asc, Math.ceil(sm.fontBoundingBoxAscent));
+    desc = Math.max(desc, Math.ceil(sm.fontBoundingBoxDescent));
+    g.font = mainFont;
+  }
+  const lh = Math.trunc((asc + desc) * 1.12);
+  const blockH = lh * lines.length;
+  const pos = cs.position ?? "bottom";
+  const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
+  return { cs, size, words, lines, widths, lineW, space, asc, lh, blockH, top, active: cap.active, visual: cap.visual, look, isScript, useFont };
 }
 
 function setNoKerning(g: Canvas2D): void {
@@ -698,32 +836,16 @@ function pixelateInto(eg: Canvas2D, vg: Canvas2D, _map: ViewMap, rx0: number, ry
 
 /**
  * The caption box drawn on frame f (output px: x, y, w, h including the pill padding), measured the way
- * drawCaption lays it out (main font only). Used to pick and drag the caption on the preview.
+ * drawCaption lays it out (same fonts, weight, case and wrapping). Used to pick and drag the caption on the preview.
  */
 export function captionBox(g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, f: PlanFrame): [number, number, number, number] | null {
-  const cap = f.caption;
-  if (!cap || !cap.words.length) return null;
   const { width: W, height: H } = plan.output;
-  const cs = plan.style.captions;
-  const size = Math.max(10, pyRound(cs.fontSize ?? H * 0.04));
   g.save();
-  g.font = `bold ${size}px ${fontCss((cs as { font?: string }).font, FONT_STACK)}`;
-  const space = g.measureText(" ").width;
-  let i = 0;
-  let bw = 0;
-  for (const n of cap.lines) {
-    let w = 0;
-    for (let j = 0; j < n; j++) w += g.measureText(cap.words[i + j]!).width;
-    bw = Math.max(bw, w + space * Math.max(0, n - 1));
-    i += n;
-  }
-  const fm = g.measureText("Hg");
+  const L = captionLayout(g, plan, f, W, H);
   g.restore();
-  const lh = Math.trunc((Math.ceil(fm.fontBoundingBoxAscent) + Math.ceil(fm.fontBoundingBoxDescent)) * 1.12);
-  const blockH = lh * cap.lines.length;
-  const pos = cs.position ?? "bottom";
-  const top = pos === "top" ? Math.trunc(H * 0.07) : pos === "custom" ? Math.trunc((cs.y ?? 0.88) * H - blockH / 2) : Math.trunc(H * 0.93) - blockH;
-  const padx = size * 0.55;
-  const pady = size * 0.28;
-  return [(W - bw) / 2 - padx, top - pady, bw + 2 * padx, blockH + 2 * pady];
+  if (!L) return null;
+  const padx = L.size * 0.55;
+  const pady = L.size * 0.28;
+  const bw = Math.max(...L.lineW);
+  return [(W - bw) / 2 - padx, L.top - pady, bw + 2 * padx, L.blockH + 2 * pady];
 }

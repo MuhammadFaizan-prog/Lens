@@ -413,13 +413,16 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
     (word-level bidi from the engine). All words of a line share one baseline."""
     if isinstance(cap, str):  # plans from before caption styling
         cap = {"text": cap, "words": cap.split(), "lines": [len(cap.split())], "active": -1}
-    words = cap["words"]
+    # caption styling (Windows request "diff diff fonts"): absent fields = the original look
+    bold = cs.get("weight", "bold") != "regular"
+    upper = cs.get("uppercase") is True
+    words = [w.upper() for w in cap["words"]] if upper else cap["words"]
     if not words:
         return
     size = max(10, int(round(cs.get("fontSize", H * 0.04))))
     # theme / brand font (demand #9): same BASIC-layout file the preview loads; default unchanged
-    font = text_font(size, True, cs["font"]) if cs.get("font") else _font(size)
-    sfont = shaped_font(size, True, cs["scriptFont"]) if cs.get("scriptFont") else None
+    font = text_font(size, bold, cs["font"]) if cs.get("font") else (_font(size) if bold else text_font(size, False, None))
+    sfont = shaped_font(size, bold, cs["scriptFont"]) if cs.get("scriptFont") else None
     script = [bool(sfont) and has_arabic_script(w) for w in words]
     # a right-to-left line is one Arabic-script run: its spaces come from the script font, shaped, as
     # a full-line shaper (HarfBuzz itemising by script) would take them; left-to-right lines unchanged
@@ -461,22 +464,54 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int) -> None:
         d.rounded_rectangle((x0, top - pady, x0 + bw + 2 * padx, top + block_h + pady), radius=int(size * 0.45),
                             fill=(r, g, b, int(255 * float(bg.get("opacity", 0.66)))))
     text_rgb = hex_to_rgb(cs.get("textColor", "#ffffff"))
-    hi_rgb = hex_to_rgb(cs.get("highlightColor", "#ffd23f"))
+    hi_hex = cs.get("highlightColor", "#ffd23f")
+    hi_rgb = hex_to_rgb(hi_hex)
     active = cap.get("active", -1) if cs.get("wordHighlight", True) else -1
+    box_hi = cs.get("highlightStyle") == "box" and active >= 0
+    st = cs.get("stroke") or {}
+    stroke_px = max(1, int(_js_round(size * float(st.get("width", 0.08))))) if st.get("enabled") else 0
+    stroke_rgb = (*hex_to_rgb(st.get("color", "#000000")), 255)
     visual = cap.get("visual")
+    placed = []
     for li, ln in enumerate(lines):
         x = (W - line_w[li]) / 2
         y = top + li * lh
         order = visual[li] if visual else ln
         for j in order:
             wj = widths[li][ln.index(j)]
-            fill = (*(hi_rgb if j == active else text_rgb), 255)
-            if script[j]:
-                # each word from its own ascender, so every word sits on the line's baseline (y + asc)
-                d.text((x, y + asc - s_asc), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"])
-            else:
-                d.text((x, y + asc - main_asc), words[j], font=font, fill=fill)
+            placed.append((j, x, y, wj))
             x += wj + space
+    if box_hi:
+        for j, x, y, wj in placed:
+            if j == active:
+                pad = int(_js_round(size * 0.16))
+                bx = int(_js_round(x)) - pad
+                by = y + asc - int(_js_round(size * 0.9))
+                bw_, bh_ = int(_js_round(wj)) + 2 * pad, int(_js_round(size * 1.16))
+                d.rounded_rectangle((bx, by, bx + bw_, by + bh_), radius=int(size * 0.22), fill=(*hi_rgb, 255))
+    box_text = (17, 19, 24) if _luminance(hi_rgb) > 0.45 else (255, 255, 255)
+    for j, x, y, wj in placed:
+        on_box = box_hi and j == active
+        fill = (*(box_text if on_box else hi_rgb if (j == active and not box_hi) else text_rgb), 255)
+        sk = {"stroke_width": stroke_px, "stroke_fill": stroke_rgb} if stroke_px and not on_box else {}
+        if script[j]:
+            # each word from its own ascender, so every word sits on the line's baseline (y + asc)
+            d.text((x, y + asc - s_asc), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"], **sk)
+        else:
+            d.text((x, y + asc - main_asc), words[j], font=font, fill=fill, **sk)
+
+
+def _js_round(v: float) -> int:
+    """JavaScript Math.round (half up), as the preview rounds outline width and highlight box."""
+    return int(math.floor(v + 0.5))
+
+
+def _luminance(rgb: tuple[int, int, int]) -> float:
+    """Relative luminance (palette.ts luminance)."""
+    def lin(c: int) -> float:
+        v = c / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
 
 
 def _viewport_warp(frame: np.ndarray, cam: list[float], rect_w: int, rect_h: int, src_w: int, src_h: int, loupe: bool = False) -> np.ndarray:
@@ -508,6 +543,13 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     asset_dir = opts.asset_dir or str(Path(plan_path).resolve().parent)
     ann.ASSET_DIR[0] = Path(asset_dir)
     set_fonts(plan.get("fonts"), asset_dir)
+    # a chosen caption font must be there: never draw the fallback face in its place
+    cap_font = cap_style.get("font") if isinstance(cap_style, dict) else None
+    if cap_font:
+        fam = next((f for f in plan.get("fonts") or [] if f.get("family") == cap_font), None)
+        files = [resolve_asset(fam[k], asset_dir) for k in ("regular", "bold")] if fam else []
+        if not files or not all(Path(p).exists() for p in files):
+            raise FileNotFoundError(f"caption font not available for the export: {cap_font}")
     watermark = plan.get("watermark")
     mb = style["motionBlur"]
     frame_ms = 1000 / fps

@@ -10,6 +10,8 @@
  *    (no lane clipped: its top and bottom lie inside the timeline's scroll box) and its "+" is clickable.
  *  - F toggles preview fullscreen: the canvas gets >= 1.3x taller, and F again restores the size.
  *  - dragging the timeline splitter up by 80 px grows the timeline by 80 +- 2 px.
+ *  - a selected Step badge: the last control of its Inspector card scrolls into view inside the window
+ *    and takes a click; the Inspector tabs stay visible.
  */
 import { test } from "@playwright/test";
 import { expect, shot } from "./helpers";
@@ -56,6 +58,31 @@ for (const sz of SIZES) {
       await expect(page.getByTestId(add)).toBeVisible();
     }
     await shot(page, `layout-${sz.name}-scrolled${PACKAGED ? "-app" : ""}`);
+    // a selected Step badge: its card's last control scrolls into view and takes a click (it was cut off, wheel did nothing)
+    // created with the Step badge tool (a hand-written annotation without its style is rejected by the
+    // engine and the store rolls the edit back), then given a label so the card shows its text row
+    await page.getByTestId("tool-badge").click();
+    const pv = (await page.getByTestId("preview").boundingBox())!;
+    await page.mouse.click(pv.x + pv.width * 0.3, pv.y + pv.height * 0.3);
+    await page.evaluate(() => {
+      const st = (window as any).__lens.store;
+      const anns = st.get().project.annotations;
+      const b = anns[anns.length - 1];
+      st.updateAnnotation(b.id, (a: any) => ({ ...a, text: "Open the settings" }), "edit", "Badge label");
+      st.select({ track: "annotation", index: anns.length - 1 });
+    });
+    const card = page.getByTestId("ann-card");
+    await expect(card).toBeVisible();
+    const last = card.locator("button, input, select").last();
+    await last.scrollIntoViewIfNeeded();
+    const lb = await last.boundingBox();
+    const ib = await page.getByTestId("inspector").boundingBox();
+    console.log(sz.name, "badge card", JSON.stringify({ card: await card.evaluate((e) => [e.scrollHeight, e.clientHeight]), last: lb, inspector: ib }));
+    expect(lb!.y, "last badge control top inside the window").toBeGreaterThanOrEqual(ib!.y - 0.5);
+    expect(lb!.y + lb!.height, "last badge control bottom inside the window").toBeLessThanOrEqual(Math.min(ib!.y + ib!.height, sz.h) + 0.5);
+    await last.click({ trial: true });
+    // the section below the card is still reachable
+    await expect(page.locator(".inspector .tabs")).toBeVisible();
     await lens.close();
   });
 }

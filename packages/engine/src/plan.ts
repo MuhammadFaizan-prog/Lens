@@ -7,8 +7,9 @@ import { stepSpring, type SpringState } from "./spring.js";
 import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalizeCrop, zoomableEvents } from "./crop.js";
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
-import { fillScreenRect, layoutAt, layoutFor, outputSize, overlayAvoidRect, scaleCameraRect } from "./layout.js";
+import { canvasSize, cardCrop, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
 import { masksAt, type MaskFrame } from "./masks.js";
+import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
@@ -112,6 +113,11 @@ export interface PlanFrame {
   annotations: AnnFrame[];
   /** A full-frame text slide over everything (output px), or null. */
   slide: SlideFrame | null;
+  /**
+   * 3D transform of the screen card (feat/motion-3d); absent when the card is flat, so plans of
+   * projects without 3D motion are unchanged.
+   */
+  m3d?: Motion3DFrame;
 }
 
 export interface PlanInputs {
@@ -137,14 +143,17 @@ const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
 export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: rawProject, words = [], pauses, onlyFrames }: PlanInputs): RenderPlan {
   const fps = rawProject.output.fps;
-  const out = outputSize(rawProject.output.aspect, rawProject.output.resolution);
+  // Canvas (feat/canvas-layout): custom W x H, aspect "auto" (the user crop's shape) or aspect x resolution.
+  const userCrop: Rect = normalizeCrop(rawProject.crop, fullMeta);
+  const out = canvasSize(rawProject.output, { width: userCrop.w, height: userCrop.h });
   // Theme (demand #9): resolve "@slot" references (built-in < preset < brand < item), add brand cards.
   const theme = applyTheme(rawProject, fullMeta.durationMs, out);
   const project = theme.project;
   const resScale = Math.min(out.width, out.height) / 1080;
 
-  // 0. Crop (LOOK-14): move everything into cropped space.
-  const crop: Rect = normalizeCrop(project.crop, fullMeta);
+  // 0. Crop (LOOK-14): move everything into cropped space. A custom card trims the crop to its own
+  // shape first (cardCrop, centred), so the card never stretches and every conversion below agrees.
+  const crop: Rect = cardCrop(normalizeCrop(project.crop, fullMeta), out, project);
   const meta = cropMeta(fullMeta, crop);
   const events = cropEvents(rawEvents, crop);
   const masks = project.masks.map((m) => ({ ...m, rect: cropRect(m.rect, crop), keys: m.keys?.map((k) => ({ tMs: k.tMs, rect: cropRect(k.rect, crop) })) }));
@@ -155,7 +164,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const zoomSegments = effectiveZoomSegments(zoomableEvents(events, crop), meta, { ...project.zoom, segments: cropZoomSegments(project.zoom.segments, crop) });
   const staticLayout = layoutFor(project.camera.enabled ? "camera-overlay" : "screen-only", out, sourceAspect, project);
   // Fill mode (Windows bug #8): crop in to fill a differently shaped output and pan with the action.
-  const fill = project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
+  // A custom card owns the placement: fill mode (and its pan-follow) is off while one is set.
+  const fill = !validCard(project.card) && project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
   const camera: CameraSample[] = buildCameraTrack(cursor, zoomSegments, meta, {
     spring: project.zoom.spring,
     followDeadzone: project.zoom.followDeadzone,
@@ -229,6 +239,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     // during a slide the source holds still: no clicks, shortcut or caption from the frozen moment
     const sc = span ? undefined : shortcuts.find((s) => src >= s.startMs && src < s.endMs);
     const cap = span ? undefined : captions.find((b) => src >= b.startMs && src < b.endMs);
+    const m3 = project.motion3d.length ? motion3dAt(project.motion3d, src) : null;
+    const screenR: [number, number, number, number] = [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)];
     planFrames.push({
       t: r2(t),
       src: r2(src),
@@ -237,7 +249,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
       clicks: span ? [] : activeClicks,
       layout: {
-        screen: [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)],
+        screen: screenR,
         screenOpacity: r4(layout.screenOpacity),
         camera: layout.camera ? [r2(layout.camera.x), r2(layout.camera.y), r2(layout.camera.w), r2(layout.camera.h)] : null,
         cameraOpacity: r4(layout.cameraOpacity),
@@ -248,6 +260,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
+      ...(m3 ? { m3d: motion3dFrame(m3, screenR, out, resScale) } : {}),
     });
   }
 

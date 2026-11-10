@@ -12,6 +12,10 @@ import "./styles.css";
     const f = s.plan?.frames[s.frame];
     return {
       status: s.status,
+      error: s.error,
+      readyMs: store.readyMs,
+      firstPaintMs: store.firstPaintMs,
+      durationMs: s.bundle?.meta?.durationMs ?? null,
       frame: s.frame,
       frames: s.plan?.frames.length ?? 0,
       fps: s.plan?.output.fps ?? 0,

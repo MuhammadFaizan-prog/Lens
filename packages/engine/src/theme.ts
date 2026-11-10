@@ -61,7 +61,8 @@ export function applyTheme(p: ProjectConfig, durationMs: number, out?: { width: 
   const captions = {
     ...p.captions,
     // the default font is left out so plans without a theme stay byte-identical
-    style: { ...cs, highlightColor: resolveColor(cs.highlightColor, pal), textColor: resolveColor(cs.textColor, pal), font: ((f) => (f === DEFAULT_FONT ? undefined : f))(font(cs.font)) },
+    style: { ...cs, highlightColor: resolveColor(cs.highlightColor, pal), textColor: resolveColor(cs.textColor, pal), font: ((f) => (f === DEFAULT_FONT ? undefined : f))(font(cs.font)),
+      ...(cs.stroke ? { stroke: { ...cs.stroke, color: resolveColor(cs.stroke.color, pal) } } : {}) },
   };
   const annotations: Annotation[] = p.annotations.map((a) => {
     const st = themedStyle(a.style, pal);

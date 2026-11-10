@@ -1,8 +1,9 @@
+import { FileMenu, desktopFile } from "./components/FileMenu";
 import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
-import { addZoomAtPlayhead, deleteSelection, Timeline } from "./components/Timeline";
+import { addZoomAtPlayhead, deleteSelection, Timeline, timelineHasFocus } from "./components/Timeline";
 import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./components/CanvasOverlay";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
@@ -50,6 +51,7 @@ function TopBar() {
       </div>
       <UpdateBanner />
       <div className="top-actions">
+        <FileMenu />
         <button className="icon-btn" disabled={!canUndo} title={`Undo ${undoLabel ?? ""} (⌘Z)`} aria-label="Undo" data-testid="undo" onClick={() => store.undo()}>
           <Icon name="undo" />
         </button>
@@ -99,6 +101,7 @@ function AboutButton() {
               ))}
             </ul>
             <div className="sheet-actions">
+              {desktopFile && <button className="btn ghost" data-testid="open-log-folder" onClick={() => void desktopFile?.openLogFolder()}>Open log folder</button>}
               <button className="btn" onClick={() => setOpen(false)}>Close</button>
             </div>
           </div>
@@ -258,7 +261,23 @@ function useKeys() {
         void store.save();
         return;
       }
+      // Ctrl/Cmd+A with the timeline focused: select every block on every lane
+      if (mod && k.toLowerCase() === "a" && timelineHasFocus()) {
+        e.preventDefault();
+        store.selectAll();
+        return;
+      }
       if (mod) return;
+      // Alt+Arrow with a 3D block selected (also from its sliders): turn the selected keyframe 5
+      // degrees: Up/Down about X, Left/Right about Y, Alt+Shift+Left/Right about Z
+      if (e.altKey && k.startsWith("Arrow")) {
+        const sign = k === "ArrowRight" || k === "ArrowUp" ? 1 : -1;
+        const axis = k === "ArrowUp" || k === "ArrowDown" ? "rx" : e.shiftKey ? "rz" : "ry";
+        if (store.nudgeMotion3d(axis, 5 * sign)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (el?.tagName === "INPUT") return; // sliders keep arrow keys
       switch (k) {
         case " ":
@@ -283,6 +302,11 @@ function useKeys() {
         case "ArrowDown": {
           e.preventDefault();
           const n = e.shiftKey ? 10 : 1;
+          // timeline focused with blocks selected: Left/Right nudge them a frame (Shift: 1 s), one undo step
+          if ((k === "ArrowLeft" || k === "ArrowRight") && timelineHasFocus() && (store.get().multi.length || store.get().selection)) {
+            store.nudge(k === "ArrowLeft" ? -1 : 1, e.shiftKey);
+            break;
+          }
           // a canvas object picked on the preview: nudge it (output px); else step frames
           if (canvasHasFocus()) {
             const dx = k === "ArrowLeft" ? -n : k === "ArrowRight" ? n : 0;
@@ -383,7 +407,14 @@ export function App() {
       style={{ ["--left-w" as string]: `${L.leftOpen ? L.leftW : 0}px`, ["--right-w" as string]: `${L.rightOpen ? L.rightW : 0}px`, ["--tl-h" as string]: `${L.tlH}px` }}
     >
       <TopBar />
-      {status === "error" && <div className="banner error">Could not open the recording: {error}</div>}
+      {status === "error" && <div className="banner error" data-testid="load-error">Could not open the recording: {error}</div>}
+      {status !== "ready" ? (
+        // nothing of the project is shown until the bundle has loaded: no empty 00:00.01 project, no "no microphone track"
+        <main className="workspace loading" data-testid="loading">
+          <div className="loading-card">{status === "loading" ? <><span className="spinner" /> Opening the recording…</> : "The recording could not be opened. The reason is above; the log folder is in About."}</div>
+        </main>
+      ) : (
+      <>
       <main className="workspace">
         {L.leftOpen ? <LeftPanel /> : <div className="panel-stub" />}
         <Splitter kind="left" />
@@ -397,6 +428,8 @@ export function App() {
       </main>
       <Splitter kind="timeline" />
       <Timeline />
+      </>
+      )}
       <ExportSheet />
       <ExportDialog />
       <ExportWarning />

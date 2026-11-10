@@ -93,6 +93,17 @@ items inside the screen before the cursor, frame-anchored ones after the webcam,
 regular-weight DejaVu Sans is served next to the bold one (`/api/font/caption-regular.ttf`).
 Sample: `apps/editor/sample-annotations` (`make_sample.py --annotations`).
 
+Caption styles (Windows request "diff diff fonts for the captions", `CaptionStyleControls.tsx` in the
+Captions tab): a **Style** row of six one-click looks (`CAPTION_PRESETS` in `packages/engine/src/captionStyles.ts`;
+a preset sets font, weight, case, colours, box, outline, highlight style and size, and keeps position, line
+breaking and text), a **Font** list drawn in each face (`CAPTION_FONTS`; "Theme" follows the preset / brand
+`@font`; a face that fails to load is disabled with a reason), then Weight, Capitals, Outline (width, colour) and
+Highlight as Colour / Box. Any hand edit clears `captions.style.preset`. The page loads each bundled face as
+`"Lens <family>"` (`render/assets.ts`); the export worker refuses to export when a chosen caption font did not
+load rather than drawing the fallback. The renderer draws outline with `strokeText` under the fill and the box
+highlight as a rounded rect behind the active word, matching `draw_caption` in `compositor/render.py` (FreeType
+stroker), so glyph edges differ by sub-pixel coverage only; `parity-caption-styles.spec.ts` checks two looks.
+
 Caption translation (`docs/Translation.md`): the Captions tab has a **Languages** section: caption
 language switcher, **Translate to…** with progress (`POST /api/translate` → `translate/lens-translate`
 on the bundle's transcript, polled at `GET /api/translate/:id`), the selected track's segments side by

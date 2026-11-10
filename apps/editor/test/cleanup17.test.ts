@@ -2,7 +2,7 @@
  * Windows bug #17: Cleanup ("Remove fillers" / "Shorten pauses" / "Longest pause") did nothing.
  * Fixture: speech with "um" / "uh" and two 4 s pauses over a -54 dBFS noise floor, as a desktop
  * recording (mic.wav 48 kHz stereo, 300 ms track offset). Through the editor API and the in-app export:
- * 1. no transcript: GET /api/bundle returns the mic's measured silences; with "Shorten pauses" on, the
+ * 1. no transcript: GET /api/silences returns the mic's measured silences (in the background, not in /api/bundle); with "Shorten pauses" on, the
  *    plan has cleanup cuts (the Cuts lane), and in the exported MP4 every pause is <= Longest pause
  *    + 50 ms, |audio - video| <= 50 ms, and the last phrase starts where the cut map puts it (+-50 ms);
  * 2. with the in-app transcript (whisper.cpp): "Remove fillers" cuts every filler word, and
@@ -107,7 +107,10 @@ describe.skipIf(!ready)("cleanup on a desktop recording (#17)", () => {
   it("shortens pauses with no transcript; export keeps A/V sync", async () => {
     const b = await (await fetch(`${base}/api/bundle${q}`)).json();
     expect(b.transcript).toBeNull();
-    const silences = b.silences as Range[];
+    // v0.1.3: measured in the background, not in /api/bundle's answer
+    expect(b.silencesPending).toBe(true);
+    const silences = (await (await fetch(`${base}/api/silences${q}`)).json()).silences as Range[];
+    expect((await (await fetch(`${base}/api/bundle${q}`)).json()).silences).toEqual(silences);
     const long = silences.filter((s) => s.endMs - s.startMs > 3500);
     expect(long.length).toBe(2);
     expect(long[0]!.startMs).toBeGreaterThanOrEqual(OFFSET);
@@ -147,7 +150,7 @@ describe.skipIf(!ready)("cleanup on a desktop recording (#17)", () => {
     const words = b.transcript.words as Array<{ text: string; startMs: number; endMs: number; filler?: boolean }>;
     const fillers = words.filter((w) => w.filler);
     expect(fillers.length).toBeGreaterThanOrEqual(1);
-    const plan = buildRenderPlan({ meta: b.meta, events: parseEventLog(b.events), project: project({ removeFillers: true, shortenPauses: true }), words, pauses: b.transcript.pauses ?? b.silences });
+    const plan = buildRenderPlan({ meta: b.meta, events: parseEventLog(b.events), project: project({ removeFillers: true, shortenPauses: true }), words, pauses: b.transcript.pauses ?? (await (await fetch(`${base}/api/silences${q}`)).json()).silences });
     for (const f of fillers) expect(plan.cuts.some((c) => c.startMs <= (f.startMs + f.endMs) / 2 && c.endMs >= (f.startMs + f.endMs) / 2), `filler ${f.text} cut`).toBe(true);
     const out = await exportPlan(plan, dir);
     const pr = probe(out);

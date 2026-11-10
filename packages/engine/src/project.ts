@@ -21,6 +21,8 @@ import { isColorValue } from "./palette.js";
 import { validateTranslations, type TranslationSettings } from "./translation.js";
 import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings.js";
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
+import type { CardTransform } from "./layout.js";
+import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -30,8 +32,16 @@ import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 export interface ProjectConfig {
   version: 1;
   output: {
-    /** Aspect ratio as w:h, e.g. "16:9", "1:1", "9:16", "4:5", "4:3". */
+    /**
+     * Aspect ratio as w:h, e.g. "16:9", "1:1", "9:16", "4:5", "4:3", or "auto": the canvas follows
+     * the (user-cropped) recording's own shape, resolution being its short side.
+     */
     aspect: string;
+    /**
+     * Custom canvas size in output px (16..8192 each side, rounded to even). Wins over aspect and
+     * resolution when set. Absent / null = aspect x resolution.
+     */
+    size?: { w: number; h: number } | null;
     /** Height of the output for 16:9, or the short side for other aspects. */
     resolution: 360 | 480 | 720 | 1080 | 1440 | 2160;
     fps: 24 | 30 | 60;
@@ -201,8 +211,20 @@ export interface ProjectConfig {
   };
   /** Source crop rect in source px (LOOK-14). Everything downstream works in cropped space. */
   crop: Rect | null;
+  /**
+   * Free placement of the screen card (feat/canvas-layout): top-left and size as fractions of the
+   * canvas width / height. Absent / null = today's placement (the source fitted in the padding).
+   * A card whose shape differs from the crop trims the crop, centred (cardCrop), never stretches.
+   * Fill mode and its pan-follow are off while a card is set.
+   */
+  card?: CardTransform | null;
   /** Timed spotlight / blur / pixelate regions in source px (TXT-04/05); tracked when they have keys. */
   masks: MaskRegion[];
+  /**
+   * 3D motion of the screen card (feat/motion-3d), source time: rotate / move the card on X, Y, Z
+   * with perspective, composed outside the 2D zoom. Empty by default = the flat card as before.
+   */
+  motion3d: Motion3DSegment[];
   /** Automatic privacy redaction (demand #3): the scan's detections and their review state. */
   privacy: PrivacySettings;
   /** Per-segment overrides of cursor and audio volume, source time (CUR-01, EDT-05/06). */
@@ -282,7 +304,25 @@ export interface CaptionStyle {
   maxCharsPerLine: number;
   /** Font family, or "@font" / absent: the theme font. */
   font?: string;
+  /*
+   * Caption styling (Windows request "diff diff fonts for the captions"). Every field below is
+   * optional and absent in projects saved before it: absent = the look captions always had (bold,
+   * as typed, no outline, highlighted word recoloured), so old project.json files render unchanged.
+   */
+  /** Font weight; absent = "bold". */
+  weight?: CaptionWeight;
+  /** Draw the caption in capitals (display only: SRT / VTT keep the words as spoken). */
+  uppercase?: boolean;
+  /** Outline around every glyph; width is a fraction of the font size (0.02..0.25). Absent = none. */
+  stroke?: { enabled: boolean; color: string; width: number };
+  /** How the spoken word is marked: "color" (absent) recolours it, "box" puts it on a highlight-coloured box. */
+  highlightStyle?: CaptionHighlightStyle;
+  /** Last one-click style applied (CAPTION_PRESETS), for the picker; cleared by nothing, purely informative. */
+  preset?: string;
 }
+
+export type CaptionWeight = "regular" | "bold";
+export type CaptionHighlightStyle = "color" | "box";
 
 export function defaultProject(): ProjectConfig {
   return {
@@ -376,6 +416,7 @@ export function defaultProject(): ProjectConfig {
     transcription: { mode: "auto", track: null, model: "base.en", language: null },
     crop: null,
     masks: [],
+    motion3d: [],
     privacy: defaultPrivacy(),
     overrides: [],
     annotations: [],
@@ -422,7 +463,14 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
   if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
   if (p.version !== 1) errs.push(`unsupported project version ${String(p.version)}`);
-  if (!/^\d+:\d+$/.test(p.output.aspect)) errs.push(`output.aspect must look like 16:9, got ${p.output.aspect}`);
+  if (p.output.aspect !== "auto" && !(/^\d+:\d+$/.test(p.output.aspect) && p.output.aspect.split(":").every((v) => Number(v) > 0)))
+    errs.push(`output.aspect must look like 16:9 or be auto, got ${p.output.aspect}`);
+  const osz = p.output.size;
+  if (osz !== undefined && osz !== null && !(isPlainObject(osz) && [osz.w, osz.h].every((v) => Number.isFinite(v) && v >= 16 && v <= 8192)))
+    errs.push("output.size must be {w, h} with each side within 16..8192 px");
+  const cd = p.card;
+  if (cd !== undefined && cd !== null && !(isPlainObject(cd) && [cd.x, cd.y, cd.w, cd.h].every(Number.isFinite) && cd.w > 0 && cd.h > 0 && cd.w <= 4 && cd.h <= 4 && Math.abs(cd.x) <= 4 && Math.abs(cd.y) <= 4))
+    errs.push("card must be {x, y, w, h} canvas fractions with 0 < w, h <= 4 and |x|, |y| <= 4");
   if (![24, 30, 60].includes(p.output.fps)) errs.push("output.fps must be 24, 30 or 60");
   if (p.frame.padding < 0 || p.frame.padding > 0.4) errs.push("frame.padding must be within 0..0.4");
   if (p.zoom.minScale < 1 || p.zoom.maxScale < p.zoom.minScale) errs.push("zoom scale range invalid");
@@ -449,6 +497,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     const ke = validateKeys(m.keys);
     if (ke) errs.push(`mask ${m.id} ${ke}`);
   }
+  errs.push(...validateMotion3d(p.motion3d));
   errs.push(...validatePrivacy(p.privacy));
   errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
   for (const o of p.overrides) {
@@ -487,6 +536,15 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (!(p.captions.style.maxCharsPerLine >= 0)) errs.push("captions.style.maxCharsPerLine must be >= 0");
   errs.push(...validateTranslations(p.translations));
   if (!isColorValue(p.captions.style.highlightColor) || !isColorValue(p.captions.style.textColor)) errs.push("caption colours must be #rrggbb or a theme slot (@highlight)");
+  {
+    const cs = p.captions.style;
+    if (cs.weight !== undefined && cs.weight !== "regular" && cs.weight !== "bold") errs.push('captions.style.weight must be "regular" or "bold"');
+    if (cs.highlightStyle !== undefined && cs.highlightStyle !== "color" && cs.highlightStyle !== "box") errs.push('captions.style.highlightStyle must be "color" or "box"');
+    if (cs.uppercase !== undefined && typeof cs.uppercase !== "boolean") errs.push("captions.style.uppercase must be a boolean");
+    if (cs.stroke !== undefined && (typeof cs.stroke !== "object" || cs.stroke === null || !isColorValue(cs.stroke.color) || !(cs.stroke.width >= 0 && cs.stroke.width <= 0.25)))
+      errs.push("captions.style.stroke must be { enabled, color #rrggbb, width 0..0.25 }");
+    if (cs.font !== undefined && (typeof cs.font !== "string" || !cs.font)) errs.push("captions.style.font must be a font family name");
+  }
   if (!["solid", "gradient", "image", "hidden"].includes(p.background.kind)) errs.push("background.kind must be solid, gradient, image or hidden");
   const st = p.background.stops;
   if (st !== undefined && !(Array.isArray(st) && st.length === p.background.colors.length && st.every((v) => Number.isFinite(v) && v >= 0 && v <= 1)))

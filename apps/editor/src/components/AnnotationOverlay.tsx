@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultAnnotationStyle, defaultAnimations, normalizeAnnotation, textPreset, type Annotation, type AnnFrame, type PlanFrame, type RenderPlan, type Vec2 } from "@lens/engine";
 import { layoutText } from "../render/annotations";
 import { makeCanvas } from "../render/canvas";
-import { store, useEditor } from "../state/store";
+import { selectedZoomDocIndex, store, useEditor } from "../state/store";
 import { newId, updateBlock } from "../state/timelineOps";
 import { pickCanvasObject, zoomEditFrame } from "./CanvasOverlay";
 
@@ -165,7 +165,7 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<Drag | null>(null);
   const [, bump] = useState(0);
-  const zoomSel = useEditor((s) => (s.selection?.track === "zoom" ? s.project.zoom.segments[s.selection.index] ?? null : null));
+  const zoomSel = useEditor((s) => s.project.zoom.segments[selectedZoomDocIndex(s)] ?? null);
   const f0 = plan?.frames[frame];
   const f = plan && f0 && zoomSel ? zoomEditFrame(plan, f0) : f0;
   const W = plan?.output.width ?? 1280;
@@ -279,8 +279,8 @@ export function AnnotationOverlay({ cssW, cssH }: { cssW: number; cssH: number }
     const st = store.get();
     if (st.zoomPlacing && st.selection?.track === "zoom") {
       const q = spaceOf(plan, f, "screen").fromOut(p);
-      const idx = st.selection.index;
-      store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
+      const idx = selectedZoomDocIndex(st);
+      if (idx >= 0) store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
       store.setZoomPlacing(false);
       return;
     }

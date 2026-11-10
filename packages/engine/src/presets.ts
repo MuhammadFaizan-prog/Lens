@@ -26,7 +26,7 @@ const WEBCAM_KEYS = ["corner", "size", "shape", "mirror", "zoomedSize", "transit
 
 export interface PresetSections {
   look?: {
-    /** Output aspect ratio, e.g. "9:16". */
+    /** Output aspect ratio, e.g. "9:16", or "auto" (follow the recording's shape). */
     aspect?: string;
     /** "fill": crop in and follow the action when the output aspect differs from the screen's. */
     fit?: "fit" | "fill";
@@ -107,7 +107,13 @@ export function applyPreset(project: ProjectConfig, preset: Preset, sections: Pr
     const L = s.look;
     const palette = clone(L.palette ?? {});
     const bg = palette.background ?? BUILTIN_PALETTE.background;
-    p.output = { ...p.output, aspect: L.aspect ?? d.output.aspect };
+    const aspect = L.aspect ?? d.output.aspect;
+    if (aspect !== p.output.aspect) {
+      // a new canvas shape: the free card placement and any custom W x H no longer apply
+      p.card = null;
+      delete p.output.size;
+    }
+    p.output = { ...p.output, aspect };
     if (L.fit) p.output.fit = L.fit;
     else delete p.output.fit;
     p.background = { ...p.background, kind: bg.kind, colors: [...bg.colors], angle: bg.angle, blur: L.background?.blur ?? 0, inherit: true };
@@ -280,7 +286,7 @@ export function validatePreset(raw: unknown): { preset: Preset | null; errors: s
   for (const k of PRESET_SECTIONS) if (sec[k] !== undefined) checkShape(sec[k], T[k], `sections.${k}`, errs);
   const look = sec.look as PresetSections["look"];
   if (look?.palette && isObj(look.palette)) errs.push(...validatePalette(look.palette, "sections.look.palette"));
-  if (look?.aspect !== undefined && !/^\d+:\d+$/.test(String(look.aspect))) errs.push("sections.look.aspect must look like 16:9");
+  if (look?.aspect !== undefined && look.aspect !== "auto" && !/^\d+:\d+$/.test(String(look.aspect))) errs.push("sections.look.aspect must look like 16:9 or be auto");
   if (look?.fit !== undefined && look.fit !== "fit" && look.fit !== "fill") errs.push("sections.look.fit must be fit or fill");
   const cap = sec.captions as PresetSections["captions"];
   const hc = cap?.style?.highlightColor;

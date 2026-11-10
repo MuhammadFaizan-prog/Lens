@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("lensDesktop", {
   historyReveal: (dir: string) => ipcRenderer.invoke("lens:history-reveal", dir),
   historyDelete: (dir: string) => ipcRenderer.invoke("lens:history-delete", dir),
   importVideo: (file?: string) => ipcRenderer.invoke("lens:import", file),
+  importCancel: () => ipcRenderer.invoke("lens:import-cancel"),
+  onImportProgress: (fn: (p: unknown) => void) => ipcRenderer.on("lens:import-progress", (_e, p) => fn(p)),
   settingsGet: () => ipcRenderer.invoke("lens:settings-get"),
   settingsSet: (s: unknown) => ipcRenderer.invoke("lens:settings-set", s),
   settingsPickDir: (current: string) => ipcRenderer.invoke("lens:settings-pick-dir", current),

@@ -9,9 +9,11 @@ import path from "node:path";
 import { displayForSource } from "../shared/coords";
 import { startEditorServer, type EditorServer } from "./editorServer";
 import { ffmpegPath, recordingsDir, rendererFile } from "./paths";
-import { IMPORT_EXTENSIONS, deleteBundle, importVideo, listHistory } from "./library";
+import { initLog, logDir, logLine } from "./log";
+import { IMPORT_EXTENSIONS, ImportCancelled, deleteBundle, importVideo, listHistory } from "./library";
 import { displayGeoms, Recording, setKeyTable, type Hook, type StartInfo } from "./recording";
 import { UpdateController, type UpdateState } from "./updater";
+import { pickH264 } from "../../../editor/server/h264";
 import { defaultSettings, loadSettings, normalize, saveSettings, shortcutConflict, type Settings } from "./settings";
 
 const APP_ID = "io.github.muhammadfaizanprog.lens"; // = electron-builder appId (scripts/dist-win.mjs)
@@ -23,6 +25,8 @@ if (process.env.LENS_LOWMEM === "1") {
   app.commandLine.appendSwitch("renderer-process-limit", "2");
 }
 if (process.env.LENS_USER_DATA) app.setPath("userData", process.env.LENS_USER_DATA);
+initLog(app.getPath("userData"), app.getVersion());
+const openLogFolder = () => void shell.openPath(logDir(app.getPath("userData")));
 // Windows groups taskbar buttons and picks their icon by AppUserModelID; without it the windows group
 // under electron.exe. Must equal the appId the installer writes on the Start-menu shortcut.
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
@@ -40,6 +44,10 @@ let hotkey = settings.shortcuts.startStop;
 function applySettingsEnv(): void {
   process.env.LENS_SAVE_DIR = settings.general.saveDir;
   process.env.LENS_EXPORT_DIR = settings.general.exportDir;
+  // read per job by the editor server: export bitrate (browserExport.ts) and whether the finalize may
+  // use a hardware H.264 encoder (h264.ts; Settings > Hardware acceleration off = libx264 only)
+  process.env.LENS_EXPORT_BITRATE_MBPS = String(settings.export.bitrateMbps);
+  process.env.LENS_H264_HW = settings.general.hardwareAcceleration ? "on" : "off";
 }
 applySettingsEnv();
 if (!settings.general.hardwareAcceleration) app.disableHardwareAcceleration();
@@ -73,9 +81,10 @@ function updateLabel(st: UpdateState): string {
 async function showAbout(): Promise<void> {
   const st = updates.state;
   const line = st.status === "none" ? "Lens is up to date." : st.status === "available" ? `Version ${st.version} is available.` : st.status === "downloaded" ? `Version ${st.version} is ready: restart to update.` : st.status === "disabled" ? "Updates are off in this build." : st.status === "error" ? `Last update check failed: ${st.message}` : "";
-  const buttons = st.status === "available" ? ["Download update", "OK"] : st.status === "downloaded" ? ["Restart to update", "OK"] : ["Check for updates", "OK"];
-  const r = await dialog.showMessageBox({ type: "info", title: "About Lens", message: `Lens v${app.getVersion()}`, detail: line, buttons, defaultId: 1, cancelId: 1, noLink: true });
+  const buttons = [st.status === "available" ? "Download update" : st.status === "downloaded" ? "Restart to update" : "Check for updates", "Open log folder", "OK"];
+  const r = await dialog.showMessageBox({ type: "info", title: "About Lens", message: `Lens v${app.getVersion()}`, detail: `${line}\nLog: ${path.join(logDir(app.getPath("userData")), "lens.log")}`, buttons, defaultId: 2, cancelId: 2, noLink: true });
   if (r.response === 0 && st.status !== "disabled") updateAction();
+  if (r.response === 1) openLogFolder();
 }
 
 function updateAction(): void {
@@ -89,7 +98,8 @@ function updateAction(): void {
 function buildAppMenu(): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { label: "Lens", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() }, { type: "separator" }, { role: "quit" }] },
+      { label: "Lens", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() }, { label: "Open log folder", click: openLogFolder }, { type: "separator" }, { role: "quit" }] },
+      { role: "help", submenu: [{ label: "About Lens", click: () => void showAbout() }, { label: "Open log folder", click: openLogFolder }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
@@ -137,6 +147,7 @@ function updateTray(): void {
       { label: "Settings…", click: () => openSettings() },
       { label: "About Lens", click: () => void showAbout() },
       { label: updateLabel(updates.state), enabled: updates.state.status !== "disabled", click: () => updateAction() },
+      { label: "Open log folder", click: openLogFolder },
       { type: "separator" },
       { label: "Quit Lens", click: () => app.quit() },
   ];
@@ -225,6 +236,13 @@ async function openEditor(dir: string): Promise<BrowserWindow> {
   });
   editorWindows.push(win);
   win.on("closed", () => editorWindows.splice(editorWindows.indexOf(win), 1));
+  // editor-side failures land in lens.log (Windows: the blank-editor report had no trace anywhere)
+  win.webContents.on("console-message", (_e, level, message, line, source) => {
+    if (level >= 2) logLine(level >= 3 ? "EDITOR-ERROR" : "EDITOR-WARN", `${message} (${source}:${line})`);
+  });
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => logLine("ERROR", `editor did-fail-load ${code} ${desc} ${url}`));
+  win.webContents.on("render-process-gone", (_e, d) => logLine("ERROR", `editor renderer gone: ${d.reason} (exit ${d.exitCode})`));
+  logLine("INFO", `open editor ${dir}`);
   await win.loadURL(editor.urlFor(dir) + (settings.general.autoPlay ? "&autoplay=1" : ""));
   return win;
 }
@@ -278,7 +296,7 @@ function pickRegion(displayId?: string): Promise<{ x: number; y: number; w: numb
   });
   return new Promise((resolve) => {
     const done = (_e: unknown, r: { x: number; y: number; w: number; h: number } | null) => {
-      ipcMain.removeAllListeners("lens:region-done");
+      ipcMain.removeListener("lens:region-done", once);
       if (!win.isDestroyed()) win.destroy();
       if (regionWin === win) regionWin = null;
       if (hadRecorder) showRecorder();
@@ -431,7 +449,10 @@ function registerIpc(): void {
     if (!rec) throw new Error("no recording");
     const displays = displayGeoms();
     const captured = info.kind === "screen" ? displayForSource(info.displayId, info.sourceId, displays) : null;
-    rec.start({ ...info, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
+    rec.start({ ...info, quality: settings.record.quality, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
+    // the H.264 encoder probe (test encodes, cached per process) runs now, not after Stop
+    void pickH264(ffmpegPath()).catch(() => undefined);
+    logLine(info.webcamError ? "WARN" : "INFO", `recording started: camera ${info.webcamDevice ? JSON.stringify(info.webcamDevice) : "none"}${info.webcam ? ` (${info.webcam.mime})` : ""}${info.webcamError ? ` — ${info.webcamError}` : ""}`);
     if (settings.record.hideWhileRecording) recorderWin?.hide();
     return { ok: true };
   });
@@ -448,18 +469,40 @@ function registerIpc(): void {
   });
   ipcMain.handle("lens:history-reveal", (_e, dir: string) => shell.showItemInFolder(path.join(dir, "screen.mp4")));
   ipcMain.handle("lens:history-delete", (_e, dir: string) => deleteBundle(recordingsDir(), dir));
-  ipcMain.handle("lens:import", async (_e, file?: string) => {
+  // Import Video (Windows report 2026-11-09: sat on "Importing…" forever): progress to the recorder, Cancel kills ffmpeg
+  let importAbort: AbortController | null = null;
+  ipcMain.handle("lens:import", async (e, file?: string) => {
+    if (importAbort) throw new Error("an import is already running");
     let f = file;
     if (!f) {
       const r = await dialog.showOpenDialog(recorderWin ?? undefined!, { title: "Import video to create a Lens project", properties: ["openFile"], filters: [{ name: "Video", extensions: IMPORT_EXTENSIONS }] });
       if (r.canceled || !r.filePaths[0]) return null;
       f = r.filePaths[0];
     }
-    const dir = await importVideo(recordingsDir(), ffmpegPath(), f);
-    (globalThis as Record<string, unknown>).lensLastImport = dir;
-    await openEditor(dir);
-    return { dir };
+    const ac = new AbortController();
+    importAbort = ac;
+    const send = (p: unknown) => {
+      if (!e.sender.isDestroyed()) e.sender.send("lens:import-progress", p);
+    };
+    try {
+      const res = await importVideo(recordingsDir(), ffmpegPath(), f, { signal: ac.signal, onProgress: send });
+      (globalThis as Record<string, unknown>).lensLastImport = res.dir;
+      (globalThis as Record<string, unknown>).lensLastImportInfo = res;
+      await openEditor(res.dir);
+      return { dir: res.dir, video: res.video, durationMs: res.durationMs, progressEvents: res.progressEvents };
+    } catch (err) {
+      if (err instanceof ImportCancelled) return { cancelled: true };
+      throw err;
+    } finally {
+      if (importAbort === ac) importAbort = null;
+    }
   });
+  ipcMain.handle("lens:import-cancel", () => {
+    importAbort?.abort();
+    return !!importAbort;
+  });
+  ipcMain.handle("lens:show-recorder", () => showRecorder());
+  ipcMain.handle("lens:open-log-folder", () => openLogFolder());
   ipcMain.handle("lens:pick-region", (_e, displayId?: string) => pickRegion(displayId));
   ipcMain.handle("lens:teleprompter", () => toggleTeleprompter());
   ipcMain.on("lens:chunk", (_e, kind: "video" | "audio" | "camera" | "system", data: ArrayBuffer) => rec?.chunk(kind, data));
@@ -470,7 +513,14 @@ function registerIpc(): void {
     rec = null;
     updateTray();
     const out = await r.finalize(ffmpegPath(), (stage) => recorderWin?.webContents.send("lens:finalizing", stage));
-    if (process.env.LENS_NO_EDITOR !== "1") await openEditor(out.dir);
+    logLine("INFO", `recording saved ${out.dir} (${out.durationMs} ms)`, r.finalizeInfo, r.warnings.length ? r.warnings : "");
+    if (process.env.LENS_NO_EDITOR !== "1") {
+      // the recorder steps aside for the editor and stays in the tray (Windows report 2026-11-09: it
+      // popped back up on top of the opening editor); the tray, a second launch or the editor's
+      // File > New Recording bring it back
+      recorderWin?.hide();
+      await openEditor(out.dir);
+    }
     const result = { ...out, warnings: r.warnings, clickSources: r.clickSources };
     (globalThis as { lensLastResult?: unknown }).lensLastResult = result;
     // The capture leaves ~450 MB of frame buffers mapped in the recorder's renderer (measured at 720p

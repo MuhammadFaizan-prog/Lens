@@ -24,7 +24,9 @@ interface Bridge {
   historyOpen(dir: string): Promise<void>;
   historyReveal(dir: string): Promise<void>;
   historyDelete(dir: string): Promise<void>;
-  importVideo(file?: string): Promise<{ dir: string } | null>;
+  importVideo(file?: string): Promise<{ dir: string; video: "copy" | "encode"; durationMs: number; progressEvents: number } | { cancelled: true } | null>;
+  importCancel(): Promise<boolean>;
+  onImportProgress(fn: (p: { pct: number; phase: string }) => void): void;
   settingsGet(): Promise<{ settings: AppSettings }>;
   settingsOpen(): Promise<void>;
   onSettings(fn: (s: AppSettings) => void): void;
@@ -245,6 +247,15 @@ async function start(sourceId?: string): Promise<void> {
   if (!selected) await loadSources();
   const src = selected;
   if (!src) throw new Error("no capture source");
+  // Custom mode with no area yet: open the drag overlay now instead of failing (Windows report 2026-11-09)
+  if (mode === "region" && !region) {
+    await drawRegion();
+    if (state !== "idle") return; // a second Record press shared this overlay and already started
+    if (!region) {
+      setStatus("Custom mode: drag an area to record, or pick Full Screen");
+      return;
+    }
+  }
   state = "starting";
   lastError = null;
   if (COUNTDOWN > 0) {
@@ -275,7 +286,21 @@ async function start(sourceId?: string): Promise<void> {
     let mic: MediaStream | null = null;
     const micId = $<HTMLSelectElement>("mic-device").value;
     if (micId || $<HTMLInputElement>("mic").checked) mic = micStream ?? (await openMic(micId));
-    const webcam = $<HTMLSelectElement>("cam-device").value ? webcamStream : null;
+    // a camera chosen in the list is recorded; when its preview stream is not open (still opening after
+    // the last take, or the device refused) it is opened here, and a failure is reported in the bundle
+    // instead of the recording silently having no camera (Windows v0.1.2 "no webcam track")
+    const camSel = $<HTMLSelectElement>("cam-device");
+    const camId = camSel.value;
+    const camLabel = camId ? camSel.selectedOptions[0]?.textContent ?? camId : null;
+    let webcamError: string | null = null;
+    if (camId && !webcamStream) {
+      try {
+        webcamStream = await openCamera(camId);
+      } catch (e) {
+        webcamError = `camera "${camLabel}" could not be opened: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`;
+      }
+    }
+    const webcam = camId ? webcamStream : null;
     if (mic) streams.push(mic);
     if (webcam) streams.push(webcam);
     const sysTracks = video.getAudioTracks();
@@ -317,6 +342,7 @@ async function start(sourceId?: string): Promise<void> {
       sourceId: src.id, sourceName: src.name, kind: src.kind, displayId: src.displayId, capture, fps: FPS, videoMime: vMime, videoStart, clock,
       mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null, cursor: cursorInfo,
       webcam: webcamRec ? { mime: webcamRec.mimeType, start: webcamStart } : null,
+      webcamDevice: camLabel, webcamError,
       system: systemRec ? { mime: systemRec.mimeType, start: systemStart } : null,
       crop: mode === "region" && region ? { x: Math.round(region.x * capture.width), y: Math.round(region.y * capture.height), w: Math.round(region.w * capture.width), h: Math.round(region.h * capture.height) } : null,
     });
@@ -443,7 +469,7 @@ lens.onLive((b) => {
   if (camera && liveCursor) camera.step(b.t, liveCursor);
 });
 
-lens.onFinalizing((stage) => setStatus(`Saving ${stage}…`));
+lens.onFinalizing((stage) => setStatus(stage.startsWith("Preparing") ? stage : `Saving ${stage}…`));
 lens.onToggle(() => void (state === "idle" ? start().catch(() => undefined) : stop()));
 $("go").onclick = () => void (state === "idle" ? start().catch(() => undefined) : stop());
 async function openMic(deviceId: string): Promise<MediaStream> {
@@ -492,6 +518,41 @@ async function listDevices(): Promise<void> {
   }
 }
 
+function openCamera(camId: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+}
+
+/**
+ * The camera / mic chosen last, kept across recorder windows: main replaces the recorder window after
+ * every recording (memory), and the new one used to start with "No camera", so the next take silently
+ * had no webcam.
+ */
+const DEVICE_KEYS = { "cam-device": "lens.recorder.camDevice", "mic-device": "lens.recorder.micDevice" } as const;
+function rememberDevice(id: keyof typeof DEVICE_KEYS): void {
+  try {
+    localStorage.setItem(DEVICE_KEYS[id], $<HTMLSelectElement>(id).value);
+  } catch {
+    // storage unavailable: the choice just is not remembered
+  }
+}
+function restoreDevices(): boolean {
+  let changed = false;
+  for (const id of Object.keys(DEVICE_KEYS) as Array<keyof typeof DEVICE_KEYS>) {
+    let v: string | null = null;
+    try {
+      v = localStorage.getItem(DEVICE_KEYS[id]);
+    } catch {
+      v = null;
+    }
+    const sel = $<HTMLSelectElement>(id);
+    if (v && sel.value !== v && [...sel.options].some((o) => o.value === v)) {
+      sel.value = v;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /** Open / close the selected mic (level meter) and camera (preview) when the choice changes. */
 async function applyDevices(): Promise<void> {
   if (state !== "idle") return;
@@ -516,7 +577,7 @@ async function applyDevices(): Promise<void> {
   pv.hidden = !camId;
   if (camId) {
     try {
-      webcamStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+      webcamStream = await openCamera(camId);
       pv.srcObject = webcamStream;
       await pv.play().catch(() => undefined);
     } catch (e) {
@@ -532,14 +593,23 @@ function setMode(m: Mode): void {
   document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
   if (selected && selected.kind !== tab) selected = sources.find((s) => s.kind === tab) ?? null;
   $("region-info").hidden = m !== "region";
-  if (m === "region") $("region-info").textContent = region ? `Area ${Math.round(region.w * 100)}% x ${Math.round(region.h * 100)}% of the screen · click the screen again to redraw` : "Click a screen to drag the area to record.";
+  if (m === "region") $("region-info").textContent = region ? `Area ${Math.round(region.w * 100)}% x ${Math.round(region.h * 100)}% of the screen · click the screen again to redraw` : "Drag the area to record. Click a screen to redraw.";
   renderSources();
 }
 
-async function drawRegion(): Promise<void> {
-  const r = await lens.pickRegion(selected?.displayId);
-  if (r && r.w > 0.01 && r.h > 0.01) region = r;
-  setMode("region");
+// single flight: the mode card, a screen thumbnail and Record can all ask for the overlay; only one opens
+let regionPick: Promise<void> | null = null;
+function drawRegion(): Promise<void> {
+  regionPick ??= (async () => {
+    try {
+      const r = await lens.pickRegion(selected?.displayId);
+      if (r && r.w > 0.01 && r.h > 0.01) region = r;
+    } finally {
+      regionPick = null;
+    }
+    setMode("region");
+  })();
+  return regionPick;
 }
 
 // ---- File menu (Windows #18): History, Import Video
@@ -588,18 +658,43 @@ async function showHistory(): Promise<number> {
   }
   return items.length;
 }
+// Import Video: "Importing… 37%" with a Cancel button; every failure ends as "Import failed: <reason>"
+let importing = false;
+const importLog: Array<{ pct: number; phase: string }> = [];
+lens.onImportProgress((p) => {
+  importLog.push(p);
+  if (importing) setStatus(p.phase === "probe" ? "Importing… reading the file" : `Importing… ${p.pct}%`);
+});
+const ipcReason = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
 async function importVideo(file?: string): Promise<unknown> {
   $("file-menu").hidden = true;
+  if (importing) return null;
+  importing = true;
+  importLog.length = 0;
+  $<HTMLButtonElement>("menu-import").disabled = true;
+  const cancel = $<HTMLButtonElement>("import-cancel");
+  cancel.hidden = false;
+  cancel.disabled = false;
   setStatus("Importing…");
   try {
     const r = await lens.importVideo(file);
-    setStatus(r ? "Imported — opened in the editor" : "Ready");
+    if (r && "cancelled" in r) setStatus("Import cancelled");
+    else setStatus(r ? "Imported — opened in the editor" : "Ready");
     return r;
   } catch (e) {
-    setStatus(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    setStatus(`Import failed: ${ipcReason(e)}`);
     return null;
+  } finally {
+    importing = false;
+    cancel.hidden = true;
+    $<HTMLButtonElement>("menu-import").disabled = false;
   }
 }
+$("import-cancel").onclick = () => {
+  $<HTMLButtonElement>("import-cancel").disabled = true;
+  setStatus("Cancelling import…");
+  void lens.importCancel();
+};
 $("gear").onclick = () => void lens.settingsOpen();
 lens.onSettings(applySettings);
 lens.onMode((m) => {
@@ -614,9 +709,19 @@ $("menu-history").onclick = () => void showHistory();
 $("menu-import").onclick = () => void importVideo();
 $("history-close").onclick = () => ($("history").hidden = true);
 
-document.querySelectorAll<HTMLButtonElement>(".mode").forEach((b) => (b.onclick = () => setMode(b.dataset.mode as Mode)));
-$("mic-device").onchange = () => void applyDevices();
-$("cam-device").onchange = () => void applyDevices();
+document.querySelectorAll<HTMLButtonElement>(".mode").forEach(
+  (b) =>
+    (b.onclick = () => {
+      setMode(b.dataset.mode as Mode);
+      // Custom: open the drag overlay straight away on the selected (or first) screen
+      if (b.dataset.mode === "region" && state === "idle") {
+        if (!selected) selected = sources.find((s) => s.kind === "screen") ?? null;
+        void drawRegion();
+      }
+    }),
+);
+$("mic-device").onchange = () => (rememberDevice("mic-device"), void applyDevices());
+$("cam-device").onchange = () => (rememberDevice("cam-device"), void applyDevices());
 $("teleprompter").onclick = () => void lens.teleprompter();
 navigator.mediaDevices.addEventListener?.("devicechange", () => void listDevices());
 $("tab-screen").onclick = () => ((tab = "screen"), renderSources());
@@ -636,6 +741,7 @@ void (async () => {
     $("sys-audio-note").textContent = "System audio recording works on Windows.";
   }
   await listDevices();
+  if (restoreDevices()) await applyDevices();
 })();
 
 // ---- auto-update banner (main/updater.ts)
@@ -679,7 +785,7 @@ $("check-updates").onclick = (e) => {
 };
 lens.onUpdate(renderUpdate);
 void lens.updateState().then((u) => {
-  // footer shows the running version with the product name ("Lens v0.1.2" from package.json; 0.1.0 showed "v0.1.0")
+  // footer shows the running version with the product name ("Lens v0.1.3" from package.json; 0.1.0 showed "v0.1.0")
   $("version").textContent = `Lens v${u.current ?? "?"}`;
   renderUpdate(u);
 });
@@ -691,8 +797,10 @@ void lens.updateState().then((u) => {
   setMode,
   showHistory,
   importVideo,
+  importCancel: () => lens.importCancel(),
+  importLog: () => [...importLog],
   setRegion: (r: typeof region) => ((region = r), setMode("region")),
-  devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream }),
+  devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream, cam: $<HTMLSelectElement>("cam-device").value, mic: $<HTMLSelectElement>("mic-device").value }),
   settings: () => ({ FPS, BPP, COUNTDOWN }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,
     zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update }),

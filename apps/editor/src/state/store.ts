@@ -12,13 +12,16 @@ import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
 import { buildRenderPlan, editSegment, toSrt, toVtt, upsertTrack, type CaptionTrack } from "@lens/engine";
 import { applyPrivacyScan, applyStepDrafts, applyZoomPreset, cutsForDeletedWords, editStepLabel, isFiller, privacyCounts, resolveProject, reviewPrivacy, reviewSteps, setPrivacyMaskKind, withTakeChoice } from "@lens/engine";
-import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName } from "@lens/engine";
+import type { Annotation, PrivacyDetection, PrivacySettings, PrivacyState, ProjectConfig, RenderPlan, StepDraft, TakeSettings, TakeStrategy, TextSlide, ZoomPresetName, ZoomSegment } from "@lens/engine";
 import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
-import { buildPlan, fetchBundle, planPauses, type Bundle } from "./bundle";
-import { frameForSource, freezeAutoZooms, normalizeCuts, subtractRange, type TrackKind } from "./timelineOps";
+import { buildPlan, fetchBundle, fetchSilences, planPauses, type Bundle } from "./bundle";
+import { addBlock, blocksOf, createRange, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
+import * as m3dLib from "./motion3dLib";
+import { addKeyAt, applyTemplate, deleteKey, keyCount, keyPose, mapSegment, setKeyPose, type Axis3D } from "./motion3dOps";
+import { templateFromSegment, type Motion3DSegment, type Motion3DTemplate, type Pose3D } from "@lens/engine";
 
 export interface Selection {
   track: TrackKind;
@@ -58,7 +61,14 @@ export interface EditorState {
   /** Playback direction and speed for J/K/L: -4..4, never 0 while playing. */
   rate: number;
   loop: boolean;
+  /**
+   * Primary selected block (the one the inspector shows); always part of multi when set. Zoom
+   * indices are into plan.zoomSegments (what the timeline draws); the project segment is found by
+   * id (selectedZoomDocIndex / zoomDocIndex), never by position.
+   */
   selection: Selection | null;
+  /** Every selected timeline block (zoom indices into plan.zoomSegments, like selection). */
+  multi: Selection[];
   selectedWords: number[];
   toast: { text: string; id: number } | null;
   exporting: ExportState | null;
@@ -103,7 +113,11 @@ export interface EditorState {
   /** A just-added zoom waits for a click on the preview to aim it (Z / Zoom lane "+"). */
   zoomPlacing: boolean;
   /** Selected canvas overlay that is not a timeline block (Windows bug #12). */
-  canvasSel: "logo" | "webcam" | "caption" | null;
+  canvasSel: "screen" | "logo" | "webcam" | "caption" | null;
+  /** Selected keyframe of the selected 3D motion block (0 = from, n + 1 = to; see motion3dOps). */
+  m3dKey: number;
+  /** Built-in 3D motion templates followed by the user's saved ones. */
+  motion3dTemplates: Motion3DTemplate[];
 }
 
 export interface TranslateRunState {
@@ -145,6 +159,7 @@ export class EditorStore {
     rate: 1,
     loop: false,
     selection: null,
+    multi: [],
     selectedWords: [],
     toast: null,
     exporting: null,
@@ -171,6 +186,8 @@ export class EditorStore {
     translateRun: null,
     zoomPlacing: false,
     canvasSel: null,
+    m3dKey: 0,
+    motion3dTemplates: m3dLib.allMotion3dTemplates(),
   };
   private listeners = new Set<Listener>();
   private history = new History<ProjectConfig>(this.s.project);
@@ -190,6 +207,8 @@ export class EditorStore {
   };
 
   private set(patch: Partial<EditorState>): void {
+    // a plain selection change (select(), selectAnnotation(), undo ...) resets the group to it
+    if ("selection" in patch && !("multi" in patch)) patch = { ...patch, multi: patch.selection ? [patch.selection] : [] };
     this.s = { ...this.s, ...patch };
     for (const l of this.listeners) l();
   }
@@ -197,6 +216,9 @@ export class EditorStore {
   // ------------------------------------------------------------------ loading
 
   private loading: Promise<void> | null = null;
+  /** ms from page start: bundle answered / first source frame painted (open-time measurements) */
+  readyMs: number | null = null;
+  firstPaintMs: number | null = null;
 
   /** Open a bundle once (React StrictMode mounts effects twice in dev). */
   load(dir?: string): Promise<void> {
@@ -219,14 +241,34 @@ export class EditorStore {
       this.screen = new FrameStore("screen", bundle.screen.frames, bundle.screen.fps, q, maxBitmaps);
       this.cam = bundle.camera ? new FrameStore("cam", bundle.camera.frames, bundle.camera.fps, q, maxBitmaps) : null;
       this.history.reset(bundle.project);
+      this.readyMs = Math.round(performance.now());
       this.set({ bundle, status: "ready", error: null, frame: 0, selection: null, selectedWords: [], savedAt: null, dirty: false });
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
       if (def) this.notify(`New project: default preset ${def.name} applied`);
+      // a camera the recorder could not save is said out loud, not only in the Webcam tab
+      else if (bundle.cameraWarning && !bundle.camera) this.notify(`No camera in this recording: ${bundle.cameraWarning}`);
       // a new recording with the mic on: transcribe it on-device right away (Windows #5)
       if (bundle.autoTranscribe && !bundle.transcript) void this.transcribe(true);
+      // the mic's measured silences arrive after the bundle (measured in the background on the server)
+      if (bundle.silencesPending) void this.loadSilences(dir);
     } catch (e) {
       this.set({ status: "error", error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  private async loadSilences(dir?: string): Promise<void> {
+    try {
+      const silences = await fetchSilences(dir);
+      const b = this.s.bundle;
+      if (!b) return;
+      const bundle = { ...b, silences, silencesPending: false };
+      this.set({ bundle });
+      // pauses feed the plan only without a transcript and with "Shorten pauses" on: rebuild then
+      const c = this.s.project.edits.cleanup;
+      if (!bundle.transcript && silences.length && c.enabled && c.shortenPauses && !this.s.audition) this.rebuild(this.s.project);
+    } catch {
+      // no silences: "Shorten pauses" stays unavailable without a transcript, as before
     }
   }
 
@@ -346,7 +388,252 @@ export class EditorStore {
   }
 
   select(sel: Selection | null): void {
-    this.set({ selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
+    const same = sel && this.s.selection && sel.track === this.s.selection.track && sel.index === this.s.selection.index;
+    this.set({ m3dKey: same ? this.s.m3dKey : 0, selection: sel, selectedWords: sel ? [] : this.s.selectedWords, canvasSel: sel ? null : this.s.canvasSel, zoomPlacing: sel?.track === "zoom" ? this.s.zoomPlacing : false });
+  }
+
+  // ------------------------------------------------------------------ zoom selection index
+
+  /** The plan's zoom list, the index space of every zoom Selection (the project's before a plan exists). */
+  private planZooms(): ZoomSegment[] {
+    return this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments;
+  }
+
+  /** Project segment index of plan zoom `planIndex` (by id); -1 for a live auto zoom. */
+  zoomDocIndex(planIndex: number): number {
+    return zoomDocIndex(this.history.doc, this.planZooms(), planIndex);
+  }
+
+  /** Select project zoom segment `docIndex`, by its plan index (same space as multi-select). */
+  selectZoom(docIndex: number): void {
+    const i = zoomPlanIndex(this.history.doc, this.planZooms(), docIndex);
+    this.select(i >= 0 ? { track: "zoom", index: i } : null);
+  }
+
+  // ------------------------------------------------------------------ multi-select (timeline groups)
+
+  private blockCount(track: TrackKind): number {
+    return track === "zoom" ? (this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments).length : blocksOf(this.history.doc, track).length;
+  }
+
+  private uiRange(sel: Selection): { startMs: number; endMs: number } | null {
+    return (sel.track === "zoom" ? (this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments) : blocksOf(this.history.doc, sel.track))[sel.index] ?? null;
+  }
+
+  private valid(sel: Selection): boolean {
+    return Number.isInteger(sel.index) && sel.index >= 0 && sel.index < this.blockCount(sel.track);
+  }
+
+  /** Replace the group; the primary is `primary` when given (and in the group), else the last item. */
+  setSelection(items: Selection[], primary?: Selection | null): void {
+    const seen = new Set<string>();
+    const multi = items.filter((x) => this.valid(x) && !seen.has(`${x.track}:${x.index}`) && (seen.add(`${x.track}:${x.index}`), true)).map((x) => ({ track: x.track, index: x.index }));
+    const prim = primary && multi.find((x) => x.track === primary.track && x.index === primary.index);
+    const selection = prim ?? multi[multi.length - 1] ?? null;
+    const cur = this.s.selection;
+    const same = !!selection && !!cur && selection.track === cur.track && selection.index === cur.index;
+    this.set({ multi, selection, m3dKey: same ? this.s.m3dKey : 0, ...(selection ? { selectedWords: [], canvasSel: null } : {}), zoomPlacing: selection?.track === "zoom" ? this.s.zoomPlacing : false });
+  }
+
+  isSelected(sel: Selection): boolean {
+    return this.s.multi.some((x) => x.track === sel.track && x.index === sel.index);
+  }
+
+  /** Ctrl/Cmd-click: add a block to the group (it becomes primary) or take it out. */
+  toggleSelect(sel: Selection): void {
+    if (this.isSelected(sel)) {
+      const multi = this.s.multi.filter((x) => !(x.track === sel.track && x.index === sel.index));
+      const keep = this.s.selection && !(this.s.selection.track === sel.track && this.s.selection.index === sel.index) ? this.s.selection : null;
+      this.setSelection(multi, keep);
+    } else this.setSelection([...this.s.multi, sel], sel);
+  }
+
+  /**
+   * Shift-click: every block of the primary's track between it and `sel` in time (both included) is
+   * added to the group; on another track (or with nothing selected) `sel` is just added.
+   */
+  selectRange(sel: Selection): void {
+    const a = this.s.selection;
+    const ra = a && this.uiRange(a);
+    const rb = this.uiRange(sel);
+    if (!a || !ra || !rb || a.track !== sel.track) return this.setSelection([...this.s.multi, sel], sel);
+    const lo = Math.min(ra.startMs, rb.startMs);
+    const hi = Math.max(ra.startMs, rb.startMs);
+    const blocks = sel.track === "zoom" ? this.s.plan?.zoomSegments ?? this.history.doc.zoom.segments : blocksOf(this.history.doc, sel.track);
+    const span: Selection[] = [];
+    blocks.forEach((b, index) => {
+      if (b.startMs >= lo && b.startMs <= hi) span.push({ track: sel.track, index });
+    });
+    this.setSelection([...this.s.multi, ...span], a);
+  }
+
+  /** Select every block of one track (or of every track). */
+  selectAll(track?: TrackKind): void {
+    const out: Selection[] = [];
+    for (const t of track ? [track] : TRACK_KINDS) for (let index = 0; index < this.blockCount(t); index++) out.push({ track: t, index });
+    this.setSelection(out);
+  }
+
+  /** The group (or the single selection) as doc refs on `p`: zoom plan indices become p.zoom.segments indices. */
+  private groupItems(): Selection[] {
+    return this.s.multi.length ? this.s.multi : this.s.selection ? [this.s.selection] : [];
+  }
+
+  /**
+   * Doc refs for UI items. Zoom items point at plan.zoomSegments; when auto zoom is on they are
+   * frozen into the project first (inside the same edit, so one undo restores auto zoom too).
+   */
+  private toDoc(p: ProjectConfig, items: Selection[]): { doc: ProjectConfig; refs: BlockRef[] } {
+    const zooms = items.filter((x) => x.track === "zoom");
+    const planZ = this.s.plan?.zoomSegments ?? p.zoom.segments;
+    const doc = zooms.length && p.zoom.auto && this.s.plan ? freezeAutoZooms(p, this.s.plan.zoomSegments) : p;
+    const refs: BlockRef[] = [];
+    for (const x of items) {
+      if (x.track !== "zoom") {
+        refs.push({ track: x.track, index: x.index });
+        continue;
+      }
+      const z = planZ[x.index];
+      if (!z) continue;
+      let i = doc.zoom.segments.findIndex((s) => s.id === z.id);
+      if (i < 0) i = doc.zoom.segments.findIndex((s) => Math.abs(s.startMs - z.startMs) < 0.5 && Math.abs(s.endMs - z.endMs) < 0.5);
+      if (i >= 0) refs.push({ track: "zoom", index: i });
+    }
+    return { doc, refs };
+  }
+
+  /** Doc refs back to UI selections after the plan rebuilt (zoom via segment id). */
+  private toUi(p: ProjectConfig, refs: BlockRef[]): Selection[] {
+    const planZ = this.s.plan?.zoomSegments ?? p.zoom.segments;
+    const out: Selection[] = [];
+    for (const r of refs) {
+      if (r.track !== "zoom") out.push({ track: r.track, index: r.index });
+      else {
+        const id = p.zoom.segments[r.index]?.id;
+        const i = planZ.findIndex((z) => z.id === id);
+        if (i >= 0) out.push({ track: "zoom", index: i });
+      }
+    }
+    return out;
+  }
+
+  private duration(): number {
+    return this.s.bundle?.meta.durationMs ?? Infinity;
+  }
+
+  private noun(n: number): string {
+    return n === 1 ? "block" : `${n} blocks`;
+  }
+
+  /** Delete every selected block: one undo step. Returns how many were deleted. */
+  deleteSelected(): number {
+    const items = this.groupItems();
+    if (!items.length) return 0;
+    let n = 0;
+    this.edit(`Delete ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      n = refs.length;
+      return deleteBlocks(doc, refs);
+    });
+    this.set({ selection: null, editingText: null });
+    return n;
+  }
+
+  /** Move every selected block by deltaMs (clamped as a group): one undo step. Returns the delta applied. */
+  moveSelected(deltaMs: number, label?: string): number {
+    const items = this.groupItems();
+    if (!items.length || !deltaMs) return 0;
+    let applied = 0;
+    let moved: BlockRef[] = [];
+    const prim = this.primaryAt();
+    this.edit(label ?? `Move ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      const r = moveBlocks(doc, refs, deltaMs, this.duration());
+      applied = r.deltaMs;
+      moved = r.items;
+      return applied ? r.project : p;
+    });
+    if (applied) this.reselect(moved, prim && { track: prim.track, atMs: prim.startMs + applied });
+    return applied;
+  }
+
+  /** Arrow-key nudge: one output frame (or a second with big), as one undo step. */
+  nudge(dir: -1 | 1, big = false): number {
+    const fps = this.s.plan?.output.fps ?? this.s.bundle?.meta.fps ?? 30;
+    return this.moveSelected(dir * (big ? 1000 : 1000 / fps), "Nudge");
+  }
+
+  private dragBase: { doc: ProjectConfig; refs: BlockRef[]; items: Selection[]; moved: BlockRef[]; delta: number; prim: { track: TrackKind; startMs: number } | null } | null = null;
+
+  /** Group drag: begin (auto zooms freeze inside the gesture), preview(total delta), end = one undo step. */
+  beginMoveSelected(): void {
+    const items = this.groupItems();
+    if (!items.length) return;
+    this.beginGesture();
+    const { doc, refs } = this.toDoc(this.history.doc, items);
+    if (doc !== this.history.doc) this.preview(() => doc);
+    this.dragBase = { doc, refs, items, moved: refs, delta: 0, prim: this.primaryAt() };
+  }
+
+  previewMoveSelected(totalDeltaMs: number): number {
+    const b = this.dragBase;
+    if (!b) return 0;
+    const r = moveBlocks(b.doc, b.refs, totalDeltaMs, this.duration(), false);
+    b.moved = r.items;
+    b.delta = r.deltaMs;
+    this.preview(() => r.project);
+    return r.deltaMs;
+  }
+
+  endMoveSelected(): void {
+    const b = this.dragBase;
+    if (!b) return;
+    this.dragBase = null;
+    let refs = b.moved;
+    this.endGesture(`Move ${this.noun(b.items.length)}`, (p) => {
+      if (!refs.some((r) => r.track === "cut")) return p;
+      const r = moveBlocks(p, refs, 0, this.duration());
+      refs = r.items;
+      return r.project;
+    });
+    this.reselect(refs, b.prim && { track: b.prim.track, atMs: b.prim.startMs + b.delta });
+  }
+
+  /** Duplicate every selected block right after the group: one undo step; the copies become the selection. */
+  duplicateSelected(): number {
+    const items = this.groupItems();
+    if (!items.length) return 0;
+    let copies: BlockRef[] = [];
+    let skipped = 0;
+    this.edit(`Duplicate ${this.noun(items.length)}`, (p) => {
+      const { doc, refs } = this.toDoc(p, items);
+      const r = duplicateBlocks(doc, refs, this.duration());
+      copies = r.items;
+      skipped = r.skipped;
+      return copies.length ? r.project : p;
+    });
+    if (copies.length) this.reselect(copies, null);
+    if (skipped) this.notify(`${skipped} block${skipped > 1 ? "s" : ""} had no room to duplicate`);
+    return copies.length;
+  }
+
+  /** The primary block's track and start, to find it again after an edit. */
+  private primaryAt(): { track: TrackKind; startMs: number } | null {
+    const sel = this.s.selection;
+    const r = sel && this.uiRange(sel);
+    return sel && r ? { track: sel.track, startMs: r.startMs } : null;
+  }
+
+  /** Select `refs` (doc space) after an edit; the block holding `primary.atMs` on its track stays primary. */
+  private reselect(refs: BlockRef[], primary: { track: TrackKind; atMs: number } | null): void {
+    const ui = this.toUi(this.history.doc, refs);
+    const prim = primary
+      ? ui.find((x) => {
+          const r = x.track === primary.track ? this.uiRange(x) : null;
+          return !!r && primary.atMs >= r.startMs - 0.5 && primary.atMs <= r.endMs + 0.5;
+        })
+      : null;
+    this.setSelection(ui, prim ?? null);
   }
 
   selectCanvas(which: EditorState["canvasSel"]): void {
@@ -449,6 +736,148 @@ export class EditorStore {
 
   applyPreset(name: ZoomPresetName): void {
     this.edit(`Zoom preset ${name}`, (p) => applyZoomPreset(p, name));
+  }
+
+  // ------------------------------------------------------------------ 3D motion (feat/motion-3d)
+
+  private durationMs(): number {
+    return this.s.bundle?.meta.durationMs ?? Math.max(60_000, ...this.history.doc.motion3d.map((m) => m.endMs + 10_000));
+  }
+
+  /** Source time under the playhead. */
+  playheadSrc(): number {
+    return this.s.plan?.frames[this.s.frame]?.src ?? 0;
+  }
+
+  refreshMotion3dTemplates(): void {
+    this.set({ motion3dTemplates: m3dLib.allMotion3dTemplates() });
+  }
+
+  /** The selected 3D block, or null. */
+  selectedMotion3d(): { index: number; seg: Motion3DSegment } | null {
+    const sel = this.s.selection;
+    if (sel?.track !== "motion3d") return null;
+    const seg = this.history.doc.motion3d[sel.index];
+    return seg ? { index: sel.index, seg } : null;
+  }
+
+  /** Add a 3D block from a template at srcMs (default: playhead), selected. Returns its index or -1. */
+  addMotion3d(templateId = "tilt-in", srcMs = this.playheadSrc()): number {
+    const t = m3dLib.findMotion3dTemplate(templateId) ?? m3dLib.findMotion3dTemplate("tilt-in")!;
+    const blocks = this.history.doc.motion3d;
+    const duration = this.durationMs();
+    let at = Math.max(0, srcMs);
+    let r = null as { startMs: number; endMs: number } | null;
+    for (let k = 0; k < 50 && !r; k++) {
+      r = createRange(blocks, at, t.durationMs, duration, MIN_BLOCK_MS.motion3d);
+      const inside = blocks.find((b) => at >= b.startMs && at < b.endMs);
+      if (!r && inside) at = inside.endMs;
+      else break;
+    }
+    if (!r) {
+      this.notify("No room for a 3D block there");
+      return -1;
+    }
+    const range = { startMs: Math.round(r.startMs), endMs: Math.round(r.endMs) };
+    let index = -1;
+    this.edit(`Add 3D ${t.name}`, (p) => {
+      const out = addBlock(p, "motion3d", range, undefined, undefined, t);
+      index = out.index;
+      return out.project;
+    });
+    if (index >= 0) this.select({ track: "motion3d", index });
+    return index;
+  }
+
+  /** Patch a 3D block's settings (easing, perspective, hold, ...): one undo step, or a live slider tweak. */
+  updateMotion3d(index: number, patch: Partial<Motion3DSegment>, live = false, label = "Edit 3D motion"): void {
+    const fn = (p: ProjectConfig) => mapSegment(p, index, (s) => {
+      const out = { ...s, ...patch };
+      for (const k of Object.keys(patch) as Array<keyof Motion3DSegment>) if (patch[k] === undefined) delete out[k];
+      return out;
+    });
+    if (live) this.tweak(label, fn);
+    else this.edit(label, fn);
+  }
+
+  deleteMotion3d(index: number): void {
+    this.edit("Delete 3D motion", (p) => ({ ...p, motion3d: p.motion3d.filter((_, j) => j !== index) }));
+    this.set({ selection: null, m3dKey: 0 });
+  }
+
+  /** Replace a block's motion with a template's (keeps its start). */
+  applyMotion3dTemplate(index: number, templateId: string): void {
+    const t = m3dLib.findMotion3dTemplate(templateId);
+    const seg = this.history.doc.motion3d[index];
+    if (!t || !seg) return;
+    const next = this.history.doc.motion3d.filter((m, j) => j !== index && m.startMs >= seg.endMs).reduce((lo, m) => Math.min(lo, m.startMs), Infinity);
+    // the template's length, up to the next 3D block or the end of the recording
+    const maxEnd = Math.min(this.durationMs(), next);
+    this.edit(`3D template ${t.name}`, (p) => mapSegment(p, index, (s) => applyTemplate(s, t, maxEnd)));
+    this.set({ m3dKey: 0 });
+  }
+
+  selectMotion3dKey(k: number): void {
+    const s = this.selectedMotion3d();
+    if (!s) return;
+    this.set({ m3dKey: Math.max(0, Math.min(keyCount(s.seg) - 1, k)) });
+  }
+
+  /** Edit the pose of keyframe k (default: the selected one) of block index. */
+  setMotion3dPose(index: number, patch: Partial<Pose3D>, live = false, k = this.s.m3dKey): void {
+    const fn = (p: ProjectConfig) => mapSegment(p, index, (s) => setKeyPose(s, k, patch));
+    if (live) this.tweak("Edit 3D pose", fn);
+    else this.edit("Edit 3D pose", fn);
+  }
+
+  /** Add a keyframe at srcMs (default: playhead) inside block index and select it. False when there is no room. */
+  addMotion3dKey(index: number, srcMs = this.playheadSrc()): boolean {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg) return false;
+    if (seg.easing === "loop") {
+      this.notify("Loop easing swings between the first and last pose: keyframes are not used");
+      return false;
+    }
+    const res = addKeyAt(seg, srcMs);
+    if (!res) {
+      this.notify("Move the playhead inside the 3D block, away from its other keyframes, to add one");
+      return false;
+    }
+    this.edit("Add 3D keyframe", (p) => mapSegment(p, index, () => res.seg));
+    this.set({ m3dKey: res.key });
+    return true;
+  }
+
+  deleteMotion3dKey(index: number, k = this.s.m3dKey): void {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg || k <= 0 || k >= keyCount(seg) - 1) return;
+    this.edit("Delete 3D keyframe", (p) => mapSegment(p, index, (s) => deleteKey(s, k)));
+    this.set({ m3dKey: Math.max(0, k - 1) });
+  }
+
+  /** Alt+Arrow: turn the selected keyframe of the selected 3D block about an axis. False when no 3D block is selected. */
+  nudgeMotion3d(axis: Axis3D, deg: number): boolean {
+    const s = this.selectedMotion3d();
+    if (!s) return false;
+    const cur = keyPose(s.seg, this.s.m3dKey)[axis];
+    this.tweak("Nudge 3D rotation", (p) => mapSegment(p, s.index, (x) => setKeyPose(x, this.s.m3dKey, { [axis]: Math.round(cur + deg) })));
+    return true;
+  }
+
+  /** Save block index as a user template (localStorage). Returns the stored template. */
+  saveMotion3dTemplate(index: number, name: string): Motion3DTemplate | null {
+    const seg = this.history.doc.motion3d[index];
+    const n = name.trim();
+    if (!seg || !n) return null;
+    const t = m3dLib.saveMotion3dTemplate(templateFromSegment(seg, n, n));
+    this.refreshMotion3dTemplates();
+    this.notify(`Saved 3D template ${t.name}`);
+    return t;
+  }
+
+  deleteMotion3dTemplate(id: string): void {
+    m3dLib.deleteMotion3dTemplate(id);
+    this.refreshMotion3dTemplates();
   }
 
   // ------------------------------------------------------------------ style presets + brand kit (demand #9)
@@ -1219,8 +1648,8 @@ export class EditorStore {
     const canvas = makeCanvas(plan.output.width, plan.output.height);
     const g = canvas.getContext("2d") as CanvasRenderingContext2D;
     const sep = q ? "&" : "?";
-    const scrStore = new FrameStore("screen", this.screen!.count, this.screen!.fps, q, 6);
-    const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6) : null;
+    const scrStore = new FrameStore("screen", this.screen!.count, this.screen!.fps, q, 6, true);
+    const camStore = this.cam && this.s.project.camera.enabled ? new FrameStore("cam", this.cam.count, this.cam.fps, q, 6, true) : null;
     for (let i = 0; i < total; i++) {
       if (this.exportCancel) return false;
       const f = plan.frames[i]!;
@@ -1327,6 +1756,17 @@ export interface StepsExportRun {
 }
 
 export const store = new EditorStore();
+
+/**
+ * Project segment index of the selected zoom (selection indices are plan.zoomSegments indices,
+ * mapped by segment id); -1 when no zoom is selected or it is a live auto zoom. Pure on the state,
+ * so it works as a useEditor selector.
+ */
+export function selectedZoomDocIndex(s: EditorState): number {
+  const sel = s.selection;
+  if (sel?.track !== "zoom") return -1;
+  return zoomDocIndex(s.project, s.plan?.zoomSegments ?? s.project.zoom.segments, sel.index);
+}
 
 export function useEditor<T>(sel: (s: EditorState) => T): T {
   return useSyncExternalStore(store.subscribe, () => sel(store.get()));

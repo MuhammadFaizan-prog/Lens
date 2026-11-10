@@ -49,6 +49,7 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--diff-dir")
     ap.add_argument("--assets", help="bundle folder that logo / font paths in the plan resolve against")
+    ap.add_argument("--caption-band", type=float, help="also score the bottom FRACTION of the frame (the caption band) on frames with a caption")
     a = ap.parse_args()
     frames = [int(x) for x in a.frames.split(",")]
     want = set(frames)
@@ -80,6 +81,12 @@ def main() -> int:
             g1 = cv2.cvtColor(r[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
             g2 = cv2.cvtColor(web[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
             row["watermarkSsim"] = round(ssim(g1, g2), 5)
+        # caption styles: SSIM / mean |diff| over the caption band alone (whole-frame SSIM dilutes it)
+        if a.caption_band and plan["frames"][i].get("caption"):
+            H = r.shape[0]
+            y0 = int(H * (1 - a.caption_band))
+            row["captionSsim"] = round(ssim(cv2.cvtColor(r[y0:], cv2.COLOR_BGR2GRAY), cv2.cvtColor(web[y0:], cv2.COLOR_BGR2GRAY)), 5)
+            row["captionMeanAbsDiff"] = round(float(np.abs(r[y0:].astype(np.int16) - web[y0:].astype(np.int16)).mean()), 3)
         rows.append(row)
         if a.diff_dir:
             Path(a.diff_dir).mkdir(parents=True, exist_ok=True)
@@ -90,6 +97,9 @@ def main() -> int:
     wv = [r["watermarkSsim"] for r in rows if "watermarkSsim" in r]
     if wv:
         out["watermark"] = {"frames": len(wv), "mean": round(float(np.mean(wv)), 5), "min": round(float(np.min(wv)), 5)}
+    cv_ = [r["captionSsim"] for r in rows if "captionSsim" in r]
+    if cv_:
+        out["caption"] = {"frames": len(cv_), "mean": round(float(np.mean(cv_)), 5), "min": round(float(np.min(cv_)), 5)}
     Path(a.out).write_text(json.dumps(out, indent=1))
     print(json.dumps(out))
     return 0

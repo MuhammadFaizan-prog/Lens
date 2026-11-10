@@ -1,13 +1,18 @@
 import { useRef, useState } from "react";
 import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
-import { store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
+import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
+import { AspectRow } from "./AspectPicker";
+import { ScreenSection } from "./ScreenSection";
+import { Motion3dCard, Motion3dLookSection } from "./Motion3dInspector";
+import { CaptionStyleControls } from "./CaptionStyleControls";
+import { webcamPanelState } from "../state/webcamPanel";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -38,24 +43,53 @@ function settleOf(p: ProjectConfig["zoom"]["spring"]): number {
   return Math.round((6.638 / Math.sqrt(p.stiffness / p.mass)) * 1000);
 }
 
+/** Several timeline blocks selected: a count and the bulk actions. */
+function MultiSelectionCard({ n }: { n: number }) {
+  return (
+    <div className="selection-card multi" data-testid="multi-selection-card">
+      <div className="sel-head">
+        <b data-testid="multi-selection-count">{n} items selected</b>
+      </div>
+      <p className="note">Drag any of them on the timeline to move the group, arrow keys nudge (Shift: 1 s), Esc clears.</p>
+      <div className="cue-actions">
+        <button className="chip-btn" data-testid="multi-duplicate" title="Duplicate the selected blocks right after the group" onClick={() => store.duplicateSelected()}>
+          Duplicate
+        </button>
+        <button className="chip-btn danger" data-testid="multi-delete" title="Delete the selected blocks (Del)" onClick={() => deleteSelection()}>
+          <Icon name="trash" /> Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SelectionCard() {
   const sel = useEditor((s) => s.selection);
+  const multiN = useEditor((s) => s.multi.length);
   const project = useEditor((s) => s.project);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  // zoom selections index the plan; the project segment is found by id (-1: a live auto zoom)
+  const zoomIdx = useEditor(selectedZoomDocIndex);
+  if (multiN > 1) return <MultiSelectionCard n={multiN} />;
   if (!sel) return null;
   if (sel.track === "annotation") {
     const a = project.annotations[sel.index];
     return a ? <AnnotationCard a={a} /> : null;
   }
+  if (sel.track === "motion3d") {
+    const m = project.motion3d[sel.index];
+    return m ? <Motion3dCard index={sel.index} seg={m} /> : null;
+  }
   if (sel.track === "slide") {
     const s = project.slides[sel.index];
     return s ? <SlideCard index={sel.index} s={s} /> : null;
   }
-  const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, sel.index, patch));
+  const idx = sel.track === "zoom" ? zoomIdx : sel.index;
+  const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, idx, patch));
   let body: React.ReactNode = null;
   let range: { startMs: number; endMs: number } | undefined;
   if (sel.track === "zoom") {
-    const z = project.zoom.segments[sel.index];
+    const z = project.zoom.segments[idx];
     if (!z) return null;
     range = z;
     const meta = store.get().bundle?.meta;
@@ -67,7 +101,7 @@ function SelectionCard() {
           value={z.focus === "follow" ? "follow" : "fixed"}
           testId="sel-zoom-mode"
           options={[{ value: "follow", label: "Follow cursor" }, { value: "fixed", label: "Fixed point" }]}
-          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", sel.index, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
+          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", idx, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
         />
         <p className="note">{z.focus === "follow" ? "Follows the cursor. Drag the rectangle on the preview to pin it to a point." : `Fixed on ${Math.round(z.focus.x)}, ${Math.round(z.focus.y)} px. Drag the rectangle to move it, its corners to change the zoom.`}</p>
       </>
@@ -167,12 +201,14 @@ function LookTab({ p }: { p: ProjectConfig }) {
         <Slider label="Softness" value={p.frame.shadow.blur} min={0} max={120} step={1} format={px} onChange={(v) => t("Shadow softness", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, blur: v } } }))} />
         <Slider label="Lift" value={p.frame.shadow.offsetY} min={0} max={60} step={1} format={px} onChange={(v) => t("Shadow offset", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, offsetY: v } } }))} />
       </Section>
+      <ScreenSection />
       <Section title="Output">
-        <Segmented label="Aspect" value={p.output.aspect} testId="aspect" options={["16:9", "1:1", "4:5", "9:16"].map((a) => ({ value: a, label: a }))} onChange={(v) => store.edit(`Aspect ${v}`, (q) => ({ ...q, output: { ...q.output, aspect: v } }))} />
+        <AspectRow />
         <Segmented label="Screen" value={p.output.fit ?? "fit"} testId="output-fit" options={[{ value: "fit", label: "Fit" }, { value: "fill", label: "Fill & follow" }]}
           onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
         {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
       </Section>
+      <Motion3dLookSection />
     </>
   );
 }
@@ -234,17 +270,32 @@ function CursorTab({ p }: { p: ProjectConfig }) {
   );
 }
 
+/** Short labels on a full-width row so the three fit the inspector at 1280 px windows (Windows v0.1.2: "Rou..."); the tooltip says the rest. */
+export const WEBCAM_SHAPES: Array<{ value: ProjectConfig["camera"]["shape"]; label: string; hint: string }> = [
+  { value: "rounded", label: "Round", hint: "Rounded rectangle" },
+  { value: "circle", label: "Circle", hint: "Circle" },
+  { value: "square", label: "Square", hint: "Square corners" },
+];
+
 function CameraTab({ p }: { p: ProjectConfig }) {
-  const hasCam = useEditor((s) => !!s.bundle?.camera);
+  const ui = webcamPanelState(useEditor((s) => s.bundle));
+  const off = ui.controlsDisabled;
   const t = (label: string, fn: (c: ProjectConfig["camera"]) => Partial<ProjectConfig["camera"]>) => store.tweak(label, (q) => ({ ...q, camera: { ...q.camera, ...fn(q.camera) } }));
   return (
-    <Section title="Webcam" aside={!hasCam ? <span className="stat">no webcam track</span> : undefined}>
-      <Toggle label="Show webcam" value={p.camera.enabled} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
-      <Select label="Corner" value={p.camera.corner} options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
-      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
-      <Segmented label="Shape" value={p.camera.shape} options={[{ value: "rounded", label: "Rounded" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }]} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
-      <Toggle label="Mirror" value={p.camera.mirror} onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
-      <Slider label="Shrink on zoom" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+    <Section title="Webcam" aside={off ? <span className="stat" data-testid="cam-none-stat">no camera</span> : undefined}>
+      {ui.empty && (
+        <div className="cam-empty" data-testid="cam-empty" role="note">
+          <strong data-testid="cam-empty-title">{ui.empty.title}</strong>
+          <span data-testid="cam-empty-hint">{ui.empty.hint}</span>
+        </div>
+      )}
+      {ui.warning && <p className="note warn" data-testid="cam-warning">Recorder: {ui.warning}</p>}
+      <Toggle label="Show webcam" value={!off && p.camera.enabled} disabled={off} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
+      <Select label="Corner" value={p.camera.corner} disabled={off} testId="cam-corner" options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
+      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} disabled={off} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
+      <Segmented label="Shape" stacked value={p.camera.shape} disabled={off} testId="cam-shape" options={WEBCAM_SHAPES} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
+      <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
+      <Slider label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
     </Section>
   );
 }
@@ -252,20 +303,23 @@ function CameraTab({ p }: { p: ProjectConfig }) {
 function CaptionsTab({ p }: { p: ProjectConfig }) {
   const hasWords = useEditor((s) => (s.bundle?.transcript?.words.length ?? 0) > 0);
   const cs = p.captions.style;
-  const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style) } } }));
+  const t = (label: string, fn: (c: ProjectConfig["captions"]["style"]) => Partial<ProjectConfig["captions"]["style"]>) => store.tweak(label, (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, ...fn(q.captions.style), preset: undefined } } }));
   return (
     <>
     <Section title="Captions" aside={!hasWords ? <span className="stat">no transcript</span> : undefined}>
       <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
       <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
-      <Slider label="Size" value={cs.fontSize} min={24} max={84} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
-      <Segmented label="Position" value={cs.position === "custom" ? "bottom" : cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
+      <CaptionStyleControls p={p} />
+      <Slider label="Size" value={cs.fontSize} min={24} max={96} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
+      <Segmented label="Position" testId="caption-position" value={cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }, { value: "custom", label: "Custom", hint: "Drag the caption on the preview, or set its height below" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
+      {cs.position === "custom" && <Slider label="Height" value={cs.y} min={0.05} max={0.95} step={0.01} format={pct} testId="caption-y" onChange={(v) => t("Caption height", () => ({ y: v }))} />}
       <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
       <Slider label="Chars / line" value={cs.maxCharsPerLine} min={0} max={80} step={1} format={(v) => (v ? String(v) : "off")} testId="caption-chars" onChange={(v) => t("Characters per line", () => ({ maxCharsPerLine: v }))} />
       <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))}
         onReset={() => store.edit("Highlight follows theme", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, highlightColor: "@highlight" } } }))} />
-      <ColorInput label="Text" value={cs.textColor} onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
-      <Toggle label="Backing pill" value={cs.background.enabled} onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
+      <ColorInput label="Text" value={cs.textColor} testId="caption-text-color" onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
+      <Toggle label="Backing pill" value={cs.background.enabled} testId="caption-box" onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
+      {cs.background.enabled && <ColorInput label="Pill colour" value={cs.background.color} testId="caption-box-color" onChange={(v) => t("Pill colour", (c) => ({ background: { ...c.background, color: v } }))} />}
       <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
     </Section>
     <ManualCaptions p={p} />

@@ -67,6 +67,11 @@ jobs:
             grep -F " $f" "$RUNNER_TEMP/app.txt" || { echo "missing $f"; exit 1; }
           done
           if grep -E "$m/whisper/linux-|\.sha256$|\.conda$" "$RUNNER_TEMP/app.txt"; then echo "unexpected files in the payload"; exit 1; fi
+          # caption / theme fonts (every builtin: font the engine names) and their licences
+          for f in $(grep -oE 'builtin:[A-Za-z0-9-]+\.ttf' packages/engine/src/palette.ts packages/engine/src/translation.ts | sed 's/.*builtin://' | sort -u); do
+            grep -F " resources/lens/assets/fonts/$f" "$RUNNER_TEMP/app.txt" || { echo "missing font $f"; exit 1; }
+            fam=${f%%-*}; grep -F " resources/lens/assets/fonts/$fam-OFL.txt" "$RUNNER_TEMP/app.txt" > /dev/null || { echo "missing licence for $f"; exit 1; }
+          done
           sha256sum out/desktop/Lens-Setup-*.exe out/desktop/latest.yml
       - name: Check Lens.exe carries the Lens icon and version info
         # Lens.exe from the installer payload: its icon group (RT_GROUP_ICON) must decode to the same

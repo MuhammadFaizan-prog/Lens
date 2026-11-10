@@ -16,6 +16,8 @@ export class FrameStore {
     readonly fps: number,
     private readonly query = "",
     private readonly maxBitmaps = 24,
+    /** export / parity: the exact frames of the server's full decode pass (preview takes on-demand frames) */
+    private readonly exact = false,
   ) {}
 
   indexAt(tMs: number): number {
@@ -25,7 +27,7 @@ export class FrameStore {
   private blob(i: number): Promise<Blob> {
     let p = this.blobs.get(i);
     if (!p) {
-      p = fetch(`/api/frames/${this.track}/${i}.jpg${this.query}`).then((r) => {
+      p = fetch(`/api/frames/${this.track}/${i}.jpg${this.query}${this.exact ? (this.query ? "&" : "?") + "exact=1" : ""}`).then((r) => {
         if (!r.ok) throw new Error(`frame ${i}: ${r.status}`);
         return r.blob();
       });

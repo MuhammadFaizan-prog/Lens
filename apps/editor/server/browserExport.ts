@@ -80,8 +80,18 @@ export function outputMs(plan: RenderPlan): number {
   return (plan.frames.length * 1000) / plan.output.fps;
 }
 
-/** ffmpeg arguments: JPEG frames on stdin -> H.264 MP4 (video only; exportAudio.ts adds the audio). */
-export function browserExportArgs(plan: RenderPlan, out: string): string[] {
+/** Settings > Export > Bitrate (Mbps, 0 = auto) as the desktop app passes it (main.ts applySettingsEnv). */
+export function exportBitrateMbps(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.LENS_EXPORT_BITRATE_MBPS);
+  return Number.isFinite(v) && v > 0 ? Math.min(200, v) : 0;
+}
+
+/**
+ * ffmpeg arguments: JPEG frames on stdin -> H.264 MP4 (video only; exportAudio.ts adds the audio).
+ * Rate control: crf 18 (auto), or the Settings bitrate as an average with a 1.5x peak (v0.1.3: the
+ * setting was saved but never reached ffmpeg; Windows report 2026-11-09).
+ */
+export function browserExportArgs(plan: RenderPlan, out: string, opts: { bitrateMbps?: number } = {}): string[] {
   const { width, height, fps } = plan.output;
   const durationMs = outputMs(plan);
   const args = ["-v", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "pipe:0"];
@@ -89,7 +99,9 @@ export function browserExportArgs(plan: RenderPlan, out: string): string[] {
   args.push("-vf", vf);
   // threads / lookahead capped: x264's default (1.5 x cores frame threads, 40-frame lookahead at
   // veryfast = 10) is the bulk of its memory; this keeps it small on low-RAM machines.
-  args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", "-x264-params", "rc-lookahead=10:sync-lookahead=0", "-r", String(fps),
+  const mbps = opts.bitrateMbps && opts.bitrateMbps > 0 ? opts.bitrateMbps : 0;
+  const rate = mbps ? ["-b:v", `${mbps}M`, "-maxrate", `${mbps * 1.5}M`, "-bufsize", `${mbps * 2}M`] : ["-crf", "18"];
+  args.push("-c:v", "libx264", "-preset", "veryfast", ...rate, "-threads", "2", "-x264-params", "rc-lookahead=10:sync-lookahead=0", "-r", String(fps),
     "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
     "-t", sec(durationMs), "-movflags", "+faststart", out);
   return args;
@@ -120,7 +132,7 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const video = path.join(dir, "video.mp4");
-  const ff = spawn(ffmpeg, browserExportArgs(plan, video));
+  const ff = spawn(ffmpeg, browserExportArgs(plan, video, { bitrateMbps: exportBitrateMbps() }), { windowsHide: true });
   const job: BrowserExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now(), ff, chain: Promise.resolve(), stage: "frames" };
   job.audio = renderExportAudio(ffmpeg, plan.audio, outputMs(plan), path.join(dir, "audio"), root);
   job.audio.catch(() => undefined); // reported when the video is done
