@@ -30,6 +30,9 @@ export const MIN_TL_H = 120;
 export const TL_LABEL_W = 176;
 export const TL_LABEL_MIN = 90;
 export const TL_LABEL_MAX = 320;
+/** Inspector (right panel) width bounds while there is room; a small window still shrinks it to fit. */
+export const RIGHT_MIN = 280;
+export const RIGHT_MAX = 600;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -42,7 +45,7 @@ export function clampLabelW(w: number | undefined): number {
 export function defaultLayout(vw: number, vh: number): Pick<UiLayout, "leftW" | "rightW" | "tlH" | "leftOpen" | "rightOpen"> {
   return {
     leftW: clamp(Math.round(vw * 0.17), 200, 272),
-    rightW: clamp(Math.round(vw * 0.21), 250, 332),
+    rightW: clamp(Math.round(vw * 0.21), RIGHT_MIN, 332),
     tlH: clamp(Math.round(vh * 0.3), 170, 326),
     leftOpen: vw >= 1100,
     rightOpen: true,
@@ -52,7 +55,7 @@ export function defaultLayout(vw: number, vh: number): Pick<UiLayout, "leftW" | 
 /** Keep sizes usable for the viewport: the centre column and the stage never collapse. */
 export function clampLayout<T extends Pick<UiLayout, "leftW" | "rightW" | "tlH" | "leftOpen" | "rightOpen">>(l: T, vw: number, vh: number): T {
   let leftW = clamp(l.leftW, 180, 480);
-  let rightW = clamp(l.rightW, 230, 520);
+  let rightW = clamp(l.rightW, RIGHT_MIN, RIGHT_MAX);
   const room = vw - MIN_CENTER_W - 2 * SPLIT;
   const used = (l.leftOpen ? leftW : 0) + (l.rightOpen ? rightW : 0);
   if (used > room && used > 0) {
@@ -113,6 +116,10 @@ class UiStore {
       // private mode: keep in memory
     }
     this.emit();
+  }
+  /** True when the user dragged this size (it is remembered rather than following the window). */
+  isCustom(k: keyof Saved): boolean {
+    return this.saved[k] !== undefined;
   }
   reset(): void {
     this.saved = {};
