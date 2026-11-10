@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
-import { store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
+import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { createBlock, deleteSelection } from "./Timeline";
@@ -42,10 +42,34 @@ function settleOf(p: ProjectConfig["zoom"]["spring"]): number {
   return Math.round((6.638 / Math.sqrt(p.stiffness / p.mass)) * 1000);
 }
 
+/** Several timeline blocks selected: a count and the bulk actions. */
+function MultiSelectionCard({ n }: { n: number }) {
+  return (
+    <div className="selection-card multi" data-testid="multi-selection-card">
+      <div className="sel-head">
+        <b data-testid="multi-selection-count">{n} items selected</b>
+      </div>
+      <p className="note">Drag any of them on the timeline to move the group, arrow keys nudge (Shift: 1 s), Esc clears.</p>
+      <div className="cue-actions">
+        <button className="chip-btn" data-testid="multi-duplicate" title="Duplicate the selected blocks right after the group" onClick={() => store.duplicateSelected()}>
+          Duplicate
+        </button>
+        <button className="chip-btn danger" data-testid="multi-delete" title="Delete the selected blocks (Del)" onClick={() => deleteSelection()}>
+          <Icon name="trash" /> Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SelectionCard() {
   const sel = useEditor((s) => s.selection);
+  const multiN = useEditor((s) => s.multi.length);
   const project = useEditor((s) => s.project);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
+  // zoom selections index the plan; the project segment is found by id (-1: a live auto zoom)
+  const zoomIdx = useEditor(selectedZoomDocIndex);
+  if (multiN > 1) return <MultiSelectionCard n={multiN} />;
   if (!sel) return null;
   if (sel.track === "annotation") {
     const a = project.annotations[sel.index];
@@ -59,11 +83,12 @@ function SelectionCard() {
     const s = project.slides[sel.index];
     return s ? <SlideCard index={sel.index} s={s} /> : null;
   }
-  const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, sel.index, patch));
+  const idx = sel.track === "zoom" ? zoomIdx : sel.index;
+  const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, idx, patch));
   let body: React.ReactNode = null;
   let range: { startMs: number; endMs: number } | undefined;
   if (sel.track === "zoom") {
-    const z = project.zoom.segments[sel.index];
+    const z = project.zoom.segments[idx];
     if (!z) return null;
     range = z;
     const meta = store.get().bundle?.meta;
@@ -75,7 +100,7 @@ function SelectionCard() {
           value={z.focus === "follow" ? "follow" : "fixed"}
           testId="sel-zoom-mode"
           options={[{ value: "follow", label: "Follow cursor" }, { value: "fixed", label: "Fixed point" }]}
-          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", sel.index, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
+          onChange={(v) => store.edit(v === "follow" ? "Zoom follows cursor" : "Zoom fixed point", (q) => updateBlock(q, "zoom", idx, { focus: v === "follow" ? "follow" : { x: Math.round((meta?.width ?? 1920) / 2), y: Math.round((meta?.height ?? 1080) / 2) } }))}
         />
         <p className="note">{z.focus === "follow" ? "Follows the cursor. Drag the rectangle on the preview to pin it to a point." : `Fixed on ${Math.round(z.focus.x)}, ${Math.round(z.focus.y)} px. Drag the rectangle to move it, its corners to change the zoom.`}</p>
       </>

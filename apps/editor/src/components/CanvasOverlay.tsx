@@ -19,7 +19,7 @@ import { cardRect, validCard } from "@lens/engine";
 import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
 import { captionBox } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
-import { store, useEditor } from "../state/store";
+import { selectedZoomDocIndex, store, useEditor } from "../state/store";
 import { updateBlock } from "../state/timelineOps";
 import { centre, clampedNormCentre, moveBox, resizeBoxFrom, snapBox, snapLines, snapPoint, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
 import { cardFit, setCardRect } from "../state/layoutOps";
@@ -46,8 +46,7 @@ export function zoomEditFrame(plan: RenderPlan, f: PlanFrame): PlanFrame {
 }
 
 export function zoomEditing(): boolean {
-  const sel = store.get().selection;
-  return sel?.track === "zoom" && !!store.get().project.zoom.segments[sel.index];
+  return selectedZoomDocIndex(store.get()) >= 0;
 }
 
 const scratch = (() => {
@@ -60,7 +59,9 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
   const out: CanvasObj[] = [];
   const { width: W, height: H } = plan.output;
   const sel = store.get().selection;
-  const zoomSel = sel?.track === "zoom" ? project.zoom.segments[sel.index] : undefined;
+  // zoom selections index the plan; the project segment is found by id
+  const zoomIdx = selectedZoomDocIndex(store.get());
+  const zoomSel = zoomIdx >= 0 ? project.zoom.segments[zoomIdx] : undefined;
   const f = zoomSel ? zoomEditFrame(plan, f0) : f0;
   const sp = spaceOf(plan, f, "screen");
   // the screen card first: picked lowest, so masks, webcam, caption, logo and zoom targets win
@@ -155,7 +156,7 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
     const [cx0, cy0, cw, ch] = plan.source.crop;
     const focus = zoomSel.focus === "follow" ? { x: cw / 2, y: ch / 2 } : { x: zoomSel.focus.x - cx0, y: zoomSel.focus.y - cy0 };
     const r = zoomRect(focus, zoomSel.scale, cw, ch);
-    const idx = sel.index;
+    const idx = zoomIdx;
     out.push({
       kind: "zoom",
       index: idx,
@@ -199,7 +200,7 @@ function selectedKey(): { kind: CanvasKind; index: number } | null {
   const s = store.get();
   if (s.canvasSel) return { kind: s.canvasSel, index: 0 };
   if (s.selection?.track === "mask") return { kind: "mask", index: s.selection.index };
-  if (s.selection?.track === "zoom") return { kind: "zoom", index: s.selection.index };
+  if (s.selection?.track === "zoom") return { kind: "zoom", index: selectedZoomDocIndex(s) };
   return null;
 }
 
@@ -215,7 +216,7 @@ let activeDrag: Drag | null = null;
 
 function selectObj(o: CanvasObj): void {
   if (o.kind === "mask") store.select({ track: "mask", index: o.index });
-  else if (o.kind === "zoom") store.select({ track: "zoom", index: o.index });
+  else if (o.kind === "zoom") store.selectZoom(o.index);
   else store.selectCanvas(o.kind);
   canvasFocus = true;
 }
@@ -368,8 +369,8 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
       const fr = st.plan.frames[st.frame];
       if (fr) {
         const q = spaceOf(st.plan, zoomEditFrame(st.plan, fr), "screen").fromOut(toOut(e));
-        const idx = st.selection.index;
-        store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
+        const idx = selectedZoomDocIndex(st);
+        if (idx >= 0) store.edit("Aim zoom", (pp) => updateBlock(pp, "zoom", idx, { focus: { x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 } }));
       }
       store.setZoomPlacing(false);
       return;

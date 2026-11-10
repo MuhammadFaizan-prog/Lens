@@ -735,3 +735,18 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .cap-font:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
 .cap-font.on { color: var(--accent); border-color: rgba(94, 234, 212, 0.6); background: rgba(94, 234, 212, 0.08); }
 .cap-font:disabled { opacity: 0.45; cursor: not-allowed; }
+/* timeline multi-select */
+.timeline:focus { outline: none; }
+.timeline:focus-visible { box-shadow: inset 0 0 0 1px rgba(110, 168, 255, 0.35); }
+.block.selected.primary { box-shadow: inset 0 0 0 2px #fff, 0 0 0 3px rgba(110, 168, 255, 0.55); }
+.tl-badge { flex: none; padding: 2px 8px; border-radius: 999px; background: rgba(110, 168, 255, 0.18); color: var(--text); font-size: 11px; font-weight: 650; white-space: nowrap; }
+.tl-marquee { position: absolute; z-index: 6; pointer-events: none; border: 1px solid rgba(110, 168, 255, 0.9); background: rgba(110, 168, 255, 0.12); border-radius: 2px; }
+.lane-menu-btn { width: 18px; height: 20px; border-radius: 5px; border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0; line-height: 1; font-size: 13px; flex: none; }
+.lane-menu-btn:hover, .lane-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--panel-3); }
+.tl-label .lane-menu-btn { margin-left: auto; }
+.tl-label .lane-menu-btn + .mini-add, .tl-label .lane-count + .lane-menu-btn { margin-left: 4px; }
+.tl-menu { position: fixed; z-index: 1000; min-width: 164px; padding: 4px; border-radius: 8px; background: var(--panel-2, #1a1f27); border: 1px solid var(--line-2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); display: flex; flex-direction: column; }
+.tl-menu button { text-align: left; padding: 6px 10px; border: none; border-radius: 5px; background: transparent; color: var(--text); font-size: 12px; cursor: pointer; }
+.tl-menu button:hover { background: var(--panel-3); }
+.tl-menu button.danger { color: var(--danger); }
+.selection-card.multi .cue-actions { display: flex; gap: 6px; }

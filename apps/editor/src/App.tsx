@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Inspector } from "./components/Inspector";
 import { Icon, LensMark } from "./components/Icon";
 import { Preview } from "./components/Preview";
-import { addZoomAtPlayhead, deleteSelection, Timeline } from "./components/Timeline";
+import { addZoomAtPlayhead, deleteSelection, Timeline, timelineHasFocus } from "./components/Timeline";
 import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./components/CanvasOverlay";
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
@@ -261,6 +261,12 @@ function useKeys() {
         void store.save();
         return;
       }
+      // Ctrl/Cmd+A with the timeline focused: select every block on every lane
+      if (mod && k.toLowerCase() === "a" && timelineHasFocus()) {
+        e.preventDefault();
+        store.selectAll();
+        return;
+      }
       if (mod) return;
       // Alt+Arrow with a 3D block selected (also from its sliders): turn the selected keyframe 5
       // degrees: Up/Down about X, Left/Right about Y, Alt+Shift+Left/Right about Z
@@ -296,6 +302,11 @@ function useKeys() {
         case "ArrowDown": {
           e.preventDefault();
           const n = e.shiftKey ? 10 : 1;
+          // timeline focused with blocks selected: Left/Right nudge them a frame (Shift: 1 s), one undo step
+          if ((k === "ArrowLeft" || k === "ArrowRight") && timelineHasFocus() && (store.get().multi.length || store.get().selection)) {
+            store.nudge(k === "ArrowLeft" ? -1 : 1, e.shiftKey);
+            break;
+          }
           // a canvas object picked on the preview: nudge it (output px); else step frames
           if (canvasHasFocus()) {
             const dx = k === "ArrowLeft" ? -n : k === "ArrowRight" ? n : 0;
