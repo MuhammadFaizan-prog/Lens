@@ -15,6 +15,7 @@ import { springFromSettle } from "./spring.js";
 import { DEFAULT_CLEANUP, DEFAULT_FILLERS } from "./transcript.js";
 import { DEFAULT_TAKES, type TakeSettings } from "./takes.js";
 import { defaultPrivacy, validateKeys, validatePrivacy, type PrivacySettings } from "./privacy.js";
+import { normalizeFreeze, validateFreezes, type FreezeFrame } from "./freeze.js";
 import { normalizeAnnotation, normalizeSlide, validateAnnotations, type Annotation, type StepLabelSettings, type TextSlide } from "./annotations.js";
 import { defaultBrand, validateBrand, type BrandKit } from "./brand.js";
 import { isColorValue } from "./palette.js";
@@ -239,8 +240,10 @@ export interface ProjectConfig {
   overrides: SegmentOverride[];
   /** Text, arrows, highlights, step badges and callouts (demand #4); later items draw on top. */
   annotations: Annotation[];
-  /** Full-frame title cards inserted into the output at a source time (demand #4). */
+  /** Full-frame title cards inserted into the output at a source time (demand #4), images and pauses (#20). */
   slides: TextSlide[];
+  /** Freeze frames (demand #20): source ranges where the screen holds on one frame; absent in older projects. */
+  freezes?: FreezeFrame[];
   /** Auto step-label drafts from clicks + local OCR and their review state (demand #4). */
   stepLabels: StepLabelSettings;
   audio: {
@@ -516,6 +519,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   // annotations / slides written by hand may leave out style and animation fields
   if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
   if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
+  if (Array.isArray(p.freezes)) p.freezes = p.freezes.map((f) => (f && typeof f === "object" && typeof f.id === "string" ? normalizeFreeze(f) : f));
   if (p.version !== 1) errs.push(`unsupported project version ${String(p.version)}`);
   if (p.output.aspect !== "auto" && !(/^\d+:\d+$/.test(p.output.aspect) && p.output.aspect.split(":").every((v) => Number(v) > 0)))
     errs.push(`output.aspect must look like 16:9 or be auto, got ${p.output.aspect}`);
@@ -554,6 +558,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   errs.push(...validateMotion3d(p.motion3d));
   errs.push(...validatePrivacy(p.privacy));
   errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
+  errs.push(...validateFreezes(p.freezes));
   for (const o of p.overrides) {
     if (o.endMs <= o.startMs) errs.push("override ends before it starts");
     if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");

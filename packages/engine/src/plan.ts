@@ -13,6 +13,7 @@ import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
+import { freezeAt } from "./freeze.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
 import { resolveTakes, type TakeGroup } from "./takes.js";
 import { ARABIC_FONT, hasArabicScript, trackWords } from "./translation.js";
@@ -97,6 +98,12 @@ export interface PlanFrame {
   /** Output time and the source time it shows. */
   t: number;
   src: number;
+  /**
+   * Source time of the screen picture when it differs from src: a freeze frame (demand #20) holds the
+   * screen on this frame while src (cursor, zoom, captions, audio) keeps running. Absent = src, so
+   * plans of projects without freezes are unchanged. Read it with videoTime(frame).
+   */
+  vid?: number;
   /** Camera: center x, center y (source px), scale. */
   cam: [number, number, number];
   /** Camera velocity: vx, vy (source px/s), vScale (1/s). */
@@ -244,8 +251,12 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       const vh = meta.height / c.scale;
       layout = { ...layout, screen: fillScreenRect(out, sourceAspect, { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh }, p) };
     }
-    const curVisible = project.cursor.visible && k.opacity > 0.001 && insideCrop(k, crop);
-    const activeClicks = project.cursor.clickEffect === "none"
+    // freeze frame (demand #20): the screen holds on the frame at its start; the cursor stays live or hides
+    const fz = freezeAt(project.freezes, src);
+    const vid = fz && Math.abs(fz.startMs - src) > 1e-6 ? fz.startMs : undefined;
+    const curHidden = fz?.cursor === "hide";
+    const curVisible = !curHidden && project.cursor.visible && k.opacity > 0.001 && insideCrop(k, crop);
+    const activeClicks = project.cursor.clickEffect === "none" || curHidden
       ? []
       : clickList
           .filter((cl) => src >= cl.t && src - cl.t < project.cursor.clickEffectMs && !cursorOverrideAt(project.overrides, cl.t).hidden)
@@ -258,6 +269,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     planFrames.push({
       t: r2(t),
       src: r2(src),
+      ...(vid !== undefined ? { vid: r2(vid) } : {}),
       cam: [r2(c.cx), r2(c.cy), r4(c.scale)],
       camVel: span ? [0, 0, 0] : [r2(c.vx), r2(c.vy), r4(c.vScale)],
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
@@ -269,11 +281,11 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
         cameraOpacity: r4(layout.cameraOpacity),
         cutout: layout.cameraCutout,
       },
-      masks: masksAt(masks, src),
+      masks: masksAt(masks, vid ?? src),
       shortcut: sc ? sc.label : null,
       caption: cap ? captionFrame(cap, src, project.captions.style.maxWordsPerLine, project.captions.wordHighlight && !cap.manual, capChars, capRtl, capMotion) : null,
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
-      slide: slide && span ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
+      slide: slide && span && slide.kind !== "freeze" ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
       ...(m3 ? { m3d: motion3dFrame(m3, screenR, out, resScale) } : {}),
     });
   }
@@ -325,6 +337,11 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     ...(theme.watermark ? { watermark: theme.watermark } : {}),
     frames: planFrames,
   };
+}
+
+/** Source time of the screen picture a plan frame shows (a freeze frame holds it; else src). */
+export function videoTime(f: Pick<PlanFrame, "src" | "vid">): number {
+  return f.vid ?? f.src;
 }
 
 /**

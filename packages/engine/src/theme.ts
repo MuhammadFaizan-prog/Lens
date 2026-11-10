@@ -78,7 +78,16 @@ export function applyTheme(p: ProjectConfig, durationMs: number, out?: { width: 
   const cards = brandSlides(p, durationMs, pal);
   const intro = cards.filter((c) => c.atMs === 0);
   const outro = cards.filter((c) => c.atMs !== 0);
-  const slides: TextSlide[] = [...intro, ...p.slides, ...outro].map((s) => ({
+  const brandOn = !!p.brand?.enabled;
+  const brandText = readableOn(pal.background.colors);
+  const brandLogo = brandOn && p.brand.logo.path ? { path: p.brand.logo.path, aspect: p.brand.logo.aspect } : null;
+  // a slide that follows the brand kit (demand #20) takes the brand card look live; off = the slide's own
+  const branded = (s: TextSlide): TextSlide =>
+    s.brand
+      ? { ...s, fill: "theme", background: pal.background.colors[0] ?? s.background, textColor: brandText, font: "@font", accent: s.kind === "image" ? s.accent : "@primary",
+          ...(s.kind === "image" ? {} : { logo: s.logo === undefined ? brandLogo : s.logo }) }
+      : s;
+  const slides: TextSlide[] = [...intro, ...p.slides.map(branded), ...outro].map((s) => ({
     ...s,
     background: resolveColor(s.background, pal),
     textColor: resolveColor(s.textColor, pal),

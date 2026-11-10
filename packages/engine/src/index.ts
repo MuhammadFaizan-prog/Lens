@@ -17,6 +17,7 @@ export * from "./audio.js";
 export * from "./takes.js";
 export * from "./privacy.js";
 export * from "./annotations.js";
+export * from "./freeze.js";
 export * from "./palette.js";
 export * from "./brand.js";
 export * from "./themeSettings.js";

@@ -109,6 +109,28 @@ export interface TextSlide {
   fill?: "solid" | "theme";
   /** A logo above the title (brand cards): image path relative to the bundle and its width / height. */
   logo?: { path: string; aspect: number } | null;
+  /**
+   * What the slide shows (demand #20); absent = "text", the title card as before.
+   *  - image: a still picture (image) on the slide background, the title / subtitle under it when set;
+   *  - freeze: nothing of its own: the video holds on its frame at atMs for durationMs (a pause, silent).
+   */
+  kind?: SlideKind;
+  /** The still of an image slide: path relative to the bundle, width / height, and how it fits the frame. */
+  image?: SlideImage | null;
+  /**
+   * Follow the brand kit (demand #20 title cards): the theme backdrop, brand font, primary accent, text
+   * colour readable on the backdrop and the brand logo, resolved live by applyTheme. Absent = off.
+   */
+  brand?: boolean;
+}
+
+export type SlideKind = "text" | "image" | "freeze";
+
+export interface SlideImage {
+  path: string;
+  aspect: number;
+  /** contain = the whole picture inside the frame on the background; cover = fill the frame, cropped. */
+  fit: "contain" | "cover";
 }
 
 /** One auto step-label draft: a click, the text read around it, and its review state. */
@@ -627,6 +649,7 @@ export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number
   const F = fontField(resolveFont(sl.font, pal));
   const textColor = resolveColor(sl.textColor, pal);
   const ops: AnnOp[] = [sl.fill === "theme" ? { op: "background" } : { op: "fill", pts: [0, 0, W, 0, W, H, 0, H], color: resolveColor(sl.background, pal), alpha: 1 }];
+  if (sl.kind === "image") return imageSlideFrame(sl, op, ops, W, H, ts, ss, textColor, F);
   const hasSub = !!sl.subtitle.trim();
   // with a subtitle: title above the centre, accent bar under the title's descenders, subtitle below
   const titleY = hasSub ? H * 0.5 - ts * 0.45 : H * 0.5;
@@ -646,6 +669,57 @@ export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number
   }
   if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(titleY + ts * 0.7 + Math.max(3, ts * 0.09) + ss * 1.05), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
   return { id: sl.id, opacity: r4(op), ops };
+}
+
+/**
+ * Image slide layout (demand #20). cover: the picture fills the frame (centred, cropped by the frame
+ * edge). contain: the picture fits inside a margin on the slide background; with a title the picture
+ * takes the upper part and the title (and subtitle) sit under it. Whole pixels, so preview and export
+ * scale the picture to the same size.
+ */
+function imageSlideFrame(sl: TextSlide, op: number, ops: AnnOp[], W: number, H: number, ts: number, ss: number, textColor: string, F: { font?: string }): SlideFrame {
+  const im = sl.image;
+  const title = sl.title.trim();
+  const sub = sl.subtitle.trim();
+  const textH = (title ? ts * 1.35 : 0) + (sub ? ss * 1.5 : 0);
+  if (im && im.path && im.aspect > 0) {
+    if (im.fit === "cover") {
+      const s = Math.max(W / im.aspect, H);
+      const w = Math.round(s * im.aspect);
+      const h = Math.round(s);
+      ops.push({ op: "image", path: im.path, x: Math.round((W - w) / 2), y: Math.round((H - h) / 2), w, h, alpha: 1 });
+    } else {
+      const margin = Math.round(Math.min(W, H) * 0.06);
+      const boxW = W - margin * 2;
+      const boxH = H - margin * 2 - (textH ? textH + margin * 0.5 : 0);
+      const w = Math.max(1, Math.round(Math.min(boxW, boxH * im.aspect)));
+      const h = Math.max(1, Math.round(w / im.aspect));
+      const y = Math.round(margin + (boxH - h) / 2);
+      ops.push({ op: "image", path: im.path, x: Math.round((W - w) / 2), y, w, h, alpha: 1 });
+    }
+  }
+  if (textH) {
+    // the text block sits in the bottom band; on a cover picture it gets a dark band to stay readable
+    const top = H - Math.round(Math.min(W, H) * 0.06) - textH;
+    if (im?.fit === "cover") ops.push({ op: "fill", pts: [0, top - ts * 0.4, W, top - ts * 0.4, W, H, 0, H], color: "#000000", alpha: 0.55 });
+    let y = top;
+    if (title) {
+      ops.push({ op: "text", text: sl.title, x: r2(W * 0.08), y: r2(y + ts * 0.6), w: r2(W * 0.84), h: 0, size: r2(ts), bold: true, color: im?.fit === "cover" ? "#ffffff" : textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
+      y += ts * 1.35;
+    }
+    if (sub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.1), y: r2(y + ss * 0.7), w: r2(W * 0.8), h: 0, size: r2(ss), bold: false, color: im?.fit === "cover" ? "#ffffff" : textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
+  }
+  return { id: sl.id, opacity: r4(op), ops };
+}
+
+/** A new image slide for a picture of this aspect (width / height). */
+export function defaultImageSlide(id: string, atMs: number, path: string, aspect: number): TextSlide {
+  return { ...defaultSlide(id, atMs), kind: "image", title: "", durationMs: 3000, background: "#11131a", accent: null, image: { path, aspect, fit: "contain" }, titleSize: 56, subtitleSize: 32 };
+}
+
+/** A new freeze-frame pause: the video holds on its frame at atMs for durationMs (silent, inserted). */
+export function defaultFreezeSlide(id: string, atMs: number, durationMs = 2000): TextSlide {
+  return { ...defaultSlide(id, atMs), kind: "freeze", title: "", durationMs, accent: null, fadeMs: 0 };
 }
 
 // ------------------------------------------------------------------------------ defaults + presets
@@ -782,6 +856,9 @@ export function validateAnnotations(items: Annotation[], slides: TextSlide[], st
       if (!isColorValue(sl.background) || !isColorValue(sl.textColor) || (sl.accent !== null && !isColorValue(sl.accent))) errs.push(`slide ${sl.id} colours must be #rrggbb or a theme slot`);
       if (sl.fill !== undefined && sl.fill !== "solid" && sl.fill !== "theme") errs.push(`slide ${sl.id} fill must be solid or theme`);
       if (!(sl.fadeMs >= 0)) errs.push(`slide ${sl.id} fadeMs must be >= 0`);
+      if (sl.kind !== undefined && sl.kind !== "text" && sl.kind !== "image" && sl.kind !== "freeze") errs.push(`slide ${sl.id} kind must be text, image or freeze`);
+      if (sl.kind === "image" && sl.image && !(typeof sl.image.path === "string" && sl.image.path && sl.image.aspect > 0 && (sl.image.fit === "contain" || sl.image.fit === "cover")))
+        errs.push(`slide ${sl.id} image needs a path, aspect > 0 and fit contain or cover`);
     }
   if (!steps || !Array.isArray(steps.drafts)) errs.push("stepLabels.drafts must be a list");
   else
