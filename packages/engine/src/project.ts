@@ -1,3 +1,4 @@
+import { normalizeMusic, validateMusic, type MusicSettings } from "./music.js";
 import type {
   AudioTrack,
   CameraLayoutSegment,
@@ -250,6 +251,8 @@ export interface ProjectConfig {
     /** Two-pass EBU R128 loudness normalisation (ffmpeg loudnorm). */
     loudness: { enabled: boolean; targetLufs: number; truePeakDb: number; lra: number };
     sampleRate: 44100 | 48000;
+    /** Music bed with automatic ducking (demand #23, music.ts); absent in older projects. */
+    music?: MusicSettings;
   };
   export: { gif: { fps: number; width: number; loop: boolean } };
   /** The applied style preset and its palette / annotation-style layer (demand #9, docs/Presets.md). */
@@ -516,6 +519,9 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   // annotations / slides written by hand may leave out style and animation fields
   if (Array.isArray(p.annotations)) p.annotations = p.annotations.map((a) => (a && typeof a === "object" && typeof a.id === "string" && typeof a.kind === "string" ? normalizeAnnotation(a) : a));
   if (Array.isArray(p.slides)) p.slides = p.slides.map((s) => (s && typeof s === "object" && typeof s.id === "string" ? normalizeSlide(s) : s));
+  // a music block written by hand may leave out levels, duck and fades; null / absent = no music
+  if (p.audio.music === null) delete p.audio.music;
+  else if (isPlainObject(p.audio.music) && typeof p.audio.music.path === "string") p.audio.music = normalizeMusic(p.audio.music);
   if (p.version !== 1) errs.push(`unsupported project version ${String(p.version)}`);
   if (p.output.aspect !== "auto" && !(/^\d+:\d+$/.test(p.output.aspect) && p.output.aspect.split(":").every((v) => Number(v) > 0)))
     errs.push(`output.aspect must look like 16:9 or be auto, got ${p.output.aspect}`);
@@ -559,6 +565,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");
     if (o.cursor?.size !== undefined && o.cursor.size <= 0) errs.push("override cursor size must be > 0");
   }
+  errs.push(...validateMusic(p.audio.music));
   for (const tr of p.audio.tracks) {
     if (!tr.path) errs.push(`audio track ${tr.id} has no path`);
     if (tr.volume < 0) errs.push(`audio track ${tr.id} volume must be >= 0`);
