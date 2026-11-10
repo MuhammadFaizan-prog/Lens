@@ -8,10 +8,17 @@
  *   -> screen-anchored annotations -> cursor (motion blur) -> rounded mask -> webcam (crop, mirror)
  *   -> frame-anchored annotations -> shortcut pill -> caption -> text slide
  *
+ * 3D motion (plan frame m3d): the rounded card (step 7) is drawn through the WebGL2 perspective pass
+ * (gl3d.ts) instead of a flat blit, and the shadow (step 2) is the projected card outline, so it
+ * follows the tilt. Everything inside the card (masks, clicks, screen annotations, cursor) moves
+ * with it; webcam, frame annotations, shortcut, caption, watermark and slides stay flat on top.
+ * Frames without m3d never touch WebGL.
+ *
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
  */
-import { hasArabicScript, type PlanFrame, type RenderPlan } from "@lens/engine";
+import { cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
+import { CARD_PAD, Gl3dPass } from "./gl3d";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
@@ -88,7 +95,20 @@ interface ViewMap {
   ky: number;
 }
 
+/**
+ * The screen card's rect on frame f in whole output px (x, y, w, h): the one place the card rect is
+ * computed. The 2D blit, the shadow and the 3D pass all start from it.
+ */
+export function cardRect(f: PlanFrame): [number, number, number, number] {
+  const [sx, sy, sw0, sh0] = f.layout.screen.map(pyRound) as [number, number, number, number];
+  return [sx, sy, Math.max(2, sw0), Math.max(2, sh0)];
+}
+
 export class PlanRenderer {
+  private gl3d: Gl3dPass | null = null;
+  private card: AnyCanvas | null = null;
+  /** Wall-clock ms of the last 3D pass (card texture + GL draw + readback), for perf logging. */
+  last3dMs = 0;
   private bgKey = "";
   private bg: AnyCanvas | null = null;
   private shadowKey = "";
@@ -114,11 +134,11 @@ export class PlanRenderer {
     g.drawImage(this.background(plan) as CanvasImageSource, 0, 0);
 
     // 2. shadow (cached per rect, like render.py shadow_layer)
-    const [sx, sy, sw0, sh0] = f.layout.screen.map(pyRound) as [number, number, number, number];
-    const sw = Math.max(2, sw0);
-    const sh = Math.max(2, sh0);
+    const [sx, sy, sw, sh] = cardRect(f);
     const shadow = style.shadow;
-    if (f.layout.screenOpacity > 0 && shadow.opacity > 0) {
+    if (f.m3d && f.layout.screenOpacity > 0 && shadow.opacity > 0) {
+      g.drawImage(this.shadowLayer3d(W, H, f.m3d, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
+    } else if (f.layout.screenOpacity > 0 && shadow.opacity > 0) {
       g.drawImage(this.shadowLayer(W, H, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
     }
 
@@ -175,13 +195,17 @@ export class PlanRenderer {
     // 6. cursor
     if (f.cur) this.drawCursor(vg, plan, f, prev, map);
 
-    // 7. rounded composite
-    g.save();
-    g.globalAlpha = f.layout.screenOpacity;
-    roundRectPath(g, sx, sy, sw, sh, style.radius);
-    g.clip();
-    g.drawImage(view as CanvasImageSource, sx, sy);
-    g.restore();
+    // 7. rounded composite (flat, or through the 3D perspective pass)
+    if (f.m3d) {
+      this.drawCard3d(g, f.m3d, view, [sx, sy, sw, sh], style.radius, f.layout.screenOpacity, W, H);
+    } else {
+      g.save();
+      g.globalAlpha = f.layout.screenOpacity;
+      roundRectPath(g, sx, sy, sw, sh, style.radius);
+      g.clip();
+      g.drawImage(view as CanvasImageSource, sx, sy);
+      g.restore();
+    }
 
     // 8. webcam
     if (imgs.cam && f.layout.camera && f.layout.cameraOpacity > 0) this.drawWebcam(g, plan, f, imgs.cam);
@@ -298,6 +322,53 @@ export class PlanRenderer {
     g.restore();
     this.shadow = c;
     this.shadowKey = key;
+    return c;
+  }
+
+  /** The rounded card (at its opacity, CARD_PAD transparent border) through the WebGL2 pass. */
+  private drawCard3d(g: Canvas2D, m: Motion3DFrame, view: AnyCanvas, rect: [number, number, number, number], radius: number, opacity: number, W: number, H: number): void {
+    const t0 = performance.now();
+    const [, , sw, sh] = rect;
+    const cw = sw + 2 * CARD_PAD;
+    const ch = sh + 2 * CARD_PAD;
+    if (!this.card || this.card.width !== cw || this.card.height !== ch) this.card = makeCanvas(cw, ch);
+    const cg = ctx2d(this.card);
+    cg.save();
+    cg.setTransform(1, 0, 0, 1, 0, 0);
+    cg.clearRect(0, 0, cw, ch);
+    cg.globalAlpha = opacity;
+    roundRectPath(cg, CARD_PAD, CARD_PAD, sw, sh, radius);
+    cg.clip();
+    cg.drawImage(view as CanvasImageSource, CARD_PAD, CARD_PAD);
+    cg.restore();
+    if (!this.gl3d) this.gl3d = new Gl3dPass();
+    const out = this.gl3d.render(this.card, m, rect, W, H);
+    g.drawImage(out as CanvasImageSource, 0, 0);
+    this.last3dMs = performance.now() - t0;
+  }
+
+  /** Shadow of the projected card outline: same blur / offset / opacity as the flat shadow, following the tilt. */
+  private shadowLayer3d(W: number, H: number, m: Motion3DFrame, x: number, y: number, w: number, h: number, radius: number, s: RenderPlan["style"]["shadow"], opacity: number): AnyCanvas {
+    const c = this.shadow && this.shadow.width === W && this.shadow.height === H ? this.shadow : makeCanvas(W, H);
+    this.shadow = c;
+    this.shadowKey = "";
+    const g = ctx2d(c);
+    g.clearRect(0, 0, W, H);
+    const ox = s.offsetY * Math.cos((s.angle * Math.PI) / 180);
+    const oy = s.offsetY * Math.sin((s.angle * Math.PI) / 180);
+    const FAR = W + H + 1000;
+    const pts = cardOutline(m, x, y, w, h, radius, 8);
+    g.save();
+    g.shadowColor = `rgba(0,0,0,${opacity})`;
+    g.shadowBlur = s.blur;
+    g.shadowOffsetX = ox + FAR;
+    g.shadowOffsetY = oy;
+    g.fillStyle = "#000";
+    g.beginPath();
+    pts.forEach(([px, py], i) => (i ? g.lineTo(px - FAR, py) : g.moveTo(px - FAR, py)));
+    g.closePath();
+    g.fill();
+    g.restore();
     return c;
   }
 

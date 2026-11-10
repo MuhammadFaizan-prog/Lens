@@ -10,6 +10,7 @@ import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
 import { AspectRow } from "./AspectPicker";
 import { ScreenSection } from "./ScreenSection";
+import { Motion3dCard, Motion3dLookSection } from "./Motion3dInspector";
 
 type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -48,6 +49,10 @@ function SelectionCard() {
   if (sel.track === "annotation") {
     const a = project.annotations[sel.index];
     return a ? <AnnotationCard a={a} /> : null;
+  }
+  if (sel.track === "motion3d") {
+    const m = project.motion3d[sel.index];
+    return m ? <Motion3dCard index={sel.index} seg={m} /> : null;
   }
   if (sel.track === "slide") {
     const s = project.slides[sel.index];
@@ -176,6 +181,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
           onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
         {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
       </Section>
+      <Motion3dLookSection />
     </>
   );
 }

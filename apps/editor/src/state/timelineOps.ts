@@ -6,16 +6,16 @@
  * Timeline blocks live in SOURCE time (recording ms), like the engine's project data. The
  * transport works in OUTPUT frames; plan frames map one to the other.
  */
-import { defaultSlide, mergeRanges, normalizeAnnotation, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
+import { defaultSlide, mergeRanges, MOTION3D_TEMPLATES, normalizeAnnotation, segmentFromTemplate, type Motion3DTemplate, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
 
-export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume";
+export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume" | "motion3d";
 
 export interface Range {
   startMs: number;
   endMs: number;
 }
 
-export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200 };
+export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200, motion3d: 200 };
 
 /** Index into p.overrides of the i-th volume segment (overrides also hold cursor-only ranges). */
 export function volumeIndex(p: ProjectConfig, i: number): number {
@@ -115,6 +115,8 @@ export function blocksOf(p: ProjectConfig, track: TrackKind): Range[] {
       return p.captions.cues ?? [];
     case "volume":
       return p.overrides.filter((o) => o.volume !== undefined);
+    case "motion3d":
+      return p.motion3d;
   }
 }
 
@@ -151,6 +153,9 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
       const k = volumeIndex(p, i);
       return { ...p, overrides: p.overrides.map((o, j) => (j === k ? { ...o, ...patch } : o)) };
     }
+    case "motion3d":
+      // keyframes are fractions of the segment, so a move or a resize carries them along
+      return { ...p, motion3d: p.motion3d.map((m, j) => (j === i ? { ...m, ...patch } : m)) };
   }
 }
 
@@ -178,6 +183,8 @@ export function deleteBlock(p: ProjectConfig, track: TrackKind, i: number): Proj
       const k = volumeIndex(p, i);
       return { ...p, overrides: p.overrides.filter((_, j) => j !== k) };
     }
+    case "motion3d":
+      return { ...p, motion3d: p.motion3d.filter((_, j) => j !== i) };
   }
 }
 
@@ -188,7 +195,7 @@ export function newId(prefix: string): string {
 }
 
 /** Add a block to a track; returns the project and the new block's index. */
-export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 1920, srcH = 1080): { project: ProjectConfig; index: number } {
+export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 1920, srcH = 1080, template?: Motion3DTemplate): { project: ProjectConfig; index: number } {
   switch (track) {
     case "zoom": {
       const seg: ZoomSegment = { id: newId("zoom"), startMs: r.startMs, endMs: r.endMs, scale: p.zoom.defaultScale, focus: "follow", style: p.zoom.style, auto: false };
@@ -231,6 +238,12 @@ export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 19
       const overrides = [...p.overrides, o].sort((a, b) => a.startMs - b.startMs);
       const q = { ...p, overrides };
       return { project: q, index: blocksOf(q, "volume").indexOf(o) };
+    }
+    case "motion3d": {
+      const t = template ?? MOTION3D_TEMPLATES.find((x) => x.id === "tilt-in")!;
+      const m = { ...segmentFromTemplate(t, r.startMs, newId("m3d")), endMs: Math.round(r.endMs) };
+      const motion3d = [...p.motion3d, m].sort((a, b) => a.startMs - b.startMs);
+      return { project: { ...p, motion3d }, index: motion3d.indexOf(m) };
     }
   }
 }
