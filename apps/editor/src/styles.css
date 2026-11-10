@@ -844,3 +844,10 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .m3d-tab > .selection-card { margin: 10px 10px 0; }
 .m3d-tab-hint { padding: 10px 16px 0; }
 .m3d-mini .sel-head .chip-btn { margin-left: auto; white-space: nowrap; }
+/* backdrop categories (v0.1.4): chips above the image grid; the grid scrolls past ~4 rows */
+.bg-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.bg-cat { border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-2); border-radius: 999px; padding: 2px 9px; font-size: 11px; cursor: pointer; line-height: 18px; }
+.bg-cat:hover { color: var(--text); }
+.bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bg-shuffle { margin-left: auto; }
+.bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }

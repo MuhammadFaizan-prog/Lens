@@ -193,8 +193,16 @@ Intentional or accepted differences:
     `fontKerning = "none"`), but rasterised by different engines; vector ops are 4× supersampled in
     the compositor and coverage-anti-aliased by the canvas. Measured on the annotations sample:
     SSIM mean 0.990, min 0.983 (bounds unchanged).
-12. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
-    to the first colour).
+12. **Built-in backdrops** (`background.imagePath = "builtin:<id>"`) are code, not files. The
+    original twelve (v0.1.2) are vector Canvas2D drawings (`render/backdrops.ts`, unchanged so old
+    projects render identically). The v0.1.4 set (51 more, in category chips: Mesh, Aurora,
+    Blobs & blur, Geometric, Grain, Waves & lines, Rays, Dark & minimal, Pastel, Neon, Nature,
+    Classic; plus Shuffle) are per-pixel "fields" (`packages/engine/src/backdropField.ts`)
+    rendered at the output size, so 4K exports get 4K pixels. The preview renders a large one in a
+    worker (a small render stands in meanwhile); the export worker renders it inline, so preview and
+    export draw the same bytes. The Python compositor's twin (`backdrop_field.py`) produces
+    byte-identical output (golden hashes shared by `packages/engine/test/backdropField.test.ts`
+    and `tests/test_backdrop_field.py`). Uploaded images are drawn by both.
 
 ## Export dialog (demand #7)
 

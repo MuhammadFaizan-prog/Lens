@@ -257,7 +257,8 @@ export class PlanRenderer {
         const m = Math.ceil(blur * 3);
         g.save();
         g.translate(-m, -m);
-        drawBackdrop(g, builtin, W + 2 * m, H + 2 * m);
+        // a field backdrop still rendering off-thread draws a stand-in: draw again once it lands
+        if (!drawBackdrop(g, builtin, W + 2 * m, H + 2 * m)) complete = false;
         g.restore();
       } else {
         g.fillStyle = colors[0]!;
