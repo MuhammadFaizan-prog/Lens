@@ -108,6 +108,12 @@ test("fullscreen toggles with F and the timeline splitter resizes", async () => 
   await expect(page.locator(".app")).toHaveAttribute("data-fullscreen", "1");
   await page.getByTestId("fullscreen").click();
   await expect(page.locator(".app")).toHaveAttribute("data-fullscreen", "0");
+  // the quick on/off must not leave the window in real fullscreen (requestFullscreen resolves late)
+  await expect.poll(async () => {
+    const real = await page.evaluate(() => !!document.fullscreenElement);
+    const h = (await page.getByTestId("preview").boundingBox())!.height;
+    return !real && Math.abs(h - h0) <= 1;
+  }, { timeout: 5000 }).toBe(true);
   // splitter
   const tl0 = (await page.locator(".timeline").boundingBox())!.height;
   const sp = (await page.getByTestId("splitter-timeline").boundingBox())!;

@@ -157,6 +157,9 @@ if (typeof window !== "undefined") {
   window.addEventListener("resize", () => ui.resize());
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && ui.get().fullscreen) ui.setFullscreen(false);
+    // A quick on/off (F twice, or the button) turns the mode off before requestFullscreen resolves:
+    // exitFullscreen was skipped (no fullscreenElement yet), so leave the real fullscreen it entered late.
+    else if (document.fullscreenElement && !ui.get().fullscreen) void document.exitFullscreen?.().catch(() => undefined);
   });
 }
 
