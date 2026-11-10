@@ -21,19 +21,30 @@
  *    browser export seconds for the 3 s clip with no 3D, with the 1 s block, and with a 3 s block.
  */
 import { test, type Page } from "@playwright/test";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { EDITOR, expect, meanAbsDiff, canvasPixels, seek, settle, shot } from "./helpers";
 import { closeAll, openLens } from "./lensApp";
-import { editProject, exportMp4, frameAt, proj, smallExport, uxBundle } from "./uxHelpers";
+import { editProject, exportMp4, proj, smallExport, uxBundle } from "./uxHelpers";
 
 test.afterAll(() => closeAll());
 // a hung click / fill fails with Playwright's actionability log instead of waiting out the 20 min test timeout
 test.use({ actionTimeout: 20_000, navigationTimeout: 60_000 });
 
 const F = 33; // output frame inside the block (1.1 s at 30 fps)
-const tMid = (f: number) => (f + 0.5) / 30;
+/**
+ * Output frame n of a video by index (select filter, no seeking). `frameAt(file, (n + 0.5) / 30)`
+ * is not frame n: ffmpeg's accurate -ss returns the first frame with pts >= t, i.e. frame n + 1.
+ * That is invisible on still stretches but a whole pose step inside a 3D motion.
+ */
+function frameIdx(file: string, n: number): { w: number; h: number; rgb: Buffer } {
+  const [w, h] = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", file], { encoding: "utf8" })
+    .stdout.trim().split(",").map(Number) as [number, number];
+  const r = spawnSync("ffmpeg", ["-v", "error", "-i", file, "-vf", `select=eq(n\\,${n})`, "-vsync", "0", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], { maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0 || r.stdout.length < w * h * 3) throw new Error(`could not decode frame ${n} of ${file}: ${r.stderr}`);
+  return { w, h, rgb: r.stdout.subarray(0, w * h * 3) };
+}
 
 /** Memory trail in the log (the shared 8 GB box OOM-kills test workers): MemAvailable + chromium RSS. */
 function mem(label: string): void {
@@ -58,6 +69,13 @@ async function previewRgb(page: Page): Promise<{ w: number; h: number; rgb: Buff
     return { w: c.width, h: c.height, b64: btoa(s) };
   });
   return { w: r.w, h: r.h, rgb: Buffer.from(r.b64, "base64") };
+}
+
+/** Raw RGB -> test-results/screens/<name>.png (artifacts for eyeballing preview vs export). */
+function dumpRgb(name: string, f: { w: number; h: number; rgb: Buffer }): void {
+  const out = path.join(EDITOR, "test-results", "screens", `${name}.png`);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  spawnSync("ffmpeg", ["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${f.w}x${f.h}`, "-i", "pipe:0", "-frames:v", "1", out], { input: f.rgb });
 }
 
 function meanRgbDiff(a: Buffer, b: Buffer): number {
@@ -238,10 +256,14 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   const prev = await previewRgb(page);
   const exp3d = await timedExport(page, dir);
   console.log("export 3 s, 1 s 3D block:", exp3d.seconds.toFixed(1), "s (wall", exp3d.wall.toFixed(1), "s)");
-  const ef = frameAt(exp3d.mp4, tMid(F));
+  const ef = frameIdx(exp3d.mp4, F);
   expect([ef.w, ef.h]).toEqual([prev.w, prev.h]);
   const dPar = meanRgbDiff(prev.rgb, ef.rgb);
-  const dNotFlat = meanRgbDiff(ef.rgb, frameAt(expFlat.mp4, tMid(F)).rgb);
+  const efFlat = frameIdx(expFlat.mp4, F);
+  const dNotFlat = meanRgbDiff(ef.rgb, efFlat.rgb);
+  dumpRgb("motion3d-f33-preview", prev);
+  dumpRgb("motion3d-f33-export", ef);
+  dumpRgb("motion3d-f33-export-flat", efFlat);
   console.log(`export frame ${F} vs preview: mean |RGB| ${dPar.toFixed(2)} (bound 12); vs 3D-free export: ${dNotFlat.toFixed(2)} (bound >= 3)`);
   expect(dPar).toBeLessThanOrEqual(12);
   expect(dNotFlat).toBeGreaterThanOrEqual(3);
