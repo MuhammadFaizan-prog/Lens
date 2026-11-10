@@ -5,7 +5,7 @@ import { store, useEditor } from "../state/store";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import { CanvasOverlay, framingEditing, zoomEditFrame, zoomEditing } from "./CanvasOverlay";
 import { editViewRect, framingEditPlan } from "../state/framingEdit";
-import { normalizeCrop } from "@lens/engine";
+import { normalizeCrop, videoTime } from "@lens/engine";
 import { useUi } from "../state/uiLayout";
 
 /** Draw frame i of plan into g with the right source images (awaits decoding when needed). */
@@ -29,7 +29,7 @@ function withFramingEdit(plan: RenderPlan, i: number): RenderPlan {
 export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, i: number, editPlan = false, framingPlan = false): Promise<boolean> {
   const f = plan.frames[i];
   if (!f || !store.screen) return false;
-  const si = store.screen.indexAt(f.src);
+  const si = store.screen.indexAt(videoTime(f));
   const wantCam = !!(store.cam && f.layout.camera && f.layout.cameraOpacity > 0);
   const ci = wantCam ? store.cam!.indexAt(f.src) : -1;
   let scr = store.screen.peek(si);

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
+import { defaultFreezeSlide, defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
-import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
+import { newId, timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { createBlock, deleteSelection } from "./Timeline";
 import { Icon } from "./Icon";
@@ -170,6 +170,27 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         </div>
       </>
     );
+  } else if (sel.track === "freeze") {
+    const f = (project.freezes ?? [])[sel.index];
+    if (!f) return null;
+    range = f;
+    const dur = store.get().bundle?.meta.durationMs ?? f.endMs;
+    body = (
+      <>
+        <Segmented label="Cursor" value={f.cursor} testId="sel-freeze-cursor"
+          options={[{ value: "live", label: "Keeps moving", hint: "Point at the still screen while you talk" }, { value: "hide", label: "Hidden" }]}
+          onChange={(v) => store.edit(v === "live" ? "Freeze cursor live" : "Freeze cursor hidden", (q) => updateBlock(q, "freeze", sel.index, { cursor: v }))} />
+        <Slider defaultValue={2000} label="Length" value={f.endMs - f.startMs} min={200} max={Math.max(200, dur - f.startMs)} step={100} format={sec} testId="sel-freeze-length"
+          onChange={(v) => tweak("Freeze length", { endMs: Math.min(dur, f.startMs + v) })} />
+        <p className="note">The screen holds on its frame at {timecode(f.startMs, fps)}. Sound, captions, zooms and the webcam keep playing, so nothing gets longer. To stop everything instead, make it a pause.</p>
+        <div className="cue-actions">
+          <button className="chip-btn" data-testid="sel-freeze-to-pause" title="Replace with a pause: the whole video stops for this long, silent, and the rest moves later"
+            onClick={() => { const at = f.startMs; store.edit("Freeze to pause", (q) => ({ ...q, freezes: (q.freezes ?? []).filter((_, j) => j !== sel.index), slides: [...q.slides, defaultFreezeSlide(newId("pause"), Math.round(at), Math.round(f.endMs - f.startMs))] })); store.select({ track: "slide", index: store.get().project.slides.length - 1 }); }}>
+            Make it a pause
+          </button>
+        </div>
+      </>
+    );
   } else if (sel.track === "volume") {
     const o = project.overrides.filter((x) => x.volume !== undefined)[sel.index];
     if (!o) return null;
@@ -184,7 +205,7 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
     <div className="selection-card" data-testid="selection-card">
       <div className="sel-head">
         <span className={`dot dot-${sel.track}`} />
-        <b>{({ cut: "Cut", zoom: "Zoom block", speed: "Speed range", mask: "Mask", caption: "Caption", volume: "Volume segment" } as Record<string, string>)[sel.track] ?? sel.track}</b>
+        <b>{({ cut: "Cut", zoom: "Zoom block", speed: "Speed range", freeze: "Freeze frame", mask: "Mask", caption: "Caption", volume: "Volume segment" } as Record<string, string>)[sel.track] ?? sel.track}</b>
         {range && (
           <span className="sel-time">
             {timecode(range.startMs, fps)} – {timecode(range.endMs, fps)}

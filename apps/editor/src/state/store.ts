@@ -7,7 +7,7 @@ import { useSyncExternalStore } from "react";
 import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS, parseTranscript } from "@lens/engine";
 import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
 import { setDemoHotspot } from "@lens/engine";
-import { withFontFallback, type ProjectFont } from "@lens/engine";
+import { defaultImageSlide, defaultSlide, videoTime, withFontFallback, type ProjectFont } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
@@ -1045,12 +1045,12 @@ export class EditorStore {
     else this.edit(label, f);
   }
 
-  private async upload(file: File): Promise<string> {
+  private async upload(file: File, folder: "brand" | "media" = "brand"): Promise<string> {
     const buf = new Uint8Array(await file.arrayBuffer());
     let bin = "";
     for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
     const q = this.dirQuery();
-    const r = await fetch(`/api/asset${q}${q ? "&" : "?"}name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: btoa(bin) }) });
+    const r = await fetch(`/api/asset${q}${q ? "&" : "?"}name=${encodeURIComponent(file.name)}${folder === "brand" ? "" : `&folder=${folder}`}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: btoa(bin) }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error ?? String(r.status));
     return j.path as string;
@@ -1402,9 +1402,42 @@ export class EditorStore {
     this.set({ editingText: id });
   }
 
-  addSlide(sl: TextSlide): void {
-    this.edit("Add text slide", (p) => ({ ...p, slides: [...p.slides, sl] }));
+  addSlide(sl: TextSlide, label = "Add text slide"): void {
+    this.edit(label, (p) => ({ ...p, slides: [...p.slides, sl] }));
     this.set({ selection: { track: "slide", index: this.history.doc.slides.length - 1 } });
+  }
+
+  /** Insert menu (demand #20): a title card at the playhead, following the brand kit when it is on. */
+  addTitleCard(atMs = Math.round(this.playheadSrc())): void {
+    const sl = defaultSlide(`slide-${Date.now().toString(36)}`, atMs);
+    this.addSlide(this.s.project.brand.enabled ? { ...sl, brand: true } : sl, "Add title card");
+  }
+
+  /** Upload a picture into the bundle (media/) and insert it as an image slide at the playhead. */
+  async addImageSlide(file: File, atMs = Math.round(this.playheadSrc())): Promise<void> {
+    try {
+      const bm = await createImageBitmap(file);
+      const aspect = Math.round((bm.width / bm.height) * 10000) / 10000;
+      bm.close();
+      const path = await this.upload(file, "media");
+      this.addSlide(defaultImageSlide(`image-${Date.now().toString(36)}`, atMs, path, aspect), "Add image");
+    } catch (e) {
+      this.notify(`Could not use ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Replace the picture of image slide `index` (keeps its timing, fit and text). */
+  async replaceSlideImage(index: number, file: File): Promise<void> {
+    try {
+      const bm = await createImageBitmap(file);
+      const aspect = Math.round((bm.width / bm.height) * 10000) / 10000;
+      bm.close();
+      const path = await this.upload(file, "media");
+      const cur = this.s.project.slides[index]?.image;
+      this.updateSlide(index, { image: { path, aspect, fit: cur?.fit ?? "contain" } });
+    } catch (e) {
+      this.notify(`Could not use ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   updateSlide(index: number, patch: Partial<TextSlide>, live = false): void {
@@ -1583,7 +1616,7 @@ export class EditorStore {
     for (let k = 1; k <= 24; k++) {
       const fr = p.frames[f + k * dir * Math.max(1, Math.abs(this.s.rate))];
       if (!fr) break;
-      ahead.push(this.screen.indexAt(fr.src));
+      ahead.push(this.screen.indexAt(videoTime(fr)));
       if (this.cam) camAhead.push(this.cam.indexAt(fr.src));
     }
     this.screen.prefetch([...new Set(ahead)]);
@@ -1818,7 +1851,7 @@ export class EditorStore {
     for (let i = 0; i < total; i++) {
       if (this.exportCancel) return false;
       const f = plan.frames[i]!;
-      const si = scrStore.indexAt(f.src);
+      const si = scrStore.indexAt(videoTime(f));
       const ci = camStore ? camStore.indexAt(f.src) : 0;
       const [scr, cam] = await Promise.all([scrStore.load(si), camStore ? camStore.load(ci) : Promise.resolve(null)]);
       renderer.draw(g, plan, i, { screen: scr, cam });

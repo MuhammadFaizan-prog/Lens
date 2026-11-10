@@ -6,16 +6,16 @@
  * Timeline blocks live in SOURCE time (recording ms), like the engine's project data. The
  * transport works in OUTPUT frames; plan frames map one to the other.
  */
-import { defaultSlide, mergeRanges, MOTION3D_TEMPLATES, normalizeAnnotation, segmentFromTemplate, type Motion3DTemplate, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
+import { defaultFreeze, defaultSlide, mergeRanges, MOTION3D_TEMPLATES, normalizeAnnotation, segmentFromTemplate, type Motion3DTemplate, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
 
-export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume" | "motion3d";
+export type TrackKind = "zoom" | "cut" | "speed" | "freeze" | "mask" | "annotation" | "slide" | "caption" | "volume" | "motion3d";
 
 export interface Range {
   startMs: number;
   endMs: number;
 }
 
-export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200, motion3d: 200 };
+export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, freeze: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200, motion3d: 200 };
 
 /** Index into p.overrides of the i-th volume segment (overrides also hold cursor-only ranges). */
 export function volumeIndex(p: ProjectConfig, i: number): number {
@@ -104,6 +104,8 @@ export function blocksOf(p: ProjectConfig, track: TrackKind): Range[] {
       return p.edits.cuts;
     case "speed":
       return p.edits.speed;
+    case "freeze":
+      return p.freezes ?? [];
     case "mask":
       return p.masks;
     case "annotation":
@@ -129,6 +131,8 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
       return { ...p, edits: { ...p.edits, cuts: p.edits.cuts.map((c, j) => (j === i ? { ...c, ...patch } : c)) } };
     case "speed":
       return { ...p, edits: { ...p.edits, speed: p.edits.speed.map((s, j) => (j === i ? { ...s, ...patch } : s)) } };
+    case "freeze":
+      return { ...p, freezes: (p.freezes ?? []).map((f, j) => (j === i ? { ...f, ...patch } : f)) };
     case "mask":
       return {
         ...p,
@@ -167,6 +171,8 @@ export function deleteBlock(p: ProjectConfig, track: TrackKind, i: number): Proj
       return { ...p, edits: { ...p.edits, cuts: p.edits.cuts.filter((_, j) => j !== i) } };
     case "speed":
       return { ...p, edits: { ...p.edits, speed: p.edits.speed.filter((_, j) => j !== i) } };
+    case "freeze":
+      return { ...p, freezes: (p.freezes ?? []).filter((_, j) => j !== i) };
     case "mask":
       return { ...p, masks: p.masks.filter((_, j) => j !== i) };
     case "annotation": {
@@ -211,6 +217,11 @@ export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 19
       const s = { startMs: r.startMs, endMs: r.endMs, rate: 2 };
       const speed = [...p.edits.speed, s].sort((a, b) => a.startMs - b.startMs);
       return { project: { ...p, edits: { ...p.edits, speed } }, index: speed.indexOf(s) };
+    }
+    case "freeze": {
+      const f = defaultFreeze(newId("freeze"), Math.round(r.startMs), Math.round(r.endMs));
+      const freezes = [...(p.freezes ?? []), f].sort((a, b) => a.startMs - b.startMs);
+      return { project: { ...p, freezes }, index: freezes.indexOf(f) };
     }
     case "mask": {
       const m = { id: newId("mask"), kind: "blur" as const, rect: { x: Math.round(srcW * 0.35), y: Math.round(srcH * 0.4), w: Math.round(srcW * 0.3), h: Math.round(srcH * 0.12) },
@@ -468,6 +479,12 @@ export function duplicateBlocks(p: ProjectConfig, items: BlockRef[], durationMs:
           const sp = { ...p.edits.speed[i]!, ...r };
           q = { ...q, edits: { ...q.edits, speed: [...q.edits.speed, sp].sort((a, b2) => a.startMs - b2.startMs) } };
           obj = sp;
+          break;
+        }
+        case "freeze": {
+          const f = { ...(p.freezes ?? [])[i]!, ...r, id: newId("freeze") };
+          q = { ...q, freezes: [...(q.freezes ?? []), f].sort((a, b2) => a.startMs - b2.startMs) };
+          obj = f;
           break;
         }
         case "mask": {

@@ -1,6 +1,8 @@
-import { defaultSlide } from "@lens/engine";
+import { useRef } from "react";
+import { defaultFreezeSlide } from "@lens/engine";
 import { store, useEditor, type AnnotationTool } from "../state/store";
 import { newId } from "../state/timelineOps";
+import { createBlock } from "./Timeline";
 import { AspectSelect } from "./AspectPicker";
 
 const TOOLS: Array<{ id: AnnotationTool; label: string; key: string; glyph: string }> = [
@@ -13,11 +15,19 @@ const TOOLS: Array<{ id: AnnotationTool; label: string; key: string; glyph: stri
   { id: "badge", label: "Step badge", key: "N", glyph: "①" },
 ];
 
+/** Add a hold freeze on the Freeze lane at the playhead and select it (button and the F key). */
+export function addFreezeAtPlayhead(): void {
+  const i = createBlock("freeze", store.playheadSrc());
+  if (i >= 0) store.select({ track: "freeze", index: i });
+}
+
 /** Annotation tools over the preview: pick a tool, then click-drag on the preview. */
 export function AnnotationToolbar() {
   const tool = useEditor((s) => s.tool);
   const anchor = useEditor((s) => s.newAnchor);
   const src = useEditor((s) => s.plan?.frames[s.frame]?.src ?? 0);
+  const brandOn = useEditor((s) => s.project.brand.enabled);
+  const imageInput = useRef<HTMLInputElement>(null);
   return (
     <div className="ann-toolbar" role="toolbar" aria-label="Annotation tools" data-testid="ann-toolbar">
       {TOOLS.map((t) => (
@@ -35,9 +45,23 @@ export function AnnotationToolbar() {
         ))}
       </div>
       <span className="divider" />
-      <button className="chip-btn" data-testid="add-slide" title="Insert a full-frame title card at the playhead" onClick={() => store.addSlide(defaultSlide(newId("slide"), Math.round(src)))}>
-        + Text slide
-      </button>
+      <div className="insert-group" role="group" aria-label="Insert at the playhead" data-testid="insert-group">
+        <span className="insert-label">Insert</span>
+        <button className="chip-btn" data-testid="add-slide" title={brandOn ? "Insert a full-frame title card in your brand kit's look at the playhead" : "Insert a full-frame title card at the playhead"} onClick={() => store.addTitleCard(Math.round(src))}>
+          + Title card
+        </button>
+        <button className="chip-btn" data-testid="add-image-slide" title="Insert a still image (PNG, JPEG, WebP) as a full-frame clip at the playhead" onClick={() => imageInput.current?.click()}>
+          + Image
+        </button>
+        <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp" hidden data-testid="image-slide-input"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void store.addImageSlide(f, Math.round(src)); e.target.value = ""; }} />
+        <button className="chip-btn" data-testid="add-freeze" title="Freeze frame: hold the screen still from the playhead while sound, cursor and zoom keep going (F)" onClick={() => addFreezeAtPlayhead()}>
+          + Freeze
+        </button>
+        <button className="chip-btn" data-testid="add-pause" title="Pause: stop the whole video on this frame for 2 s (silent), the rest plays later" onClick={() => store.addSlide(defaultFreezeSlide(newId("pause"), Math.round(src)), "Add pause")}>
+          + Pause
+        </button>
+      </div>
       <span className="divider" />
       <AspectSelect />
     </div>

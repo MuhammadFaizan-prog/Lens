@@ -22,6 +22,7 @@
   --audio: #5fd4a4;
   --annotation: #ff8a5c;
   --slide: #f0abfc;
+  --freeze: #7dd3fc;
   --radius: 10px;
   --font: "Inter", "SF Pro Text", -apple-system, "Segoe UI", system-ui, "Cantarell", "DejaVu Sans", sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
@@ -267,7 +268,7 @@ select {
 .sel-time { color: var(--muted); font: 11.5px var(--mono); flex: 1; text-align: right; }
 
 .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
-.dot-zoom { background: var(--zoom); } .dot-cut { background: var(--cut); } .dot-speed { background: var(--speed); } .dot-motion3d { background: var(--m3d); }
+.dot-freeze { background: var(--freeze); } .dot-zoom { background: var(--zoom); } .dot-cut { background: var(--cut); } .dot-speed { background: var(--speed); } .dot-motion3d { background: var(--m3d); }
 .dot-mask { background: var(--mask); } .dot-caption { background: var(--caption); } .dot-audio { background: var(--audio); }
 
 /* ---------------------------------------------------------------- timeline */
@@ -314,6 +315,8 @@ select {
 .block-zoom.auto { background: repeating-linear-gradient(135deg, rgba(110, 168, 255, 0.85) 0 6px, rgba(110, 168, 255, 0.68) 6px 12px); }
 .block-cut { background: var(--cut); }
 .block-speed { background: var(--speed); }
+.block-freeze { background: repeating-linear-gradient(90deg, var(--freeze) 0 10px, rgba(125, 211, 252, 0.72) 10px 12px); }
+.block-freeze .block-label { color: #082f49; }
 .block-motion3d { background: var(--m3d); }
 .block-motion3d.hold { background: linear-gradient(90deg, var(--m3d) 0 85%, rgba(195, 139, 255, 0.55)); }
 .block-mask { background: var(--mask); }
@@ -431,6 +434,10 @@ select {
 .slide-marker { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--slide); cursor: ew-resize; z-index: 3; }
 .slide-marker span { position: absolute; top: 2px; left: 4px; padding: 0 5px; border-radius: 4px; background: rgba(240, 171, 252, 0.9); color: #2a0b31; font-size: 10px; font-weight: 650; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .slide-marker.selected { box-shadow: 0 0 0 2px #fff; }
+.slide-marker.kind-freeze { background: var(--freeze); }
+.slide-marker.kind-freeze span { background: rgba(125, 211, 252, 0.92); color: #082f49; }
+.slide-marker.kind-image span { background: rgba(167, 243, 208, 0.92); color: #052e1f; }
+.slide-marker.kind-image { background: #a7f3d0; }
 .preview-stage { position: relative; flex: none; }
 .preview-stage .preview-canvas { display: block; }
 .ann-overlay { position: absolute; left: 0; top: 0; overflow: visible; touch-action: none; }
@@ -876,3 +883,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* Insert group on the annotation toolbar (demand #20): title card, image, freeze, pause */
+.insert-group { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.insert-group .insert-label { font-size: 11px; color: var(--muted); margin-right: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.insert-group .chip-btn { white-space: nowrap; }
+.slide-image-row { display: flex; align-items: center; gap: 8px; }
+.slide-image-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+.lane-freeze .lane-hint { color: rgba(125, 211, 252, 0.7); }

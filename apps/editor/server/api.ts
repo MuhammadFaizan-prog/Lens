@@ -762,9 +762,11 @@ export function apiMiddleware() {
         const name = path.basename(url.searchParams.get("name") ?? "").replace(/[^A-Za-z0-9._-]/g, "_");
         if (!name || !MIME[path.extname(name).toLowerCase()]) return sendJson(res, { error: "unsupported file type" }, 400);
         const body = JSON.parse(await readBody(req)) as { data: string };
-        fs.mkdirSync(path.join(bundle, "brand"), { recursive: true });
-        fs.writeFileSync(path.join(bundle, "brand", name), Buffer.from(body.data, "base64"));
-        return sendJson(res, { path: `brand/${name}` });
+        // brand/ (logo, backdrop) or media/ (image slides, demand #20); nothing else is writable
+        const folder = url.searchParams.get("folder") === "media" ? "media" : "brand";
+        fs.mkdirSync(path.join(bundle, folder), { recursive: true });
+        fs.writeFileSync(path.join(bundle, folder, name), Buffer.from(body.data, "base64"));
+        return sendJson(res, { path: `${folder}/${name}` });
       }
       if (url.pathname === "/api/project" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

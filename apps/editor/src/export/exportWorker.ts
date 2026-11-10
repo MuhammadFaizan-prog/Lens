@@ -4,7 +4,7 @@
  * progress; a "cancel" message stops it between frames. Same renderer and plan as the preview, so
  * preview == export still holds.
  */
-import { withFontFallback, type RenderPlan } from "@lens/engine";
+import { videoTime, withFontFallback, type RenderPlan } from "@lens/engine";
 import { CAPTION_FONT, PlanRenderer } from "../render/renderer";
 import { ensurePlanAssets, fontSet, missingPlanFonts, setAssetBundle } from "../render/assets";
 import { FrameStore } from "../media/frames";
@@ -58,7 +58,7 @@ async function run(m: StartMsg): Promise<void> {
     for (i = 0; i < total; i++) {
       if (cancelled) return post({ type: "cancelled", done: i });
       const f = plan.frames[i]!;
-      const si = scr.indexAt(f.src);
+      const si = scr.indexAt(videoTime(f));
       const ci = cam ? cam.indexAt(f.src) : 0;
       // the next frames' bytes download while this one draws
       scr.prefetch([si + 1, si + 2, si + 3], 1);

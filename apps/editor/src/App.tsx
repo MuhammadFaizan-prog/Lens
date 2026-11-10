@@ -8,7 +8,7 @@ import { canvasHasFocus, nudgeSelected, removeCanvasSelection } from "./componen
 import { TranscriptPanel } from "./components/TranscriptPanel";
 import { PrivacyPanel } from "./components/PrivacyPanel";
 import { StepsPanel } from "./components/StepsPanel";
-import { AnnotationToolbar } from "./components/AnnotationToolbar";
+import { addFreezeAtPlayhead, AnnotationToolbar } from "./components/AnnotationToolbar";
 import { BrandPanel } from "./components/BrandPanel";
 import { PresetsMenu } from "./components/PresetsMenu";
 import { ExportDialog } from "./components/ExportDialog";
@@ -321,6 +321,12 @@ function useKeys() {
         case "Z":
           e.preventDefault();
           addZoomAtPlayhead();
+          break;
+        case "h":
+        case "H":
+          // hold: a freeze frame at the playhead (demand #20)
+          e.preventDefault();
+          addFreezeAtPlayhead();
           break;
         case "Home":
           store.step(-1e9);
