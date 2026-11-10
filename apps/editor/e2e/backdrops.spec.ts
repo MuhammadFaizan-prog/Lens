@@ -9,9 +9,11 @@
  *    category (data-cats); "Classic" shows exactly the original 12;
  *  - grid opening after the first load: Gradient tab -> Image tab until every thumbnail is painted
  *    takes < 100 ms (thumbnails are cached);
- *  - picking 3 new backdrops from 3 different categories (at 720p output, so the full-size render goes
+ *  - picking 3 new backdrops from 3 different categories (at 480p output, 854x480 > the inline limit, so the full-size render goes
  *    through the worker) stores builtin:<id> in the project and the plan's style.backdropArt; the
- *    preview's frame changes vs the previous backdrop (mean |RGB| >= 8);
+ *    preview's backdrop changes vs the previous backdrop: mean |RGB| >= 8 over the four 24x24 corner
+ *    patches (always backdrop; a whole-frame mean is diluted by the unchanged recording on top, e.g.
+ *    7.7 for the fixture's dark solid #203040 -> aurora-borealis);
  *  - a short export (output frame F) vs the preview of frame F: mean |RGB| over the whole frame <= 12;
  *    the Python compositor's make_background on the same plan style matches the exported frame
  *    within 16 at the 4 corners and the top / left edge midpoints;
@@ -51,6 +53,16 @@ async function previewRgb(page: Page): Promise<{ w: number; h: number; rgb: Buff
   return { w: r.w, h: r.h, rgb: Buffer.from(r.b64, "base64") };
 }
 
+/** Mean |RGB| over the four corner patches (k x k) of two same-size frames: the backdrop only. */
+function cornerDiff(a: { w: number; h: number; rgb: Buffer }, b: { w: number; h: number; rgb: Buffer }, k = 24): number {
+  let s = 0, n = 0;
+  for (const [x0, y0] of [[0, 0], [a.w - k, 0], [0, a.h - k], [a.w - k, a.h - k]] as const)
+    for (let y = y0; y < y0 + k; y++)
+      for (let x = x0; x < x0 + k; x++)
+        for (let c = 0; c < 3; c++) { const i = (y * a.w + x) * 3 + c; s += Math.abs(a.rgb[i]! - b.rgb[i]!); n++; }
+  return s / n;
+}
+
 const meanDiff = (a: Buffer, b: Buffer) => {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += Math.abs(a[i]! - b[i]!);
@@ -85,7 +97,7 @@ test("backdrop categories, new procedural backdrops, preview == export", async (
   const page = lens.page;
   const exportPath = await page.evaluate(() => (window as any).__lens.store.exportPath());
   console.log(PACKAGED ? "packaged app" : "web editor", "export path:", exportPath);
-  await editProject(page, "Short 720p export", `(p) => ({ ...p, output: { ...p.output, resolution: 720, fps: 30 }, edits: { ...p.edits, cuts: [...p.edits.cuts, { startMs: 500, endMs: 6000 }] } })`);
+  await editProject(page, "Short 480p export", `(p) => ({ ...p, output: { ...p.output, resolution: 480, fps: 30 }, edits: { ...p.edits, cuts: [...p.edits.cuts, { startMs: 500, endMs: 6000 }] } })`);
   await page.getByTestId("tab-look").click();
 
   // ---- the grid, first load
@@ -184,8 +196,9 @@ test("backdrop categories, new procedural backdrops, preview == export", async (
     await seek(page, F);
     const pv = await previewRgb(page);
     console.log(`${id}: preview settled in ~${Date.now() - tPick} ms`);
-    const changed = meanDiff(pv.rgb, prevFrame.rgb);
-    expect(changed, `${id} changes the frame`).toBeGreaterThanOrEqual(8);
+    const changed = cornerDiff(pv, prevFrame);
+    console.log(`${id}: backdrop change vs previous (corner patches) ${changed.toFixed(1)}, whole frame ${meanDiff(pv.rgb, prevFrame.rgb).toFixed(1)}`);
+    expect(changed, `${id} changes the backdrop`).toBeGreaterThanOrEqual(8);
     const mp4 = await exportMp4(page, dir);
     await page.evaluate(() => (window as any).__lens.store.closeExport());
     const ef = frameIdx(mp4, F);
@@ -201,7 +214,7 @@ test("backdrop categories, new procedural backdrops, preview == export", async (
       "print(json.dumps([[float(v) for v in bg[int(round(y)), int(round(x))][::-1]] for x, y in a['pts']]))",
     ].join("\n"), path.resolve(EDITOR, "..", "..", "compositor"), JSON.stringify({ style, w: ef.w, h: ef.h, pts })], { encoding: "utf8" }));
     const dists = pts.map(([x, y], i) => rgbDist(px(ef, x, y), py[i]));
-    console.log(`${id}: export frame ${F} vs preview mean |RGB| ${d.toFixed(2)} (bound 12); frame change vs previous backdrop ${changed.toFixed(1)}; python vs export`, dists.map((v) => v.toFixed(1)).join(" "));
+    console.log(`${id}: export frame ${F} vs preview mean |RGB| ${d.toFixed(2)} (bound 12); backdrop change vs previous ${changed.toFixed(1)}; python vs export`, dists.map((v) => v.toFixed(1)).join(" "));
     expect(d, `${id} preview vs export`).toBeLessThanOrEqual(12);
     for (const v of dists) expect(v, `${id} python vs export`).toBeLessThanOrEqual(16);
     results[id] = { previewVsExport: d, changed, pythonVsExport: dists };
