@@ -28,6 +28,7 @@ from typing import Callable, Iterator, Optional
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import features as _pil_features
 
 from . import annotations as ann
 from .annotations import draw_items, image_premul, resolve_asset, set_fonts, shaped_font, text_font
@@ -425,6 +426,25 @@ def fine_textlength(d: ImageDraw.ImageDraw, text: str, font, size: int) -> float
     return d.textlength(text, font=font)
 
 
+@lru_cache(maxsize=64)
+def _shaped_variant(path: str, size: int):
+    return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.RAQM)
+
+
+def caption_face(font):
+    """(font, text kwargs) the caption words are measured and drawn with: the same file through RAQM
+    (HarfBuzz) with kerning off, as the preview draws them (fontKerning = none, default ligatures,
+    fractional advances). BASIC layout draws each glyph at its hinted whole-pixel advance, which
+    drifts along a word (Caveat 40 px "Lens" 65 px drawn vs 62.77 measured) and ignores ligatures
+    (Lobster). Falls back to the font as given when Pillow has no libraqm."""
+    if isinstance(font, ImageFont.FreeTypeFont) and getattr(font, "path", None) and _pil_features.check("raqm"):
+        try:
+            return _shaped_variant(str(font.path), int(font.size)), {"features": ["-kern"]}
+        except OSError:
+            pass
+    return font, {}
+
+
 def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Optional[Image.Image] = None) -> None:
     """Styled caption: wrapped lines, optional pill background, per-word highlight.
 
@@ -455,12 +475,13 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
     # a right-to-left line is one Arabic-script run: its spaces come from the script font, shaped, as
     # a full-line shaper (HarfBuzz itemising by script) would take them; left-to-right lines unchanged
     rtl_line = bool(cap.get("visual")) and any(script)
-    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else fine_textlength(d, " ", font, size)
+    tfont, tkw = caption_face(font)
+    space = d.textlength(" ", font=sfont, direction="rtl", features=["-kern"]) if rtl_line else (d.textlength(" ", font=tfont, **tkw) if tkw else fine_textlength(d, " ", font, size))
 
     def wlen(j: int) -> float:
         if script[j]:
             return d.textlength(words[j], font=sfont, direction="rtl", features=["-kern"])
-        return fine_textlength(d, words[j], font, size)
+        return d.textlength(words[j], font=tfont, **tkw) if tkw else fine_textlength(d, words[j], font, size)
 
     lines, i = [], 0
     for n in cap["lines"]:
@@ -505,6 +526,7 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
             x += wj + space
     big = max(1, _js_round(size * scale))
     big_font = text_font(big, bold, cs.get("font")) if cs.get("font") else (_font(big) if bold else text_font(big, False, None))
+    big_tfont, big_kw = caption_face(big_font)
 
     def word_pos(j: int, x: float, y: float, wj: float):
         """(font, x, baseline offset dy, scaled) for word j: the spoken word under pop / bounce moves."""
@@ -513,7 +535,8 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
         dy = -_js_round(size * lift)
         if hs == "bounce" or scale == 1:
             return x, dy, False
-        return x + (wj - fine_textlength(d, words[j], big_font, big)) / 2, dy, True
+        bw = d.textlength(words[j], font=big_tfont, **big_kw) if big_kw else fine_textlength(d, words[j], big_font, big)
+        return x + (wj - bw) / 2, dy, True
 
     def draw_word(dr: ImageDraw.ImageDraw, j: int, x: float, y: float, dy: int, scaled: bool, fill, sk: dict) -> None:
         if script[j]:
@@ -521,9 +544,9 @@ def draw_caption(d: ImageDraw.ImageDraw, cap, cs: dict, W: int, H: int, base: Op
             dr.text((x, y + asc - s_asc + dy), words[j], font=sfont, fill=fill, direction="rtl", features=["-kern"], **sk)
         elif scaled:
             b_asc = big_font.getmetrics()[0]
-            dr.text((x, y + asc - b_asc + dy), words[j], font=big_font, fill=fill, **sk)
+            dr.text((x, y + asc - b_asc + dy), words[j], font=big_tfont, fill=fill, **big_kw, **sk)
         else:
-            dr.text((x, y + asc - main_asc + dy), words[j], font=font, fill=fill, **sk)
+            dr.text((x, y + asc - main_asc + dy), words[j], font=tfont, fill=fill, **tkw, **sk)
 
     st = cs.get("stroke") or {}
     stroke_px = max(1, int(_js_round(size * float(st.get("width", 0.08))))) if st.get("enabled") else 0
