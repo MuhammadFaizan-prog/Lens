@@ -128,7 +128,17 @@ test("recorder home: modes, devices, custom region, webcam take, teleprompter", 
   for (let i = 0; i < 100 && !app.windows().some((p) => p.url().includes("dir=")); i++) await sleep(200);
   await sleep(2500);
   report.afterStop = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).map((w) => ({ title: w.getTitle(), url: w.webContents.getURL(), visible: w.isVisible() })));
-  const recNow = app.windows().find((p) => p.url().includes("recorder.html")) ?? rec;
+  // main recycles the recorder 1.5 s after the result (fresh renderer); under load that lands after the
+  // 2.5 s above, so wait for the NEW recorder page instead of grabbing the one about to be destroyed
+  let recNow = rec;
+  for (let i = 0; i < 150; i++) {
+    const p = app.windows().find((w) => w !== rec && !w.isClosed() && w.url().includes("recorder.html"));
+    if (p) {
+      recNow = p;
+      break;
+    }
+    await sleep(200);
+  }
 
   // teleprompter
   await recNow.waitForFunction(() => !!document.getElementById("teleprompter"), null, { timeout: 15_000 });
