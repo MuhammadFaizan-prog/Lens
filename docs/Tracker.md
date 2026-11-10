@@ -521,7 +521,34 @@ audio 5.000 s, mean -18.3 dBFS. 2 / 2 passed.
 | Fix | Test | Status |
 |---|---|---|
 | Custom mode: choosing the Custom card opens the "Lens region" drag overlay at once (selected or first screen); Record in Custom mode with no area opens the overlay instead of failing with "Could not start: drag the area to record first", and cancelling it leaves the recorder idle with a hint. The overlay is single-flight (card, thumbnail and Record share one), and main removes only its own `lens:region-done` listener. v0.1.2 opened the overlay only on a screen-thumbnail click, which the e2e did and users don't. | `e2e/home.spec.ts` (mode card only, then Record with no area → overlay, close → idle, no error), packaged Linux | committed |
-| Import Video: an h264 yuv420p, even-size, constant-rate (≤ 60 fps) source is remuxed (`-c:v copy -movflags +faststart`), anything else re-encoded (libx264 veryfast crf18, cfr 30/60); duration from the probe (no second full decode of screen.mp4); `-progress pipe:1 -nostats` drives "Importing… N%" in the recorder with a Cancel button (kills ffmpeg, removes the half-made folder); every failure ends as "Import failed: <reason>", the probe has a 30 s guard, a killed ffmpeg settles on exit. | `test/import.test.ts` (copy path: packets byte-identical, 6 s 720p in ~0.3 s; VP9 re-encode with progress to 100; cancel leaves no folder; non-video fails; probe timeout), `e2e/file-menu.spec.ts` packaged | committed |
+| Import Video: an h264 yuv420p, even-size, constant-rate (≤ 60 fps) source is remuxed (`-c:v copy -movflags +faststart`), anything else re-encoded (the recordings' H.264 encoder: hardware when its test encode passes, else libx264 superfast crf 20, cfr 30/60; audio alongside the video); duration from the probe (no second full decode of screen.mp4); `-progress pipe:1 -nostats` drives "Importing… N%" in the recorder with a Cancel button (kills ffmpeg, removes the half-made folder); every failure ends as "Import failed: <reason>", the probe has a 30 s guard, a killed ffmpeg settles on exit. | `test/import.test.ts` (copy path: packets byte-identical, 6 s 720p in ~0.3 s; VP9 re-encode with progress to 100; cancel leaves no folder; non-video fails; probe timeout), `e2e/file-menu.spec.ts` packaged | committed |
 
 ### v0.1.3 test changes
 - `apps/editor/e2e/layout.spec.ts` (2026-11-10): the Step badge card check added a hand-written badge through `store.edit` with no `style`; the engine rejected it, the store rolled the edit back ("Add badge failed"), and `ann-card` never appeared (packaged run: 1280x720 and 1366x768 failed on `toBeVisible`). The badge is now made the way a user makes one (Step badge tool, click on the preview, which builds the full default style), then given its label through `updateAnnotation`. The asserts are unchanged.
+
+## v0.1.3 perf (2026-11-10)
+
+Bench: `apps/desktop/scripts/bench-finalize.mjs` (driven per case by `work/perf/run-bench.sh`), 2 runs per case, median shown with the single runs. Columns: **v0.1.2** = main 36933b7; **ba1643a** = release/0.1.3 before the perf commits; **v0.1.3** = release/0.1.3 with the perf commits (finalize / import / settings: fbbf8e3, bench 81c724d; editor open: d1a49b6).
+
+| Case | v0.1.2 (36933b7) | ba1643a | v0.1.3 | v0.1.2 / v0.1.3 |
+|---|---|---|---|---|
+| Finalize 10 s screen + mic | 9.84 s (9.7, 10.0) | 8.32 s (8.7, 7.9) | **5.72 s** (6.1, 5.3) | 1.7x |
+| Finalize 10 s + camera | 11.40 s (11.7, 11.1) | 8.57 s (8.9, 8.2) | **7.07 s** (7.1, 7.0) | 1.6x |
+| Finalize 60 s screen + mic | 56.16 s (51.1, 61.3) | 33.09 s (34.2, 31.9) | **34.93 s** (33.8, 36.0) | 1.6x |
+| Finalize 60 s + camera | 65.69 s (67.3, 64.0) | 43.00 s (43.5, 42.4) | **43.49 s** (45.1, 41.9) | 1.5x |
+| Import 60 s 1080p30 H.264 mp4 (remux) | 33.29 s (31.7, 34.9) | 0.64 s (1.0, 0.3) | **0.35 s** (0.3, 0.4) | ~95x |
+| Import 60 s 1080p30 VP9 webm (re-encode) | 43.58 s (42.4, 44.8) | 29.98 s (30.6, 29.4) | **24.80 s** (24.3, 25.3) | 1.8x |
+| Editor open: `/api/bundle` (60 s 1080p60 + 720p60 camera, cold cache) | 79.99 s (78.1, 81.8) | 3.61 s (3.8, 3.4) | **0.28 s** (0.4, 0.2) | ~290x |
+| Editor open: first frame on screen (from open) | 80.04 s (78.2, 81.9) | 3.69 s (3.9, 3.4) | **2.30 s** (3.0, 1.6) | ~35x |
+| Editor: all frames decoded (background, editor usable meanwhile) | 80.04 s (78.2, 81.9) | 65.18 s (63.7, 66.6) | 87.82 s (79.0, 96.7) | 0.9x (see noise) |
+
+What changed:
+- Finalize: libx264 superfast at the Record quality's crf (High = crf 20) instead of veryfast crf 16, audio / camera alongside the screen, the H.264 encoder probe off the Stop path (fbbf8e3), hardware H.264 when its test encode passes.
+- Import: H.264 yuv420p constant-rate sources are remuxed (`-c:v copy`); everything else re-encodes with the recordings' encoder (hardware, else **libx264 superfast crf 20**; v0.1.2 used libx264 veryfast crf 18), audio alongside the video (ba5dc5f).
+- Editor open (d1a49b6): no `spawnSync` in `/api/bundle` any more. One async probe per video (ffprobe `-count_packets`, else one `ffmpeg -c copy -f null` pass) gives size, fps and frame count, both tracks in parallel, cached per path + size + mtime (memory + `.lens-cache/<track>.probe.json`). Mic silence detection runs async in the background, cached; `/api/bundle` carries `silences` only once measured (else `silencesPending`), `GET /api/silences` waits for them and the editor fetches them after open. Profile (`work/perf/prof/prof.mjs`, no ffprobe, as the desktop build): `/api/bundle` 2.77 s of blocking spawnSync -> 0.20 / 0.22 s warm disk (1.5 s on a first, cold-disk read of the 170 MB of video).
+
+Notes:
+- Machine: 2-core arm64 Linux sandbox, 7.9 GiB, no GPU: every encode is **libx264** (the hardware H.264 path is not exercised here). Windows / macOS with a hardware encoder should finalize faster; not measured.
+- File size: v0.1.3's superfast crf 20 makes larger files than v0.1.2's veryfast crf 16 / crf 18 (60 s screen.mp4 132 vs 105 MiB; VP9 import 91 vs 57 MiB) at the same visual target; the speed comes partly from that trade.
+- Noise: about ±15 % run to run (shared 2-core box, other jobs running; the OOM killer took some runs, which were retried). The background full-decode row is the most affected: it now also shares the CPU with the async silence pass, and the d1a49b6 run overlapped other agents' jobs.
+- Inputs: synthetic testsrc2 captures (`work/perf/gen-inputs.sh`): 1080p60 H.264-in-WebM screen at ~15 Mbps, 720p30 camera, Opus sine mic.
