@@ -13,6 +13,8 @@
  *   POST /api/fonts/import           { kind: file | path | url | google | library, ... } -> { font, format, weights }:
  *                                    validates the font and copies it into <bundle>/fonts/ and the library (server/fonts.ts)
  *   DELETE /api/fonts/library?family= removes a family from the library
+ *   POST /api/music?name=            { data: base64 } -> imports an audio file into <bundle>/music/<name> (checked by ffmpeg), { path, name, durationMs }
+ *   POST /api/music/builtin          { id } -> writes the Lens built-in bed (CC0, engine musicBed.ts) to <bundle>/music/lens-<id>.wav, { path, name, durationMs }
  *   POST /api/project                save project.json into the bundle
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
@@ -46,6 +48,7 @@ import { startJob } from "./jobs";
 import { transcribe } from "./stt";
 import { detectSilences, type Range } from "./silence";
 import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
+import { importMusic, writeBuiltinBed } from "./music";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
@@ -529,7 +532,7 @@ function fontFile(bundle: string, ref: string): string | null {
   return p && fs.existsSync(p) ? p : null;
 }
 
-const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2" };
+const MIME: Record<string, string> = { ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2" };
 
 function readJson(file: string): unknown {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
@@ -584,6 +587,9 @@ function exportProject(bundle: string, raw: unknown) {
   // an uploaded backdrop lives in the bundle (Windows bug #20); built-in art ("builtin:<id>") is drawn
   const ip = p.background.imagePath;
   if (ip && !ip.startsWith("builtin:") && !path.isAbsolute(ip)) p.background.imagePath = path.join(bundle, ip);
+  // the music bed lives in the bundle (demand #23)
+  const mp = p.audio.music?.path;
+  if (p.audio.music && mp && !path.isAbsolute(mp)) p.audio.music = { ...p.audio.music, path: path.join(bundle, mp) };
   return p;
 }
 
@@ -765,6 +771,22 @@ export function apiMiddleware() {
         fs.mkdirSync(path.join(bundle, "brand"), { recursive: true });
         fs.writeFileSync(path.join(bundle, "brand", name), Buffer.from(body.data, "base64"));
         return sendJson(res, { path: `brand/${name}` });
+      }
+      if (url.pathname === "/api/music" && req.method === "POST") {
+        try {
+          const body = JSON.parse(await readBody(req)) as { data: string };
+          return sendJson(res, await importMusic(FFMPEG, bundle, url.searchParams.get("name") ?? "", Buffer.from(body.data ?? "", "base64")));
+        } catch (e) {
+          return sendJson(res, { error: e instanceof Error ? e.message : String(e) }, 400);
+        }
+      }
+      if (url.pathname === "/api/music/builtin" && req.method === "POST") {
+        try {
+          const body = JSON.parse(await readBody(req)) as { id: string };
+          return sendJson(res, writeBuiltinBed(bundle, body.id));
+        } catch (e) {
+          return sendJson(res, { error: e instanceof Error ? e.message : String(e) }, 400);
+        }
       }
       if (url.pathname === "/api/project" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

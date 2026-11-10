@@ -207,3 +207,17 @@ describe("built-in beds (CC0, synthesised)", () => {
     expect(v.getInt16(44 + 8, true)).toBe(-32768);
   });
 });
+
+describe("applyEnvelope", () => {
+  it("matches keyAt sample by sample (interleaved stereo)", async () => {
+    const { applyEnvelope } = await import("../src/index.js");
+    const keys = duckKeys([{ startMs: 100, endMs: 300 }, { startMs: 1500, endMs: 1600 }], 3000, { enabled: true, depthDb: 18, attackMs: 50, holdMs: 20, releaseMs: 400 });
+    const n = 3000 * 48;
+    const x = new Float32Array(n * 2).fill(1);
+    applyEnvelope(keys, 0, 1000 / 48000, x, 2);
+    for (const i of [0, 4000, 4800, 9000, 14400, 20000, 50000, 72000, 76800, 100000, n - 1]) {
+      expect(x[2 * i]).toBeCloseTo(keyAt(keys, (i * 1000) / 48000), 5);
+      expect(x[2 * i + 1]).toBe(x[2 * i]);
+    }
+  });
+});

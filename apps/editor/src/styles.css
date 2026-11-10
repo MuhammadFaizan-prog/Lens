@@ -876,3 +876,8 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* Music bed (demand #23) */
+.music-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.music-row .ctl.select { flex: 1 1 140px; min-width: 0; }
+.music-graph { display: block; margin: 6px 0 2px; }

@@ -8,7 +8,11 @@
  *      3 ms fades at every cut), streamed in 1 s blocks so memory stays flat for long recordings;
  *   3. noise reduction (ffmpeg arnndn with the bundled RNNoise model; afftdn with a measured noise
  *      floor when no model is found) and two-pass EBU R128 loudnorm;
- *   4. the synthesized click sound at every click's output time.
+ *   4. the music bed (demand #23): the file looped on the output clock, put `volumeDb` under the
+ *      cleaned speech (both measured with the engine's BS.1770 meter, the same function the preview
+ *      uses), times the plan's duck and fade envelopes (engine music.ts), added after the denoise so
+ *      RNNoise never sees the music;
+ *   5. the synthesized click sound at every click's output time.
  *
  * The result is raw f32le, 2 channels, exactly round(frames / fps * sampleRate) samples long, which
  * the export muxes next to the encoded video (no audio filter graph in the video encoder).
@@ -17,6 +21,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AudioPlan } from "../../../packages/engine/src/index";
+import { applyEnvelope, LoudnessMeter, musicLevelGain } from "../../../packages/engine/src/index";
 
 export const CHANNELS = 2;
 const BYTES = 4 * CHANNELS; // one f32 stereo frame
@@ -309,11 +314,95 @@ function addClicks(file: string, audio: AudioPlan, nOut: number): void {
   fs.closeSync(fd);
 }
 
+/** Integrated loudness of a raw f32le stereo file (streamed). */
+export function fileLoudness(file: string, frames: number, sr: number): number {
+  const m = new LoudnessMeter(sr, 2);
+  const fd = fs.openSync(file, "r");
+  const buf = Buffer.alloc(BLOCK * BYTES);
+  try {
+    for (let s = 0; s < frames; s += BLOCK) {
+      const n = Math.min(BLOCK, frames - s);
+      const got = fs.readSync(fd, buf, 0, n * BYTES, s * BYTES);
+      m.pushInterleaved(new Float32Array(buf.buffer, buf.byteOffset, got / 4));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return m.integrated();
+}
+
+/** What the music mix used (logged next to the export, read by the e2e). */
+export interface MusicMixInfo {
+  speechLufs: number;
+  musicLufs: number;
+  gain: number;
+  fileFrames: number;
+}
+
+/**
+ * Add the plan's music bed into `file` (raw f32le stereo, nOut frames, already cleaned): decoded once
+ * with the format pinned, looped from startMs on the output clock, level from the two loudness
+ * measurements, duck x fade envelopes from the plan, clamped to [-1, 1].
+ */
+export async function mixMusic(ffmpeg: string, audio: AudioPlan, file: string, nOut: number, dir: string, speechLufs: number): Promise<MusicMixInfo | null> {
+  const m = audio.music;
+  if (!m) return null;
+  const sr = audio.sampleRate;
+  const raw = path.join(dir, "music.f32");
+  try {
+    const frames = await decodeToRaw(ffmpeg, m.path, sr, raw);
+    if (frames <= 0) return null;
+    const musicLufs = fileLoudness(raw, frames, sr);
+    const ref = audio.loudness.enabled ? audio.loudness.targetLufs : -16;
+    const gain = musicLevelGain(speechLufs, musicLufs, m.volumeDb, ref);
+    const info = { speechLufs, musicLufs, gain, fileFrames: frames };
+    if (gain <= 0) return info;
+    const start = Math.round((m.startMs * sr) / 1000);
+    const mfd = fs.openSync(raw, "r");
+    const ofd = fs.openSync(file, "r+");
+    const ob = Buffer.alloc(BLOCK * BYTES);
+    const mb = Buffer.alloc(BLOCK * BYTES);
+    try {
+      for (let o = 0; o < nOut; o += BLOCK) {
+        const n = Math.min(BLOCK, nOut - o);
+        // the music samples for output [o, o + n): wrap around the file when looping
+        const mus = new Float32Array(n * 2);
+        let filled = 0;
+        while (filled < n) {
+          let p = start + o + filled;
+          if (m.loop) p %= frames;
+          else if (p >= frames) break;
+          const take = Math.min(n - filled, frames - p);
+          const got = fs.readSync(mfd, mb, 0, take * BYTES, p * BYTES);
+          mus.set(new Float32Array(mb.buffer, mb.byteOffset, got / 4), filled * 2);
+          filled += take;
+        }
+        const t0 = (o * 1000) / sr;
+        const dt = 1000 / sr;
+        applyEnvelope(m.duck, t0, dt, mus, 2);
+        applyEnvelope(m.fade, t0, dt, mus, 2);
+        fs.readSync(ofd, ob, 0, n * BYTES, o * BYTES);
+        const out = new Float32Array(ob.buffer, ob.byteOffset, n * 2);
+        for (let i = 0; i < n * 2; i++) out[i] = Math.max(-1, Math.min(1, out[i]! + mus[i]! * gain));
+        fs.writeSync(ofd, ob, 0, n * BYTES, o * BYTES);
+      }
+    } finally {
+      fs.closeSync(mfd);
+      fs.closeSync(ofd);
+    }
+    return info;
+  } finally {
+    fs.rmSync(raw, { force: true });
+  }
+}
+
 export interface RenderedAudio {
   /** raw f32le, 2 channels, sampleRate */
   file: string;
   sampleRate: number;
   frames: number;
+  /** The music mix's measurements, when the plan has music. */
+  music?: MusicMixInfo | null;
 }
 
 /**
@@ -323,7 +412,7 @@ export interface RenderedAudio {
 export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null, outMs: number, dir: string, root: string): Promise<RenderedAudio | null> {
   if (!audio) return null;
   const hasClicks = audio.clickSound.enabled && audio.clickSound.times.length > 0;
-  if (!audio.tracks.length && !hasClicks) return null;
+  if (!audio.tracks.length && !hasClicks && !audio.music) return null;
   const sr = audio.sampleRate;
   const nOut = Math.max(1, Math.round((outMs * sr) / 1000));
   fs.mkdirSync(dir, { recursive: true });
@@ -347,9 +436,16 @@ export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null,
     const fd = fs.openSync(file, "r+");
     fs.ftruncateSync(fd, nOut * BYTES);
     fs.closeSync(fd);
+    let music: MusicMixInfo | null = null;
+    if (audio.music) {
+      // the music sits relative to the speech as it will be heard: measured after denoise / loudnorm
+      const speechLufs = tracks.length ? fileLoudness(file, nOut, sr) : -Infinity;
+      music = await mixMusic(ffmpeg, audio, file, nOut, dir, speechLufs);
+      fs.writeFileSync(path.join(path.dirname(dir), "music-mix.json"), JSON.stringify(music));
+    }
     addClicks(file, audio, nOut);
     if (file !== laid) fs.rmSync(laid, { force: true });
-    return { file, sampleRate: sr, frames: nOut };
+    return { file, sampleRate: sr, frames: nOut, music };
   } finally {
     for (const [i, t] of tracks.entries()) {
       fs.closeSync(t.fd);

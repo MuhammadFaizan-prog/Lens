@@ -228,3 +228,26 @@ export function musicFileMs(m: Pick<MusicPlan, "loop" | "startMs">, t: number, f
   if (m.loop) return ((p % fileMs) + fileMs) % fileMs;
   return p < fileMs ? p : null;
 }
+
+/**
+ * Multiply `out[i]` (i = 0..n-1) by the envelope at t0 + i * dt (ms): one forward pass, so long
+ * exports evaluate the keys in O(samples + keys). `stride` = channels for interleaved data.
+ */
+export function applyEnvelope(keys: GainKey[], t0: number, dt: number, out: Float32Array, stride = 1): void {
+  const n = Math.floor(out.length / stride);
+  if (!keys.length) return;
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    const t = t0 + i * dt;
+    while (j < keys.length && keys[j]![0] < t) j++;
+    let g: number;
+    if (j === 0) g = keys[0]![1];
+    else if (j >= keys.length) g = keys[keys.length - 1]![1];
+    else {
+      const [ta, ga] = keys[j - 1]!;
+      const [tb, gb] = keys[j]!;
+      g = tb > ta ? ga + ((gb - ga) * (t - ta)) / (tb - ta) : gb;
+    }
+    for (let c = 0; c < stride; c++) out[i * stride + c]! *= g;
+  }
+}
