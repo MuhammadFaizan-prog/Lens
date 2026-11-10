@@ -133,7 +133,7 @@ test("freeze frame, pause, image slide and brand title card: preview and export"
   await expect(page.getByTestId("insert-group")).toBeVisible();
   await expect(page.getByTestId("lane-freeze")).toBeVisible();
   await seekSrc(page, 1000);
-  await page.getByTestId("add-freeze").click();
+  await page.getByTestId("insert-freeze").click();
   let p = await proj(page);
   expect(p.freezes).toHaveLength(1);
   expect(Math.abs(p.freezes[0].startMs - 1000)).toBeLessThanOrEqual(40);
@@ -145,7 +145,7 @@ test("freeze frame, pause, image slide and brand title card: preview and export"
   await editProject(page, "Freeze range", `(p) => ({ ...p, freezes: [{ ...p.freezes[0], startMs: 1000, endMs: 2500 }] })`);
 
   await seekSrc(page, 2800);
-  await page.getByTestId("add-pause").click();
+  await page.getByTestId("insert-pause").click();
   await seekSrc(page, 4500);
   await page.getByTestId("image-slide-input").setInputFiles(path.join(dir, "..", `picture-${path.basename(dir)}.png`));
   await page.waitForFunction(() => (window as any).__lens.store.get().project.slides.some((s: any) => s.kind === "image"), null, { timeout: 30_000 });
@@ -205,7 +205,7 @@ test("freeze frame, pause, image slide and brand title card: preview and export"
   console.log("export:", file, ((Date.now() - t0) / 1000).toFixed(1), "s");
   const probe = spawnSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", file], { encoding: "utf8" }).stdout.trim();
   console.log("export frames:", probe, "plan frames:", plan.output.frames);
-  expect(Math.abs(Number(probe) - plan.output.frames)).toBeLessThanOrEqual(1);
+  expect(Math.abs(parseInt(probe, 10) - plan.output.frames)).toBeLessThanOrEqual(1);
   const ex = { A: exportFrame(file, fA), B: exportFrame(file, fB), o0: exportFrame(file, f0), o1: exportFrame(file, f1), card: exportFrame(file, fCard), image: exportFrame(file, fImage) };
   for (const [k, v] of Object.entries(ex)) dump(`freeze-export-${k}`, v);
   for (const [k, v] of Object.entries(pv)) dump(`freeze-preview-${k}`, v);

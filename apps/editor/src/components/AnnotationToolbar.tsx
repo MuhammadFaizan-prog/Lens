@@ -50,15 +50,15 @@ export function AnnotationToolbar() {
         <button className="chip-btn" data-testid="add-slide" title={brandOn ? "Insert a full-frame title card in your brand kit's look at the playhead" : "Insert a full-frame title card at the playhead"} onClick={() => store.addTitleCard(Math.round(src))}>
           + Title card
         </button>
-        <button className="chip-btn" data-testid="add-image-slide" title="Insert a still image (PNG, JPEG, WebP) as a full-frame clip at the playhead" onClick={() => imageInput.current?.click()}>
+        <button className="chip-btn" data-testid="insert-image" title="Insert a still image (PNG, JPEG, WebP) as a full-frame clip at the playhead" onClick={() => imageInput.current?.click()}>
           + Image
         </button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp" hidden data-testid="image-slide-input"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) void store.addImageSlide(f, Math.round(src)); e.target.value = ""; }} />
-        <button className="chip-btn" data-testid="add-freeze" title="Freeze frame: hold the screen still from the playhead while sound, cursor and zoom keep going (F)" onClick={() => addFreezeAtPlayhead()}>
+        <button className="chip-btn" data-testid="insert-freeze" title="Freeze frame: hold the screen still from the playhead while sound, cursor and zoom keep going (H)" onClick={() => addFreezeAtPlayhead()}>
           + Freeze
         </button>
-        <button className="chip-btn" data-testid="add-pause" title="Pause: stop the whole video on this frame for 2 s (silent), the rest plays later" onClick={() => store.addSlide(defaultFreezeSlide(newId("pause"), Math.round(src)), "Add pause")}>
+        <button className="chip-btn" data-testid="insert-pause" title="Pause: stop the whole video on this frame for 2 s (silent), the rest plays later" onClick={() => store.addSlide(defaultFreezeSlide(newId("pause"), Math.round(src)), "Add pause")}>
           + Pause
         </button>
       </div>
