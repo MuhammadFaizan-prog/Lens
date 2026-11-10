@@ -542,7 +542,14 @@ export function Timeline() {
           <LabelResizer />
           <div className="tl-ruler-spacer" />
           {TRACKS.map((t) => (
-            <div key={t.kind} className={`tl-label tl-label-${t.kind}`} title={t.label} data-testid={`tl-label-${t.kind}`} style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
+            <div key={t.kind} className={`tl-label tl-label-${t.kind}`} title={t.label} data-testid={`tl-label-${t.kind}`}
+              onContextMenu={(e) => {
+                // right-click a lane name opens its menu too (the "⋯" hides when the column is narrow)
+                if (!LANE_TRACK[t.kind]) return;
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY, kind: "lane", track: LANE_TRACK[t.kind]!, label: t.label });
+              }}
+              style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
               {t.kind === "annotation" ? (
                 <button className="lane-toggle" aria-expanded={annExpanded} data-testid="ann-lane-toggle" title={annExpanded ? "Collapse to one row" : "Expand into rows"} onClick={toggleAnn}>
                   {annExpanded ? "▾" : "▸"}

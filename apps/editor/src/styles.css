@@ -768,3 +768,15 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .tl-label { padding-right: 10px; }
 .tl-label .lane-name { flex: 0 1 auto; }
 .splitter-right::before, .splitter-left::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; cursor: col-resize; }
+/* a narrow lane-header column keeps a readable start of every name: the count and the "⋯" go first
+   (the lane menu is also on right-click), the name keeps >= 28 px, the "+" always stays */
+.tl-labels { container-type: inline-size; }
+.tl-label .lane-name { min-width: 28px; }
+@container (max-width: 150px) {
+  .tl-label { gap: 4px; padding: 0 6px 0 8px; }
+  .tl-label .lane-count { display: none; }
+}
+@container (max-width: 124px) {
+  .tl-label .lane-menu-btn { display: none; }
+  .tl-label .lane-name + .mini-add, .tl-label .lane-name ~ .mini-add { margin-left: auto; }
+}

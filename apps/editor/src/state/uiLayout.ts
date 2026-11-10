@@ -27,7 +27,7 @@ export const MIN_CENTER_W = 380;
 export const MIN_STAGE_H = 240;
 export const MIN_TL_H = 120;
 /** Timeline lane-header column: default fits the longest label ("Annotations" + count + menu + add). */
-export const TL_LABEL_W = 176;
+export const TL_LABEL_W = 200;
 export const TL_LABEL_MIN = 90;
 export const TL_LABEL_MAX = 320;
 /** Inspector (right panel) width bounds while there is room; a small window still shrinks it to fit. */
