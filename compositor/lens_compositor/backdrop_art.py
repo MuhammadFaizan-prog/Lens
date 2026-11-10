@@ -52,6 +52,11 @@ def _poly(img: np.ndarray, pts: list[tuple[float, float]], col: np.ndarray, alph
 
 
 def draw_backdrop_art(art: dict, W: int, H: int) -> np.ndarray:
+    from .backdrop_field import FIELD_STYLES, draw_backdrop_field
+
+    if art.get("style") in FIELD_STYLES:
+        # v0.1.4 per-pixel field backdrops (backdrop_field.py, twin of backdropField.ts)
+        return draw_backdrop_field(art, W, H)
     r = mulberry32(int(art["seed"]))
     c = [_bgr(x) for x in art["colors"]]
     style = art["style"]

@@ -9,6 +9,7 @@
  */
 import type { FontFiles, RenderPlan } from "@lens/engine";
 import { makeCanvas, type AnyCanvas } from "./canvas";
+import { backdropById, prepareBackdrop } from "./backdrops";
 
 export const DEFAULT_FONT_FAMILY = "DejaVu Sans";
 
@@ -109,9 +110,13 @@ export function planImages(plan: RenderPlan): string[] {
 export async function ensurePlanAssets(plan: RenderPlan): Promise<boolean> {
   const fs = (plan.fonts ?? []).filter((f) => f.family !== DEFAULT_FONT_FAMILY);
   const before = fs.filter((f) => fonts.has(`${f.family}|${f.regular}|${f.bold}`)).length + planImages(plan).filter((p) => ready.has(`${dirQuery}|${p}`)).length;
-  await Promise.all([...fs.map(loadFont), ...planImages(plan).map(loadImage)]);
+  // a built-in field backdrop renders at the output size (in a worker on the UI thread): wait for it
+  const bg = plan.style.background;
+  const art = bg.kind === "image" && bg.imagePath ? backdropById(bg.imagePath) : undefined;
+  const m = Math.ceil((bg.blur || 0) * 3);
+  const [fresh] = await Promise.all([art ? prepareBackdrop(art, plan.output.width + 2 * m, plan.output.height + 2 * m) : Promise.resolve(false), ...fs.map(loadFont), ...planImages(plan).map(loadImage)]);
   const after = fs.length + planImages(plan).filter((p) => ready.has(`${dirQuery}|${p}`)).length;
-  return after > before;
+  return after > before || fresh;
 }
 
 const scaled = new Map<string, AnyCanvas>();

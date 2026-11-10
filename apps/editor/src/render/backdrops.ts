@@ -1,12 +1,20 @@
 /**
- * Lens's own backdrop art (Windows bug #20): twelve procedural abstract images, drawn on demand from a
- * seed and a palette, so they ship as code (no image files, nothing downloaded, works offline) and the
+ * Lens's own backdrop art (Windows bug #20): procedural abstract images, drawn on demand from a seed
+ * and a palette, so they ship as code (no image files, nothing downloaded, works offline) and the
  * preview, the export worker and the picker thumbnails draw exactly the same picture at any size.
  * Original designs; no third-party wallpapers or assets. The table lives in the engine (backdropArt.ts).
+ *
+ * The original twelve are vector Canvas2D drawings (below, unchanged). The v0.1.4 "field" backdrops
+ * are per-pixel functions (engine backdropField.ts) rendered at the exact size asked for, so a 4K
+ * export gets 4K pixels. They are cached per (backdrop, size); on the UI thread a large one renders in
+ * a worker (render/backdropWorker.ts) while a small render of the same picture stands in, and
+ * ensurePlanAssets() waits for it so the preview redraws once it lands. The export worker renders
+ * synchronously, so the exported frames always carry the full-resolution picture.
  */
-import { BUILTIN_BACKDROPS, backdropById, type Backdrop } from "@lens/engine";
+import { BACKDROP_CATEGORIES, BUILTIN_BACKDROPS, backdropById, backdropCategories, isFieldStyle, renderBackdropField, type Backdrop, type BackdropCategory } from "@lens/engine";
+import { makeCanvas, type AnyCanvas } from "./canvas";
 
-export { BUILTIN_BACKDROPS, backdropById, type Backdrop };
+export { BACKDROP_CATEGORIES, BUILTIN_BACKDROPS, backdropById, backdropCategories, type Backdrop, type BackdropCategory };
 
 type G = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
@@ -21,8 +29,19 @@ function rng(seed: number): () => number {
   };
 }
 
-/** Draw a built-in backdrop filling W x H (resolution independent: positions and sizes are fractions). */
-export function drawBackdrop(g: G, b: Backdrop, W: number, H: number): void {
+/**
+ * Draw a built-in backdrop filling W x H (resolution independent: positions and sizes are fractions).
+ * Returns false when a stand-in was drawn because the full-size field backdrop is still rendering
+ * (UI thread only); draw again once prepareBackdrop() resolves.
+ */
+export function drawBackdrop(g: G, b: Backdrop, W: number, H: number): boolean {
+  if (isFieldStyle(b.style)) return drawField(g, b, W, H);
+  drawClassic(g, b, W, H);
+  return true;
+}
+
+/** The original twelve's vector drawing (unchanged since v0.1.2: old projects render identically). */
+function drawClassic(g: G, b: Backdrop, W: number, H: number): void {
   const r = rng(b.seed);
   const c = b.colors;
   const lin = g.createLinearGradient(0, 0, W, H);
@@ -90,6 +109,158 @@ export function drawBackdrop(g: G, b: Backdrop, W: number, H: number): void {
     }
   }
   g.restore();
+}
+
+// ---- field backdrops -------------------------------------------------------------------------------
+
+/** Above this many pixels the UI thread renders a field backdrop in a worker, not inline. */
+const UI_SYNC_MAX_PX = 260_000;
+const LRU_MAX = 4;
+const fields = new Map<string, AnyCanvas>();
+const pending = new Map<string, Promise<boolean>>();
+const onUiThread = () => typeof document !== "undefined";
+const keyOf = (b: Backdrop, W: number, H: number) => `${b.id}|${b.seed}|${b.colors.join(",")}|${b.variant ?? 0}|${W}x${H}`;
+
+function toCanvas(px: Uint8ClampedArray, W: number, H: number): AnyCanvas {
+  const c = makeCanvas(W, H);
+  const g = c.getContext("2d") as G;
+  g.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, W, H), 0, 0);
+  return c;
+}
+
+function remember(key: string, c: AnyCanvas): void {
+  fields.delete(key);
+  fields.set(key, c);
+  while (fields.size > LRU_MAX) fields.delete(fields.keys().next().value!);
+}
+
+function fieldNow(b: Backdrop, W: number, H: number): AnyCanvas {
+  const key = keyOf(b, W, H);
+  let c = fields.get(key);
+  if (!c) {
+    c = toCanvas(renderBackdropField(b, W, H), W, H);
+    remember(key, c);
+  } else remember(key, c);
+  return c;
+}
+
+/** A small render of the same picture (cached), drawn scaled up while the full size renders. */
+const standIns = new Map<string, AnyCanvas>();
+function standIn(b: Backdrop, W: number, H: number): AnyCanvas {
+  const k = Math.min(1, 384 / Math.max(W, H));
+  const w = Math.max(1, Math.round(W * k));
+  const h = Math.max(1, Math.round(H * k));
+  const key = keyOf(b, w, h);
+  let c = standIns.get(key);
+  if (!c) {
+    c = toCanvas(renderBackdropField(b, w, h), w, h);
+    if (standIns.size > 16) standIns.clear();
+    standIns.set(key, c);
+  }
+  return c;
+}
+
+let worker: Worker | null = null;
+let jobs = 0;
+const waiting = new Map<number, (px: Uint8ClampedArray | null) => void>();
+function renderInWorker(b: Backdrop, W: number, H: number): Promise<Uint8ClampedArray | null> {
+  try {
+    if (!worker) {
+      worker = new Worker(new URL("./backdropWorker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = (e: MessageEvent<{ id: number; px: Uint8ClampedArray | null }>) => {
+        waiting.get(e.data.id)?.(e.data.px);
+        waiting.delete(e.data.id);
+      };
+      worker.onerror = () => {
+        for (const f of waiting.values()) f(null);
+        waiting.clear();
+        worker = null;
+      };
+    }
+    const id = ++jobs;
+    return new Promise((res) => {
+      waiting.set(id, res);
+      worker!.postMessage({ id, b, W, H });
+    });
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+
+/**
+ * Make sure the field backdrop is rendered at W x H (no-op for the classic twelve). Resolves true
+ * when it was not ready before (the caller redraws).
+ */
+export function prepareBackdrop(b: Backdrop, W: number, H: number): Promise<boolean> {
+  if (!isFieldStyle(b.style)) return Promise.resolve(false);
+  W = Math.max(1, Math.round(W));
+  H = Math.max(1, Math.round(H));
+  const key = keyOf(b, W, H);
+  if (fields.has(key)) return Promise.resolve(false);
+  if (!onUiThread() || W * H <= UI_SYNC_MAX_PX) {
+    fieldNow(b, W, H);
+    return Promise.resolve(true);
+  }
+  let p = pending.get(key);
+  if (!p) {
+    p = renderInWorker(b, W, H).then((px) => {
+      pending.delete(key);
+      // no worker (or it failed): render here rather than never
+      remember(key, px ? toCanvas(px, W, H) : toCanvas(renderBackdropField(b, W, H), W, H));
+      return true;
+    });
+    pending.set(key, p);
+  }
+  return p;
+}
+
+/** Field backdrops still rendering off-thread (test hook: window.__lens.state().backdropsPending). */
+export function pendingBackdrops(): number {
+  return pending.size;
+}
+
+/** True when the field backdrop at W x H is rendered (classic backdrops always are). */
+export function backdropReady(b: Backdrop, W: number, H: number): boolean {
+  return !isFieldStyle(b.style) || fields.has(keyOf(b, Math.max(1, Math.round(W)), Math.max(1, Math.round(H))));
+}
+
+function drawField(g: G, b: Backdrop, W: number, H: number): boolean {
+  const w = Math.max(1, Math.round(W));
+  const h = Math.max(1, Math.round(H));
+  const key = keyOf(b, w, h);
+  const hit = fields.get(key);
+  if (hit || !onUiThread() || w * h <= UI_SYNC_MAX_PX) {
+    g.drawImage(hit ?? fieldNow(b, w, h), 0, 0);
+    return true;
+  }
+  void prepareBackdrop(b, w, h);
+  const lo = standIn(b, w, h);
+  g.save();
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(lo, 0, 0, w, h);
+  g.restore();
+  return false;
+}
+
+// ---- picker thumbnails ------------------------------------------------------------------------------
+
+const thumbs = new Map<string, AnyCanvas>();
+/** The picker thumbnail of a backdrop at w x h, rendered once per session. */
+export function backdropThumb(b: Backdrop, w: number, h: number): AnyCanvas {
+  const key = `${b.id}|${w}x${h}`;
+  let c = thumbs.get(key);
+  if (!c) {
+    c = makeCanvas(w, h);
+    const g = c.getContext("2d") as G;
+    if (isFieldStyle(b.style)) g.putImageData(new ImageData(renderBackdropField(b, w, h) as Uint8ClampedArray<ArrayBuffer>, w, h), 0, 0);
+    else drawClassic(g, b, w, h);
+    thumbs.set(key, c);
+  }
+  return c;
+}
+export function thumbCached(id: string, w: number, h: number): boolean {
+  return thumbs.has(`${id}|${w}x${h}`);
 }
 
 function hexA(hex: string, a: number): string {

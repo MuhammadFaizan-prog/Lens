@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { store } from "./state/store";
+import { pendingBackdrops } from "./render/backdrops";
 import "./styles.css";
 
 // Test / automation hook (Playwright reads state through it; Tauri will call the same store).
@@ -22,6 +23,7 @@ import "./styles.css";
       src: f?.src ?? 0,
       playing: s.playing,
       revision: s.revision,
+      backdropsPending: pendingBackdrops(),
       cuts: s.project.edits.cuts,
       planCuts: s.plan?.cuts ?? [],
       zooms: s.plan?.zoomSegments.map((z) => ({ startMs: z.startMs, endMs: z.endMs, scale: z.scale, auto: z.auto })) ?? [],

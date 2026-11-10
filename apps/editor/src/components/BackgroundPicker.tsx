@@ -4,9 +4,9 @@
  * with angle) and Color (a palette + any hex). Saved in the project and in style presets; draws the
  * same in the preview and the export (render/renderer.ts background()).
  */
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { projectPalette, type ProjectConfig } from "@lens/engine";
-import { BUILTIN_BACKDROPS, drawBackdrop, gradientCss, gradientStops } from "../render/backdrops";
+import { BACKDROP_CATEGORIES, BUILTIN_BACKDROPS, backdropCategories, backdropThumb, gradientCss, gradientStops, thumbCached, type BackdropCategory } from "../render/backdrops";
 import { store } from "../state/store";
 import { Section, Segmented, Slider } from "./Controls";
 
@@ -47,15 +47,55 @@ export const SWATCHES: string[] = (() => {
   return out;
 })();
 
+/** Thumbnail size: 2x the swatch so it stays sharp on HiDPI screens. */
+const TW = 128;
+const TH = 72;
+
+/**
+ * Thumbnails render once per session (backdropThumb caches them). A cached one is copied in before
+ * paint; an uncached one is queued and rendered a few per frame, so the grid opens at once and fills
+ * in instead of blocking on 60 procedural renders.
+ */
+const queue: Array<() => void> = [];
+let pumping = false;
+function pump(): void {
+  if (pumping) return;
+  pumping = true;
+  const step = () => {
+    const t0 = performance.now();
+    while (queue.length && performance.now() - t0 < 12) queue.shift()!();
+    if (queue.length) requestAnimationFrame(step);
+    else pumping = false;
+  };
+  requestAnimationFrame(step);
+}
+
 function Thumb({ id }: { id: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const b = BUILTIN_BACKDROPS.find((x) => x.id === id);
     const c = ref.current;
-    if (b && c) drawBackdrop(c.getContext("2d")!, b, c.width, c.height);
+    if (!b || !c) return;
+    let live = true;
+    const paint = () => {
+      if (!live) return;
+      c.getContext("2d")!.drawImage(backdropThumb(b, TW, TH) as CanvasImageSource, 0, 0);
+      c.dataset.ready = "1";
+    };
+    if (thumbCached(id, TW, TH)) paint();
+    else {
+      queue.push(paint);
+      pump();
+    }
+    return () => {
+      live = false;
+    };
   }, [id]);
-  return <canvas ref={ref} width={96} height={54} className="bg-thumb-canvas" />;
+  return <canvas ref={ref} width={TW} height={TH} className="bg-thumb-canvas" data-testid={`bg-thumb-${id}`} />;
 }
+
+/** The picker's last category, kept while the editor is open. */
+let lastCategory: "all" | BackdropCategory = "all";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
@@ -66,6 +106,12 @@ export function BackgroundPicker({ p }: { p: ProjectConfig }) {
   const [tab, setTab] = useState<Tab>(cur.kind === "image" ? "image" : cur.kind === "hidden" ? "hidden" : cur.kind === "gradient" ? "gradient" : "color");
   const file = useRef<HTMLInputElement>(null);
   const [hex, setHex] = useState(cur.colors[0] ?? "#000000");
+  const [cat, setCatState] = useState<"all" | BackdropCategory>(lastCategory);
+  const setCat = (c: "all" | BackdropCategory) => {
+    lastCategory = c;
+    setCatState(c);
+  };
+  const shown = cat === "all" ? BUILTIN_BACKDROPS : BUILTIN_BACKDROPS.filter((b) => backdropCategories(b).includes(cat));
   const set = (label: string, patch: Partial<ProjectConfig["background"]>, live = false) => {
     const fn = (q: ProjectConfig) => {
       const b = { ...q.background, ...patch, inherit: false };
@@ -99,11 +145,26 @@ export function BackgroundPicker({ p }: { p: ProjectConfig }) {
       </div>
       {tab === "image" && (
         <>
-          <div className="bg-grid" data-testid="bg-images">
-            {BUILTIN_BACKDROPS.map((b) => {
+          <div className="bg-cats" role="tablist" aria-label="Backdrop categories" data-testid="bg-cats">
+            {BACKDROP_CATEGORIES.map((c) => (
+              <button key={c.id} role="tab" aria-selected={cat === c.id} className={`bg-cat ${cat === c.id ? "on" : ""}`} data-testid={`bg-cat-${c.id}`} onClick={() => setCat(c.id)}>
+                {c.label}
+              </button>
+            ))}
+            <button className="bg-cat bg-shuffle" title="Pick a random backdrop from this category" aria-label="Shuffle backdrop" data-testid="bg-shuffle"
+              onClick={() => {
+                const pool = shown.filter((b) => !(cur.kind === "image" && cur.imagePath === `builtin:${b.id}`));
+                const b = pool[Math.floor(Math.random() * pool.length)];
+                if (b) set(`Backdrop ${b.name}`, { kind: "image", imagePath: `builtin:${b.id}`, colors: [b.colors[0]!] });
+              }}>
+              ⤨ Shuffle
+            </button>
+          </div>
+          <div className="bg-grid bg-image-grid" data-testid="bg-images" data-count={shown.length}>
+            {shown.map((b) => {
               const on = cur.kind === "image" && cur.imagePath === `builtin:${b.id}`;
               return (
-                <button key={b.id} className={`bg-swatch img ${on ? "on" : ""}`} title={b.name} aria-label={`Backdrop image ${b.name}`} data-testid={`bg-image-${b.id}`}
+                <button key={b.id} className={`bg-swatch img ${on ? "on" : ""}`} title={b.name} aria-label={`Backdrop image ${b.name}`} data-testid={`bg-image-${b.id}`} data-cats={backdropCategories(b).join(" ")}
                   onClick={() => set(`Backdrop ${b.name}`, { kind: "image", imagePath: `builtin:${b.id}`, colors: [b.colors[0]!] })}>
                   <Thumb id={b.id} />
                 </button>
