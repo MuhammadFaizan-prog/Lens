@@ -19,7 +19,8 @@
  * reference (/api/export, render.py, Pillow / FreeType text) gets a separate, recorded tolerance:
  * glyph IoU >= 0.80 (mean bound unchanged). Reason, Rules.md section 4 "caption export paths": the two
  * rasterisers place glyphs 0.3-0.6 px apart vertically and Pillow's are thinner, which no metric fix
- * removes (measured 2026-11-10, Pillow 13.0 / FreeType 2.14.3: IoU 0.830-0.877).
+ * removes (measured 2026-11-10, Pillow 13.0 / FreeType 2.14.3, RAQM caption text: Poppins 0.905, Bebas
+ * Neue 0.876, Caveat 0.823).
  */
 import { test } from "@playwright/test";
 import fs from "node:fs";

@@ -18,11 +18,11 @@
  *
  * Export path (uxHelpers EXPORT_PATH, LENS_EXPORT): those bounds hold for the browser export, the path
  * the shipped desktop app takes (the preview's renderer draws the frames). The dev server's Python
- * reference (/api/export, render.py, Pillow / FreeType text) gets a separate, recorded tolerance: mean
- * |RGB| <= 16 and glyph IoU >= 0.70. Reason, Rules.md section 4 "caption export paths": Pillow's glyphs
- * sit 0.3-0.6 px higher and are thinner than Chromium's at 27 px, and the neon glow differs over the
- * checkerboard (measured 2026-11-10, Pillow 13.0 / FreeType 2.14.3: classic-subtitle IoU 0.726, neon
- * mean 14.36); widths and line metrics already match (a823e35).
+ * reference (/api/export, render.py, Pillow / FreeType text) keeps the mean bound and gets a separate,
+ * recorded glyph IoU tolerance, >= 0.70. Reason, Rules.md section 4 "caption export paths": with widths,
+ * line metrics (a823e35) and glyph advances (RAQM caption text) matched, Pillow's hinted glyphs still sit
+ * 0.3-0.6 px higher and are thinner than Chromium's at 27 px (measured 2026-11-10, Pillow 13.0 /
+ * FreeType 2.14.3: classic-subtitle IoU 0.761).
  */
 import { test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -33,7 +33,7 @@ import { closeAll, openLens, PACKAGED } from "./lensApp";
 import { EXPORT_PATH, editProject, exportMp4, frameAt, proj, seekSrc, uxBundle } from "./uxHelpers";
 
 /** Preview-vs-export bounds per export path (see the header). */
-const BOUND = EXPORT_PATH === "browser" ? { mean: 12, iou: 0.8 } : { mean: 16, iou: 0.7 };
+const BOUND = EXPORT_PATH === "browser" ? { mean: 12, iou: 0.8 } : { mean: 12, iou: 0.7 };
 
 test.afterAll(() => closeAll());
 
