@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { screen } from "electron";
+import { logLine } from "./log";
 import { dipToCapture, physicalToCapture, resolveClickPoint, type CaptureSize, type DisplayGeom, type Point } from "../shared/coords";
 import { EventLogWriter, headerLine, keyEvent, mouseButton } from "../shared/eventlog";
 import type { InputEvent } from "../../../../packages/engine/src/types";
@@ -40,6 +41,9 @@ export interface StartInfo {
    */
   /** Webcam / system-audio recorders (Windows #7), started with the screen. */
   webcam?: { mime: string; start: number } | null;
+  /** The camera picked in the recorder (its label), and why it could not be recorded, if it could not. */
+  webcamDevice?: string | null;
+  webcamError?: string | null;
   system?: { mime: string; start: number } | null;
   /** Custom mode: the area to keep, in capture px (written as the project's crop). */
   crop?: { x: number; y: number; w: number; h: number } | null;
@@ -271,8 +275,14 @@ export class Recording {
     } else if (info.webcam) {
       cameraError = "a camera was selected but no camera video was recorded (cam.webm missing or empty)";
       this.warnings.push(cameraError);
+    } else if (info.webcamError) {
+      cameraError = info.webcamError;
+      this.warnings.push(cameraError);
     }
     await Promise.all(jobs);
+    if (info.webcam || info.webcamDevice || info.webcamError) {
+      logLine(cameraError ? "WARN" : "INFO", `camera ${JSON.stringify(info.webcamDevice ?? null)}: ${webcam ? `cam.mp4 written (${fs.statSync(path.join(dir, "cam.mp4")).size} bytes, from cam.webm ${fs.existsSync(path.join(dir, "cam.webm")) ? fs.statSync(path.join(dir, "cam.webm")).size : 0} bytes)` : `no camera track: ${cameraError}`}`);
+    }
     onProgress?.("Preparing… 100%");
     const probe = await probeDuration(ffmpeg, path.join(dir, "screen.mp4"));
     const durationMs = probe ?? wallS * 1000;

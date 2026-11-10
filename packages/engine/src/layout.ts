@@ -196,7 +196,9 @@ export function layoutAt(
   cfg: ProjectConfig,
 ): FrameLayout {
   const defaultKind: CameraLayoutKind = cfg.camera.enabled ? "camera-overlay" : "screen-only";
-  const sorted = [...segments].sort((a, b) => a.startMs - b.startMs);
+  // "Show webcam" off hides the camera everywhere: layout segments (split, fullscreen camera, ...) only
+  // apply while it is on, so the toggle works for projects that carry them too
+  const sorted = cfg.camera.enabled ? [...segments].sort((a, b) => a.startMs - b.startMs) : [];
   const kindAt = (t: number): CameraLayoutKind => {
     let k: CameraLayoutKind = defaultKind;
     for (const s of sorted) if (t >= s.startMs && t < s.endMs) k = s.kind;

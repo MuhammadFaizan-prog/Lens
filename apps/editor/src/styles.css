@@ -750,3 +750,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .tl-menu button:hover { background: var(--panel-3); }
 .tl-menu button.danger { color: var(--danger); }
 .selection-card.multi .cue-actions { display: flex; gap: 6px; }
+
+/* Webcam tab: a recording without a camera track (Windows v0.1.2 report) */
+.cam-empty { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; margin: 2px 0 8px; border: 1px dashed var(--line-2); border-radius: 8px; background: var(--panel-3); }
+.cam-empty strong { font-size: 12.5px; color: var(--text); }
+.cam-empty span { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.insp-section .note.warn { color: #f5b14c; }
+.ctl.disabled { opacity: 0.45; }
+.ctl.disabled button, .ctl.disabled select, .ctl.disabled input { cursor: not-allowed; }

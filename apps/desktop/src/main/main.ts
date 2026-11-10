@@ -452,6 +452,7 @@ function registerIpc(): void {
     rec.start({ ...info, quality: settings.record.quality, output: { resolution: settings.export.resolution, fps: settings.export.fps } }, captured);
     // the H.264 encoder probe (test encodes, cached per process) runs now, not after Stop
     void pickH264(ffmpegPath()).catch(() => undefined);
+    logLine(info.webcamError ? "WARN" : "INFO", `recording started: camera ${info.webcamDevice ? JSON.stringify(info.webcamDevice) : "none"}${info.webcam ? ` (${info.webcam.mime})` : ""}${info.webcamError ? ` — ${info.webcamError}` : ""}`);
     if (settings.record.hideWhileRecording) recorderWin?.hide();
     return { ok: true };
   });
