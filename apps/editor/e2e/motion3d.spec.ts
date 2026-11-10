@@ -16,6 +16,14 @@
  *  - browser export (LENS_EXPORT=browser) of the 3 s clip: the export frame 33 vs the preview frame 33,
  *    mean |RGB| per pixel <= 12 (JPEG q0.95 + H.264 noise; same bound as the caption parity specs),
  *    and the export frame 33 is not flat: mean |RGB| vs the 3D-free export's frame 33 >= 3;
+ *  - fix/3d-inspector-014 (Faizi's v0.1.3 report): adding a block opens the 3D tab; the tab bar is
+ *    one row at a 320 px inspector and the Rotate Y range is >= 110 px wide there; clicking a tile
+ *    applies its template; typing 3 into the Rotate Y value sets exactly 3; its ↺ puts 0 back;
+ *    3 interior keyframes with different poses (frames 38 / 45 / 53): the preview at those three
+ *    frames differs pairwise (mean |RGB| on the 8 px grid >= 3) and each matches the export frame
+ *    (mean |RGB| <= 12); the End chip leaves the playhead inside the block with m3d on the frame;
+ *    a 4th key's typed time (0.85 s) moves it; Del on its chip deletes the key, not the block; one diamond
+ *    per keyframe on the timeline block; the 3D-tab tile + Add adds a block with that template.
  *  - perf, reported not asserted: preview fps while playing the 3 s clip with no 3D vs a 3D block over
  *    the whole clip (requestAnimationFrame ticks and preview frames drawn per second over 3 s), and
  *    browser export seconds for the 3 s clip with no 3D, with the 1 s block, and with a 3 s block.
@@ -24,7 +32,7 @@ import { test, type Page } from "@playwright/test";
 import { execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { EDITOR, expect, meanAbsDiff, canvasPixels, seek, settle, shot } from "./helpers";
+import { EDITOR, expect, meanAbsDiff, canvasPixels, seek, settle, shot, waitDrawn } from "./helpers";
 import { closeAll, openLens } from "./lensApp";
 import { editProject, exportMp4, proj, smallExport, uxBundle } from "./uxHelpers";
 
@@ -117,6 +125,15 @@ async function timedExport(page: Page, dir: string): Promise<{ mp4: string; seco
   return { mp4, seconds: ex.seconds ?? wall, wall };
 }
 
+/** Type a value into a slider's number field and commit it with Enter. */
+async function typeVal(page: Page, id: string, v: string): Promise<void> {
+  const f = page.getByTestId(`${id}-value`);
+  await f.click();
+  await f.fill(v);
+  await f.press("Enter");
+  await settle(page);
+}
+
 test("3D motion: lane add, template, slider, keyframe, save template, undo, export matches preview", async () => {
   test.setTimeout(1_200_000);
   const dir = uxBundle("motion3d");
@@ -177,6 +194,24 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   console.log("block", m3[0].startMs, "-", m3[0].endMs, m3[0].template);
   expect(Math.abs(m3[0].startMs - 1000)).toBeLessThanOrEqual(34);
   await expect(page.getByTestId(`block-motion3d-${m3[0].id}`)).toBeVisible();
+  // the block's controls open on the 3D tab
+  await expect(page.getByTestId("tab-motion3d")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("m3d-tab")).toBeVisible();
+  // 320 px inspector: one row of tabs, a usable Rotate Y slider
+  await page.evaluate(() => (document.querySelector(".workspace") as HTMLElement).style.setProperty("--right-w", "320px"));
+  await page.waitForTimeout(200);
+  const lay = await page.evaluate(() => {
+    const insp = document.querySelector('[data-testid="inspector"]')!.getBoundingClientRect().width;
+    const tops = [...document.querySelectorAll('.inspector .tabs [role="tab"]')].map((b) => Math.round(b.getBoundingClientRect().top));
+    const r = document.querySelector('[data-testid="m3d-ry"]')!.getBoundingClientRect().width;
+    const f = document.querySelector('[data-testid="m3d-ry-value"]')!.getBoundingClientRect().width;
+    return { insp, tops, r, f };
+  });
+  console.log("320 px inspector:", JSON.stringify(lay));
+  expect(Math.round(lay.insp)).toBeLessThanOrEqual(322);
+  expect(new Set(lay.tops).size, "tab bar wraps").toBe(1);
+  expect(lay.r).toBeGreaterThanOrEqual(110);
+  await shot(page, "motion3d-inspector-320");
   mem("block added");
   step('2: pick a template');
   // ---- 2: pick a template
@@ -206,7 +241,20 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
 
   mem("3D drawn");
   step('4: Rotate Y slider (Start key)');
-  // ---- 4: Rotate Y slider (Start key)
+  // ---- 4: typed value, reset, then Rotate Y slider (Start key)
+  await typeVal(page, "m3d-ry", "3");
+  expect((await proj(page)).motion3d[0].from.ry).toBe(3);
+  await expect(page.getByTestId("m3d-ry-value")).toHaveValue("3°");
+  await typeVal(page, "m3d-rx", "360");
+  expect((await proj(page)).motion3d[0].from.rx).toBe(360);
+  await page.getByTestId("m3d-rx-reset").click();
+  await settle(page);
+  expect((await proj(page)).motion3d[0].from.rx ?? 0).toBe(0);
+  await page.getByTestId("m3d-ry-reset").click();
+  await settle(page);
+  expect((await proj(page)).motion3d[0].from.ry ?? 0).toBe(0);
+  await expect(page.getByTestId("m3d-ry-reset")).toBeDisabled();
+  await typeVal(page, "m3d-rx", "25");
   await page.getByTestId("m3d-ry").fill("30");
   await settle(page);
   await seek(page, F);
@@ -222,6 +270,57 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   await page.getByTestId("m3d-key-add").click();
   await expect(page.getByTestId("m3d-key-2")).toBeVisible();
   expect((await proj(page)).motion3d[0].keys).toHaveLength(1);
+  await typeVal(page, "m3d-rx", "40");
+
+  step("5b: three interior keyframes with different poses");
+  await seek(page, 38);
+  await page.getByTestId("m3d-key-add").click();
+  await typeVal(page, "m3d-ry", "-35");
+  await seek(page, 53);
+  await page.getByTestId("m3d-key-add").click();
+  await typeVal(page, "m3d-rz", "25");
+  await typeVal(page, "m3d-ry", "20");
+  m3 = (await proj(page)).motion3d;
+  console.log("keys", JSON.stringify(m3[0].keys));
+  expect(m3[0].keys).toHaveLength(3);
+  expect(m3[0].keys[0].pose.ry).toBe(-35);
+  expect(m3[0].keys[1].pose.rx).toBe(40);
+  expect(m3[0].keys[2].pose).toMatchObject({ rz: 25, ry: 20 });
+  // one diamond per keyframe on the timeline block
+  await expect(page.locator(`[data-testid^="m3d-dia-${m3[0].id}-"]`)).toHaveCount(5);
+  // End chip: the playhead stays inside the block, the End pose is drawn
+  await page.getByTestId("m3d-key-4").click();
+  await waitDrawn(page);
+  const endF = await page.evaluate(() => { const s = (window as any).__lens.store.get(); return { src: s.plan.frames[s.frame].src, m3d: !!s.plan.frames[s.frame].m3d, key: s.m3dKey }; });
+  console.log("End chip ->", JSON.stringify(endF), "block end", m3[0].endMs);
+  expect(endF.src).toBeLessThan(m3[0].endMs);
+  expect(endF.m3d).toBe(true);
+  expect(endF.key).toBe(4);
+  await expect(page.getByTestId("m3d-editing")).toHaveText("End");
+  // a 4th key: typed time moves it, Del on its chip deletes the key and keeps the block
+  await seek(page, 57);
+  await page.getByTestId("m3d-key-add").click();
+  expect((await proj(page)).motion3d[0].keys).toHaveLength(4);
+  await typeVal(page, "m3d-key-time", "0.85");
+  const k4 = (await proj(page)).motion3d[0].keys[3];
+  expect(k4.at).toBeCloseTo(0.85 / ((m3[0].endMs - m3[0].startMs) / 1000), 2);
+  await page.getByTestId("m3d-key-4").focus();
+  await page.keyboard.press("Delete");
+  await settle(page);
+  m3 = (await proj(page)).motion3d;
+  expect(m3).toHaveLength(1);
+  expect(m3[0].keys).toHaveLength(3);
+  // three key times show three different poses
+  const keyFrames = [38, 45, 53];
+  const keyGrids: number[][] = [];
+  for (const f of keyFrames) {
+    await seek(page, f);
+    keyGrids.push(await canvasPixels(page));
+  }
+  const dKeys = [meanAbsDiff(keyGrids[0]!, keyGrids[1]!), meanAbsDiff(keyGrids[1]!, keyGrids[2]!), meanAbsDiff(keyGrids[0]!, keyGrids[2]!)];
+  console.log("preview at key frames 38/45/53, pairwise mean |RGB|:", dKeys.map((d) => d.toFixed(2)).join(", "));
+  for (const d of dKeys) expect(d).toBeGreaterThanOrEqual(3);
+  await shot(page, "motion3d-keys");
 
   step('6: save as template, it shows in the grid');
   // ---- 6: save as template, it shows in the grid
@@ -232,7 +331,7 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   step('7: undo removes the block, redo brings it back');
   // ---- 7: undo removes the block, redo brings it back
   let undos = 0;
-  while ((await proj(page)).motion3d.length && undos < 12) {
+  while ((await proj(page)).motion3d.length && undos < 60) {
     await page.evaluate(() => (window as any).__lens.store.undo());
     undos++;
   }
@@ -244,13 +343,18 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   for (let i = 0; i < undos; i++) await page.evaluate(() => (window as any).__lens.store.redo());
   m3 = (await proj(page)).motion3d;
   expect(m3).toHaveLength(1);
-  expect(m3[0].keys).toHaveLength(1);
+  expect(m3[0].keys).toHaveLength(3);
   expect(m3[0].from.ry).toBe(30);
   await noGlError();
 
   mem("before 3D export");
   step('8: export, frame 33 vs preview frame 33');
   // ---- 8: export, frame 33 vs preview frame 33
+  const keyPrev: Array<{ w: number; h: number; rgb: Buffer }> = [];
+  for (const f of keyFrames) {
+    await seek(page, f);
+    keyPrev.push(await previewRgb(page));
+  }
   await seek(page, F + 1);
   await seek(page, F);
   const prev = await previewRgb(page);
@@ -267,9 +371,28 @@ test("3D motion: lane add, template, slider, keyframe, save template, undo, expo
   console.log(`export frame ${F} vs preview: mean |RGB| ${dPar.toFixed(2)} (bound 12); vs 3D-free export: ${dNotFlat.toFixed(2)} (bound >= 3)`);
   expect(dPar).toBeLessThanOrEqual(12);
   expect(dNotFlat).toBeGreaterThanOrEqual(3);
+  const keyPar = keyFrames.map((f, i) => {
+    const e = frameIdx(exp3d.mp4, f);
+    dumpRgb(`motion3d-key${f}-preview`, keyPrev[i]!);
+    dumpRgb(`motion3d-key${f}-export`, e);
+    return meanRgbDiff(keyPrev[i]!.rgb, e.rgb);
+  });
+  console.log("export vs preview at key frames 38/45/53:", keyPar.map((d) => d.toFixed(2)).join(", "), "(bound 12)");
+  for (const d of keyPar) expect(d).toBeLessThanOrEqual(12);
   await noGlError();
 
   mem("after 3D export");
+  step("3D tab: pick a tile, Add 3D at playhead");
+  await page.evaluate(() => (window as any).__lens.store.select(null));
+  await seek(page, 75);
+  await page.getByTestId("tab-motion3d").click();
+  await page.getByTestId("look-m3d-tpl-roll").click();
+  await expect(page.getByTestId("look-m3d-tpl-roll")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("look-add-3d").click();
+  m3 = (await proj(page)).motion3d;
+  expect(m3).toHaveLength(2);
+  expect(m3[1].template).toBe("roll");
+  expect(Math.abs(m3[1].startMs - 2500)).toBeLessThanOrEqual(34);
   step('perf with a 3D block over the whole clip');
   // ---- perf with a 3D block over the whole clip
   await editProject(page, "3D over the clip", "(p) => ({ ...p, motion3d: [{ id: 'perf', startMs: 0, endMs: 3000, template: 'custom', from: { rx: 20, ry: -25 }, to: { rx: -10, ry: 25 }, easing: 'linear', perspective: 1600 }] })");

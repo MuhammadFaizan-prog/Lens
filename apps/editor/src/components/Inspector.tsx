@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
+import { useEffect, useRef, useState } from "react";
+import { defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
@@ -10,14 +10,18 @@ import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
 import { AspectRow } from "./AspectPicker";
 import { FramingTiles, ScreenSection } from "./ScreenSection";
-import { Motion3dCard, Motion3dLookSection } from "./Motion3dInspector";
+import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
 
-type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
+/** Project defaults: what each slider's reset button (↺) and double-click go back to. */
+const D = defaultProject();
+
+type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "look", label: "Look" },
   { id: "zoom", label: "Zoom" },
+  { id: "motion3d", label: "3D" },
   { id: "cursor", label: "Cursor" },
   { id: "camera", label: "Webcam" },
   { id: "captions", label: "Captions" },
@@ -63,7 +67,7 @@ function MultiSelectionCard({ n }: { n: number }) {
   );
 }
 
-function SelectionCard() {
+function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const sel = useEditor((s) => s.selection);
   const multiN = useEditor((s) => s.multi.length);
   const project = useEditor((s) => s.project);
@@ -77,8 +81,19 @@ function SelectionCard() {
     return a ? <AnnotationCard a={a} /> : null;
   }
   if (sel.track === "motion3d") {
+    // the block's controls live on the 3D tab; from another tab, one line leads back there
     const m = project.motion3d[sel.index];
-    return m ? <Motion3dCard index={sel.index} seg={m} /> : null;
+    if (!m || tab === "motion3d") return null;
+    return (
+      <div className="selection-card m3d-mini" data-testid="m3d-mini">
+        <div className="sel-head">
+          <span className="dot dot-motion3d" />
+          <b>3D motion</b>
+          <span className="sel-time">{timecode(m.startMs, fps)} – {timecode(m.endMs, fps)}</span>
+          <button className="chip-btn" data-testid="m3d-open-tab" onClick={() => onTab("motion3d")}>Edit on 3D tab</button>
+        </div>
+      </div>
+    );
   }
   if (sel.track === "slide") {
     const s = project.slides[sel.index];
@@ -95,7 +110,7 @@ function SelectionCard() {
     const meta = store.get().bundle?.meta;
     body = (
       <>
-        <Slider label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />
+        <Slider defaultValue={project.zoom.defaultScale} label="Scale" value={z.scale} min={1} max={project.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="sel-zoom-scale" onChange={(v) => tweak("Zoom scale", { scale: v })} />
         <Segmented
           label="Target"
           value={z.focus === "follow" ? "follow" : "fixed"}
@@ -110,7 +125,7 @@ function SelectionCard() {
     const s = project.edits.speed[sel.index];
     if (!s) return null;
     range = s;
-    body = <Slider label="Rate" value={s.rate} min={0.25} max={8} step={0.25} format={(v) => `${v}×`} testId="sel-speed-rate" onChange={(v) => tweak("Speed rate", { rate: v })} />;
+    body = <Slider defaultValue={1} label="Rate" value={s.rate} min={0.25} max={8} step={0.25} format={(v) => `${v}×`} testId="sel-speed-rate" onChange={(v) => tweak("Speed rate", { rate: v })} />;
   } else if (sel.track === "mask") {
     const m = project.masks[sel.index];
     if (!m) return null;
@@ -125,8 +140,8 @@ function SelectionCard() {
           options={[{ value: "blur", label: "Blur" }, { value: "pixelate", label: "Pixelate" }, { value: "spotlight", label: "Spotlight" }]}
           onChange={(k) => store.edit("Mask kind", (p) => updateBlock(p, "mask", sel.index, { kind: k, strength: DEFAULT_MASK_STRENGTH[k] }))}
         />
-        <Slider label={m.kind === "spotlight" ? "Dim" : m.kind === "blur" ? "Blur" : "Block"} value={strength} min={sr.min} max={sr.max} step={sr.step} format={sr.f} onChange={(v) => tweak("Mask strength", { strength: v })} />
-        <Slider label="Feather" value={m.feather} min={0} max={40} step={1} format={px} onChange={(v) => tweak("Mask feather", { feather: v })} />
+        <Slider defaultValue={DEFAULT_MASK_STRENGTH[m.kind]} label={m.kind === "spotlight" ? "Dim" : m.kind === "blur" ? "Blur" : "Block"} value={strength} min={sr.min} max={sr.max} step={sr.step} format={sr.f} onChange={(v) => tweak("Mask strength", { strength: v })} />
+        <Slider defaultValue={0} label="Feather" value={m.feather} min={0} max={40} step={1} format={px} onChange={(v) => tweak("Mask feather", { feather: v })} />
         {m.keys?.length ? (
           <p className="note" data-testid="sel-mask-tracked">Tracked: follows the content ({m.keys.length} keys){m.privacyId ? `, from privacy item ${m.privacyId}` : ""}.</p>
         ) : (
@@ -159,7 +174,7 @@ function SelectionCard() {
     const o = project.overrides.filter((x) => x.volume !== undefined)[sel.index];
     if (!o) return null;
     range = o;
-    body = <Slider label="Volume" value={o.volume ?? 1} min={0} max={2} step={0.05} format={pct} testId="sel-volume" onChange={(v) => tweak("Segment volume", { volume: v })} />;
+    body = <Slider defaultValue={1} label="Volume" value={o.volume ?? 1} min={0} max={2} step={0.05} format={pct} testId="sel-volume" onChange={(v) => tweak("Segment volume", { volume: v })} />;
   } else {
     const c = project.edits.cuts[sel.index];
     if (!c) return null;
@@ -195,18 +210,17 @@ function LookTab({ p }: { p: ProjectConfig }) {
     <>
       <BackgroundPicker p={p} />
       <Section title="Frame">
-        <Slider label="Padding" value={p.frame.padding} min={0} max={0.25} step={0.005} format={pct} testId="padding" onChange={(v) => t("Padding", (q) => ({ ...q, frame: { ...q.frame, padding: v } }))} />
-        <Slider label="Radius" value={p.frame.radius} min={0} max={60} step={1} format={px} testId="radius" onChange={(v) => t("Corner radius", (q) => ({ ...q, frame: { ...q.frame, radius: v } }))} />
-        <Slider label="Shadow" value={p.frame.shadow.opacity} min={0} max={1} step={0.01} format={pct} testId="shadow" onChange={(v) => t("Shadow", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, opacity: v } } }))} />
-        <Slider label="Softness" value={p.frame.shadow.blur} min={0} max={120} step={1} format={px} onChange={(v) => t("Shadow softness", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, blur: v } } }))} />
-        <Slider label="Lift" value={p.frame.shadow.offsetY} min={0} max={60} step={1} format={px} onChange={(v) => t("Shadow offset", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, offsetY: v } } }))} />
+        <Slider defaultValue={D.frame.padding} label="Padding" value={p.frame.padding} min={0} max={0.25} step={0.005} format={pct} testId="padding" onChange={(v) => t("Padding", (q) => ({ ...q, frame: { ...q.frame, padding: v } }))} />
+        <Slider defaultValue={D.frame.radius} label="Radius" value={p.frame.radius} min={0} max={60} step={1} format={px} testId="radius" onChange={(v) => t("Corner radius", (q) => ({ ...q, frame: { ...q.frame, radius: v } }))} />
+        <Slider defaultValue={D.frame.shadow.opacity} label="Shadow" value={p.frame.shadow.opacity} min={0} max={1} step={0.01} format={pct} testId="shadow" onChange={(v) => t("Shadow", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, opacity: v } } }))} />
+        <Slider defaultValue={D.frame.shadow.blur} label="Softness" value={p.frame.shadow.blur} min={0} max={120} step={1} format={px} onChange={(v) => t("Shadow softness", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, blur: v } } }))} />
+        <Slider defaultValue={D.frame.shadow.offsetY} label="Lift" value={p.frame.shadow.offsetY} min={0} max={60} step={1} format={px} onChange={(v) => t("Shadow offset", (q) => ({ ...q, frame: { ...q.frame, shadow: { ...q.frame.shadow, offsetY: v } } }))} />
       </Section>
       <ScreenSection />
       <Section title="Output">
         <AspectRow />
         <FramingTiles idPrefix="out-framing" tilesOnly />
       </Section>
-      <Motion3dLookSection />
     </>
   );
 }
@@ -234,15 +248,15 @@ function ZoomTab({ p }: { p: ProjectConfig }) {
           ]}
           onChange={(v) => v !== "custom" && store.applyPreset(v)}
         />
-        <Slider label="Depth" value={p.zoom.defaultScale} min={p.zoom.minScale} max={p.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="zoom-depth" onChange={(v) => t("Zoom depth", () => ({ defaultScale: v }))} />
-        <Slider label="Settle" value={settleOf(p.zoom.spring)} min={300} max={2400} step={50} format={sec} testId="zoom-settle" onChange={(v) => t("Zoom speed", () => ({ spring: springFromSettle(v, 1) }))} />
-        <Slider label="Hold" value={p.zoom.holdMs} min={300} max={4000} step={100} format={sec} onChange={(v) => t("Zoom hold", () => ({ holdMs: v }))} />
-        <Slider label="Pan later" value={p.zoom.followDeadzone} min={0.1} max={0.9} step={0.05} format={pct} onChange={(v) => t("Follow deadzone", () => ({ followDeadzone: v }))} />
+        <Slider defaultValue={D.zoom.defaultScale} label="Depth" value={p.zoom.defaultScale} min={p.zoom.minScale} max={p.zoom.maxScale} step={0.05} format={(v) => `${v.toFixed(2)}×`} testId="zoom-depth" onChange={(v) => t("Zoom depth", () => ({ defaultScale: v }))} />
+        <Slider defaultValue={settleOf(D.zoom.spring)} label="Settle" value={settleOf(p.zoom.spring)} min={300} max={2400} step={50} format={sec} testId="zoom-settle" onChange={(v) => t("Zoom speed", () => ({ spring: springFromSettle(v, 1) }))} />
+        <Slider defaultValue={D.zoom.holdMs} label="Hold" value={p.zoom.holdMs} min={300} max={4000} step={100} format={sec} onChange={(v) => t("Zoom hold", () => ({ holdMs: v }))} />
+        <Slider defaultValue={D.zoom.followDeadzone} label="Pan later" value={p.zoom.followDeadzone} min={0.1} max={0.9} step={0.05} format={pct} onChange={(v) => t("Follow deadzone", () => ({ followDeadzone: v }))} />
       </Section>
       <Section title="Zoom budget" aside={<span className="stat">calm camera</span>}>
         <Toggle label="Limit how often it zooms" value={p.zoom.budget.enabled} testId="budget" onChange={(v) => store.edit(v ? "Zoom budget on" : "Zoom budget off", (q) => ({ ...q, zoom: { ...q.zoom, budget: { ...q.zoom.budget, enabled: v }, preset: "custom" } }))} />
-        <Slider label="Max / minute" value={p.zoom.budget.maxPerMinute} min={1} max={12} step={1} testId="budget-max" onChange={(v) => t("Zoom budget", (z) => ({ budget: { ...z.budget, maxPerMinute: v } }))} />
-        <Slider label="Min hold" value={p.zoom.budget.minHoldMs} min={500} max={6000} step={100} format={sec} testId="budget-hold" onChange={(v) => t("Zoom min hold", (z) => ({ budget: { ...z.budget, minHoldMs: v } }))} />
+        <Slider defaultValue={D.zoom.budget.maxPerMinute} label="Max / minute" value={p.zoom.budget.maxPerMinute} min={1} max={12} step={1} testId="budget-max" onChange={(v) => t("Zoom budget", (z) => ({ budget: { ...z.budget, maxPerMinute: v } }))} />
+        <Slider defaultValue={D.zoom.budget.minHoldMs} label="Min hold" value={p.zoom.budget.minHoldMs} min={500} max={6000} step={100} format={sec} testId="budget-hold" onChange={(v) => t("Zoom min hold", (z) => ({ budget: { ...z.budget, minHoldMs: v } }))} />
       </Section>
     </>
   );
@@ -254,15 +268,15 @@ function CursorTab({ p }: { p: ProjectConfig }) {
     <>
       <Section title="Cursor">
         <Toggle label="Show cursor" value={p.cursor.visible} onChange={(v) => store.edit("Cursor visibility", (q) => ({ ...q, cursor: { ...q.cursor, visible: v } }))} />
-        <Slider label="Size" value={p.cursor.size} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)}×`} testId="cursor-size" onChange={(v) => t("Cursor size", () => ({ size: v }))} />
+        <Slider defaultValue={D.cursor.size} label="Size" value={p.cursor.size} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)}×`} testId="cursor-size" onChange={(v) => t("Cursor size", () => ({ size: v }))} />
         <Toggle label="Smooth movement" value={p.cursor.smoothing.enabled} testId="cursor-smoothing" onChange={(v) => store.edit("Cursor smoothing", (q) => ({ ...q, cursor: { ...q.cursor, smoothing: { ...q.cursor.smoothing, enabled: v } } }))} />
-        <Slider label="Smoothing" value={settleOf(p.cursor.smoothing.spring)} min={60} max={800} step={10} format={(v) => `${v} ms`} testId="cursor-smooth-ms" onChange={(v) => t("Cursor smoothing", (c) => ({ smoothing: { ...c.smoothing, spring: springFromSettle(v, 1) } }))} />
+        <Slider defaultValue={settleOf(D.cursor.smoothing.spring)} label="Smoothing" value={settleOf(p.cursor.smoothing.spring)} min={60} max={800} step={10} format={(v) => `${v} ms`} testId="cursor-smooth-ms" onChange={(v) => t("Cursor smoothing", (c) => ({ smoothing: { ...c.smoothing, spring: springFromSettle(v, 1) } }))} />
         <Toggle label="Hide when idle" value={p.cursor.hideWhenIdle} onChange={(v) => store.edit("Idle hide", (q) => ({ ...q, cursor: { ...q.cursor, hideWhenIdle: v } }))} />
         <Select label="Click effect" value={p.cursor.clickEffect} options={[{ value: "ripple", label: "Ripple" }, { value: "circle", label: "Pulse" }, { value: "highlight", label: "Glow" }, { value: "none", label: "None" }]} onChange={(v) => store.edit("Click effect", (q) => ({ ...q, cursor: { ...q.cursor, clickEffect: v } }))} />
       </Section>
       <Section title="Motion blur">
         <Toggle label="Motion blur" value={p.motionBlur.enabled} testId="motion-blur" onChange={(v) => store.edit("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, enabled: v } }))} />
-        <Slider label="Shutter" value={p.motionBlur.strength} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => store.tweak("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, strength: v } }))} />
+        <Slider defaultValue={D.motionBlur.strength} label="Shutter" value={p.motionBlur.strength} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => store.tweak("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, strength: v } }))} />
       </Section>
     </>
   );
@@ -290,10 +304,10 @@ function CameraTab({ p }: { p: ProjectConfig }) {
       {ui.warning && <p className="note warn" data-testid="cam-warning">Recorder: {ui.warning}</p>}
       <Toggle label="Show webcam" value={!off && p.camera.enabled} disabled={off} testId="cam-enabled" onChange={(v) => store.edit(v ? "Webcam on" : "Webcam off", (q) => ({ ...q, camera: { ...q.camera, enabled: v } }))} />
       <Select label="Corner" value={p.camera.corner} disabled={off} testId="cam-corner" options={[{ value: "bottom-right", label: "Bottom right" }, { value: "bottom-left", label: "Bottom left" }, { value: "top-right", label: "Top right" }, { value: "top-left", label: "Top left" }]} onChange={(v) => store.edit("Webcam corner", (q) => ({ ...q, camera: { ...q.camera, corner: v } }))} />
-      <Slider label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} disabled={off} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
+      <Slider defaultValue={D.camera.size} label="Size" value={p.camera.size} min={0.12} max={0.45} step={0.01} format={pct} disabled={off} testId="cam-size" onChange={(v) => t("Webcam size", () => ({ size: v }))} />
       <Segmented label="Shape" stacked value={p.camera.shape} disabled={off} testId="cam-shape" options={WEBCAM_SHAPES} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
       <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
-      <Slider label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+      <Slider defaultValue={D.camera.zoomedSize} label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
     </Section>
   );
 }
@@ -308,17 +322,17 @@ function CaptionsTab({ p }: { p: ProjectConfig }) {
       <Toggle label="Burn in captions" value={p.captions.enabled} testId="captions-enabled" onChange={(v) => store.edit(v ? "Captions on" : "Captions off", (q) => ({ ...q, captions: { ...q.captions, enabled: v } }))} />
       <Toggle label="Highlight spoken word" value={p.captions.wordHighlight} testId="word-highlight" onChange={(v) => store.edit("Word highlight", (q) => ({ ...q, captions: { ...q.captions, wordHighlight: v } }))} />
       <CaptionStyleControls p={p} />
-      <Slider label="Size" value={cs.fontSize} min={24} max={96} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
+      <Slider defaultValue={D.captions.style.fontSize} label="Size" value={cs.fontSize} min={24} max={96} step={1} format={px} testId="caption-size" onChange={(v) => t("Caption size", () => ({ fontSize: v }))} />
       <Segmented label="Position" testId="caption-position" value={cs.position} options={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }, { value: "custom", label: "Custom", hint: "Drag the caption on the preview, or set its height below" }]} onChange={(v) => store.edit("Caption position", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, position: v } } }))} />
-      {cs.position === "custom" && <Slider label="Height" value={cs.y} min={0.05} max={0.95} step={0.01} format={pct} testId="caption-y" onChange={(v) => t("Caption height", () => ({ y: v }))} />}
-      <Slider label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
-      <Slider label="Chars / line" value={cs.maxCharsPerLine} min={0} max={80} step={1} format={(v) => (v ? String(v) : "off")} testId="caption-chars" onChange={(v) => t("Characters per line", () => ({ maxCharsPerLine: v }))} />
+      {cs.position === "custom" && <Slider defaultValue={D.captions.style.y} label="Height" value={cs.y} min={0.05} max={0.95} step={0.01} format={pct} testId="caption-y" onChange={(v) => t("Caption height", () => ({ y: v }))} />}
+      <Slider defaultValue={D.captions.style.maxWordsPerLine} label="Words / line" value={cs.maxWordsPerLine} min={2} max={10} step={1} onChange={(v) => t("Words per line", () => ({ maxWordsPerLine: v }))} />
+      <Slider defaultValue={D.captions.style.maxCharsPerLine} label="Chars / line" value={cs.maxCharsPerLine} min={0} max={80} step={1} format={(v) => (v ? String(v) : "off")} testId="caption-chars" onChange={(v) => t("Characters per line", () => ({ maxCharsPerLine: v }))} />
       <ColorInput label="Highlight" value={cs.highlightColor} testId="caption-highlight" onChange={(v) => t("Highlight colour", () => ({ highlightColor: v }))}
         onReset={() => store.edit("Highlight follows theme", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, highlightColor: "@highlight" } } }))} />
       <ColorInput label="Text" value={cs.textColor} testId="caption-text-color" onChange={(v) => t("Caption colour", () => ({ textColor: v }))} />
       <Toggle label="Backing pill" value={cs.background.enabled} testId="caption-box" onChange={(v) => store.edit("Caption pill", (q) => ({ ...q, captions: { ...q.captions, style: { ...q.captions.style, background: { ...q.captions.style.background, enabled: v } } } }))} />
       {cs.background.enabled && <ColorInput label="Pill colour" value={cs.background.color} testId="caption-box-color" onChange={(v) => t("Pill colour", (c) => ({ background: { ...c.background, color: v } }))} />}
-      <Slider label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
+      <Slider defaultValue={D.captions.style.background.opacity} label="Pill opacity" value={cs.background.opacity} min={0} max={1} step={0.02} format={pct} onChange={(v) => t("Pill opacity", (c) => ({ background: { ...c.background, opacity: v } }))} />
     </Section>
     <ManualCaptions p={p} />
     </>
@@ -507,13 +521,13 @@ function AudioTab({ p }: { p: ProjectConfig }) {
       <Section title="Mic track" aside={!tr ? <span className="stat">no audio</span> : undefined}>
         {tr && (
           <>
-            <Slider label="Volume" value={tr.volume} min={0} max={2} step={0.05} format={pct} testId="volume" onChange={(v) => setTrack("Volume", { volume: v }, true)} />
+            <Slider defaultValue={1} label="Volume" value={tr.volume} min={0} max={2} step={0.05} format={pct} testId="volume" onChange={(v) => setTrack("Volume", { volume: v }, true)} />
             <Toggle label="Mute" value={tr.muted} onChange={(v) => setTrack(v ? "Mute" : "Unmute", { muted: v })} />
           </>
         )}
         <Toggle label="Noise reduction" value={p.audio.noiseReduction.enabled} testId="denoise" onChange={(v) => store.edit("Noise reduction", (q) => ({ ...q, audio: { ...q.audio, noiseReduction: { ...q.audio.noiseReduction, enabled: v } } }))} />
         <Toggle label="Level loudness" value={p.audio.loudness.enabled} testId="loudness" onChange={(v) => store.edit("Loudness", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, enabled: v } } }))} />
-        <Slider label="Target" value={p.audio.loudness.targetLufs} min={-24} max={-10} step={1} format={(v) => `${v} LUFS`} onChange={(v) => store.tweak("Loudness target", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, targetLufs: v } } }))} />
+        <Slider defaultValue={D.audio.loudness.targetLufs} label="Target" value={p.audio.loudness.targetLufs} min={-24} max={-10} step={1} format={(v) => `${v} LUFS`} onChange={(v) => store.tweak("Loudness target", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, targetLufs: v } } }))} />
         <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
       </Section>
       <Section title="Cleanup">
@@ -521,7 +535,7 @@ function AudioTab({ p }: { p: ProjectConfig }) {
             measured silences, so they work with no transcript; fillers need the transcript's words */}
         <Toggle label="Remove fillers" value={cl.enabled && cl.removeFillers} testId="cleanup-fillers" onChange={(v) => setCleanup("Remove fillers", { removeFillers: v, shortenPauses: cl.enabled && cl.shortenPauses })} />
         <Toggle label="Shorten pauses" value={cl.enabled && cl.shortenPauses} testId="cleanup-pauses" onChange={(v) => setCleanup("Shorten pauses", { shortenPauses: v, removeFillers: cl.enabled && cl.removeFillers })} />
-        <Slider label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} testId="cleanup-maxpause" onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
+        <Slider defaultValue={D.edits.cleanup.maxPauseMs} label="Longest pause" value={cl.maxPauseMs} min={cl.keepPauseMs + 100} max={3000} step={50} format={sec} testId="cleanup-maxpause" onChange={(v) => store.tweak("Longest pause", (q) => ({ ...q, edits: { ...q.edits, cleanup: { ...q.edits.cleanup, maxPauseMs: v } } }))} />
         {cl.enabled && (
           <p className="note" data-testid="cleanup-summary">
             {cleanupN} cut{cleanupN === 1 ? "" : "s"} on the Cuts lane{cleanupN ? ` (${(cleanupMs / 1000).toFixed(1)} s removed)` : ""}; Ctrl+Z undoes.
@@ -537,10 +551,16 @@ function AudioTab({ p }: { p: ProjectConfig }) {
 export function Inspector() {
   const [tab, setTab] = useState<Tab>("look");
   const p = useEditor((s) => s.project);
+  // selecting a 3D block (timeline click, lane add, Add 3D) opens the 3D tab, where its controls are
+  const sel = useEditor((s) => s.selection);
+  // (keyed on the selection object: every click selects anew, so re-clicking the block comes back too)
+  useEffect(() => {
+    if (sel?.track === "motion3d") setTab("motion3d");
+  }, [sel]);
   const planMs = useEditor((s) => s.planMs);
   return (
     <aside className="inspector" data-testid="inspector">
-      <SelectionCard />
+      <SelectionCard tab={tab} onTab={setTab} />
       <nav className="tabs" role="tablist">
         {TABS.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} data-testid={`tab-${t.id}`} onClick={() => setTab(t.id)}>
@@ -551,6 +571,7 @@ export function Inspector() {
       <div className="insp-scroll">
         {tab === "look" && <LookTab p={p} />}
         {tab === "zoom" && <ZoomTab p={p} />}
+        {tab === "motion3d" && <Motion3dTab />}
         {tab === "cursor" && <CursorTab p={p} />}
         {tab === "camera" && <CameraTab p={p} />}
         {tab === "captions" && (

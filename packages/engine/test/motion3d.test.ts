@@ -83,6 +83,57 @@ describe("motion3d interpolation", () => {
     expect(p.tz).toBeCloseTo(100, 6);
   });
 
+  it("3 interior keys (5 poses): every key is hit at its time, spans interpolate, per-key easing applies (fix/3d-inspector-014)", () => {
+    const s = seg({
+      startMs: 1000,
+      endMs: 3000,
+      easing: "linear",
+      from: { ry: -30 },
+      to: { ry: 30, scale: 0.9 },
+      keys: [
+        { at: 0.25, pose: { rx: 20 } },
+        { at: 0.5, pose: { rx: -20, rz: 10, tx: 0.1 }, easing: "ease-in-out" },
+        { at: 0.75, pose: { ry: 45, tz: -200 } },
+      ],
+    });
+    const at = (u: number) => segmentPoseAt(s, 1000 + u * 2000);
+    expect(at(0)).toEqual({ ...IDENTITY_POSE, ry: -30 });
+    expect(at(0.25)).toEqual({ ...IDENTITY_POSE, rx: 20 });
+    expect(at(0.5)).toEqual({ ...IDENTITY_POSE, rx: -20, rz: 10, tx: 0.1 });
+    expect(at(0.75)).toEqual({ ...IDENTITY_POSE, ry: 45, tz: -200 });
+    expect(at(1)).toEqual({ ...IDENTITY_POSE, ry: 30, scale: 0.9 });
+    // linear span 0 -> 0.25: halfway between Start and Key 1
+    expect(at(0.125).ry).toBeCloseTo(-15, 9);
+    expect(at(0.125).rx).toBeCloseTo(10, 9);
+    // ease-in-out span 0.25 -> 0.5: a quarter in is ease-in-out(0.25) = 0.0625 of the way
+    expect(at(0.3125).rx).toBeCloseTo(20 - 40 * 0.0625, 9);
+    // linear span 0.75 -> 1
+    expect(at(0.875).ry).toBeCloseTo(37.5, 9);
+    expect(at(0.875).scale).toBeCloseTo(0.95, 9);
+    // three different times give three different poses through motion3dAt (what the plan carries)
+    const ps = [1250, 2000, 2500].map((t) => motion3dAt([s], t)!.pose);
+    expect(new Set(ps.map((p) => JSON.stringify(p))).size).toBe(3);
+  });
+
+  it("a block is active for startMs <= src < endMs: at endMs exactly it is flat unless held (why the editor seeks the End key a frame early)", () => {
+    const s = seg({ startMs: 1000, endMs: 2000, from: {}, to: { ry: 40 } });
+    expect(motion3dAt([s], 1999)!.pose.ry).toBeCloseTo(39.96, 6);
+    expect(motion3dAt([s], 2000)).toBeNull();
+    expect(motion3dAt([{ ...s, hold: true }], 2000)!.pose.ry).toBe(40);
+  });
+
+  it("render plan: frames at three key times of a 3-key block differ and match motion3dAt", () => {
+    const s = seg({ startMs: 1000, endMs: 2000, easing: "linear", from: { rx: 30 }, to: { ry: -30 }, keys: [{ at: 0.5, pose: { rz: 15, ry: 20 } }] });
+    const pl = plan({ ...defaultProject(), motion3d: [s] });
+    const fr = [1000, 1500, 1966.67].map((ms) => pl.frames.find((f) => Math.abs(f.src - ms) < 17)!);
+    const poses = fr.map((f) => f.m3d!.pose);
+    expect(poses[0]![0]).toBeCloseTo(30, 2);
+    expect(poses[1]![1]).toBeCloseTo(20, 2);
+    expect(poses[1]![2]).toBeCloseTo(15, 2);
+    expect(poses[2]![1]).toBeLessThan(-25);
+    expect(new Set(poses.map((p) => p.join())).size).toBe(3);
+  });
+
   it("hold keeps the final pose until the next segment starts", () => {
     const a = seg({ id: "a", from: {}, to: { rx: 25 }, hold: true });
     const b = seg({ id: "b", startMs: 4000, endMs: 5000, from: { rx: 25 }, to: {} });

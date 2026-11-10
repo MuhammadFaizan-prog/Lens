@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { applyWordEdits, captionBlocks, captionWords, mergeCaptionCues } from "@lens/engine";
+import { applyWordEdits, captionBlocks, captionWords, mergeCaptionCues, type Motion3DSegment } from "@lens/engine";
+import { keyAt, keyCount, mapSegment, setKeyAt } from "../state/motion3dOps";
 import { store, useEditor } from "../state/store";
 import {
   addBlock,
@@ -134,6 +135,7 @@ export function Timeline() {
   const frame = useEditor((s) => s.frame);
   const selection = useEditor((s) => s.selection);
   const templates = useEditor((s) => s.motion3dTemplates);
+  const m3dKey = useEditor((s) => s.m3dKey);
   const multi = useEditor((s) => s.multi);
   const audition = useEditor((s) => s.audition);
   const playing = useEditor((s) => s.playing);
@@ -479,7 +481,65 @@ export function Timeline() {
   const zoomLevel = Math.round((pps / fitPps) * 100);
   const peaks = store.audio.peaks;
 
-  const block = (track: TrackKind, i: number, r: Range, label: string, extra = "", testId?: string, style: React.CSSProperties = {}) => {
+  /**
+   * Keyframe diamonds on a 3D block: one per keyframe (Start / End at the edges, inside the trim
+   * handles). Click selects the block and the keyframe and puts the playhead on it; dragging an
+   * inner one moves it in time (clamped between its neighbours, one undo step).
+   */
+  const keyDiamonds = (i: number, m: Motion3DSegment) => {
+    const n = keyCount(m);
+    const w = Math.max(4, xOf(m.endMs) - xOf(m.startMs));
+    if (w < 24) return null;
+    const on = selection?.track === "motion3d" && selection.index === i;
+    return Array.from({ length: n }, (_, k) => {
+      const at = keyAt(m, k);
+      const inner = k > 0 && k < n - 1;
+      const left = k === 0 ? 11 : k === n - 1 ? w - 11 : at * w;
+      return (
+        <button
+          key={k}
+          type="button"
+          className={`m3d-dia ${inner ? "inner" : ""} ${on && m3dKey === k ? "on" : ""}`}
+          style={{ left }}
+          data-testid={`m3d-dia-${m.id}-${k}`}
+          data-m3d-key={k}
+          title={`${k === 0 ? "Start" : k === n - 1 ? "End" : `Key ${k}`} · ${timecode(m.startMs + at * (m.endMs - m.startMs), fps)}${inner ? " · drag to move, Del to delete" : ""}`}
+          aria-label={k === 0 ? "Start keyframe" : k === n - 1 ? "End keyframe" : `Keyframe ${k}`}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            if (e.button !== 0) return;
+            store.seekMotion3dKey(i, k);
+            if (!inner) return;
+            const el = e.currentTarget;
+            const blockEl = el.parentElement!;
+            el.setPointerCapture?.(e.pointerId);
+            const x0 = e.clientX;
+            let moved = false;
+            const move = (ev: PointerEvent) => {
+              if (!moved && Math.abs(ev.clientX - x0) < 3) return;
+              if (!moved) store.beginGesture();
+              moved = true;
+              const r = blockEl.getBoundingClientRect();
+              store.preview((p) => mapSegment(p, i, (s) => setKeyAt(s, k, (ev.clientX - r.left) / r.width)));
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+              if (moved) {
+                store.endGesture("Move 3D keyframe");
+                store.seekMotion3dKey(i, k);
+              }
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        />
+      );
+    });
+  };
+
+  const block = (track: TrackKind, i: number, r: Range, label: string, extra = "", testId?: string, style: React.CSSProperties = {}, children?: React.ReactNode) => {
     const selected = isSel(track, i) || (selection?.track === track && selection.index === i && !extra.includes("auto"));
     const primary = multi.length > 1 && selection?.track === track && selection.index === i;
     return (
@@ -501,6 +561,7 @@ export function Timeline() {
         <span className="handle l" />
         <span className="block-label">{label}</span>
         <span className="handle r" />
+        {children}
       </div>
     );
   };
@@ -661,7 +722,7 @@ export function Timeline() {
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
             </div>
             <div className="lane lane-motion3d" data-testid="lane-motion3d" onPointerDown={laneDown} onDoubleClick={(e) => store.addMotion3d("tilt-in", msOf(laneX(e.clientX)))}>
-              {project.motion3d.map((m, i) => block("motion3d", i, m, m3dLabel(m.template, templates), m.hold ? "hold" : "", `block-motion3d-${m.id}`))}
+              {project.motion3d.map((m, i) => block("motion3d", i, m, m3dLabel(m.template, templates), m.hold ? "hold" : "", `block-motion3d-${m.id}`, {}, keyDiamonds(i, m)))}
             </div>
             <div className="lane" data-testid="lane-mask" onPointerDown={laneDown} onDoubleClick={(e) => create("mask", msOf(laneX(e.clientX)))}>
               {project.masks.map((m, i) => block("mask", i, m, m.privacyId ? `${m.kind} · ${m.privacyId}` : m.kind, m.privacyId ? "privacy" : ""))}

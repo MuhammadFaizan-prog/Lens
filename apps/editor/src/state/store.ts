@@ -20,7 +20,7 @@ import { History } from "./history";
 import { buildPlan, fetchBundle, fetchSilences, planPauses, type Bundle } from "./bundle";
 import { addBlock, blocksOf, createRange, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
 import * as m3dLib from "./motion3dLib";
-import { addKeyAt, applyTemplate, deleteKey, keyCount, keyPose, mapSegment, setKeyPose, type Axis3D } from "./motion3dOps";
+import { addKeyAt, applyTemplate, deleteKey, keyAt, keyCount, keyPose, mapSegment, resetKeyPose, setKeyAt, setKeyPose, type Axis3D } from "./motion3dOps";
 import { templateFromSegment, type Motion3DSegment, type Motion3DTemplate, type Pose3D } from "@lens/engine";
 
 export interface Selection {
@@ -360,6 +360,11 @@ export class EditorStore {
     this.preview(fn);
     if (this.gestureTimer) clearTimeout(this.gestureTimer);
     this.gestureTimer = setTimeout(() => this.flushGesture(), 400);
+  }
+
+  /** Close a pending slider tweak now, so the next change is its own undo step (typed values, reset). */
+  commitPending(): void {
+    this.flushGesture();
   }
 
   private flushGesture(): void {
@@ -863,6 +868,64 @@ export class EditorStore {
     if (!seg || k <= 0 || k >= keyCount(seg) - 1) return;
     this.edit("Delete 3D keyframe", (p) => mapSegment(p, index, (s) => deleteKey(s, k)));
     this.set({ m3dKey: Math.max(0, k - 1) });
+  }
+
+  /**
+   * Select keyframe k of block index and put the playhead on it. A block is active for
+   * startMs <= src < endMs, so the End key (src = endMs) would show the card flat (or held): the
+   * playhead goes to the last frame inside the block instead, where the End pose shows.
+   */
+  seekMotion3dKey(index: number, k: number): void {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg) return;
+    const sel = this.s.selection;
+    if (sel?.track !== "motion3d" || sel.index !== index) this.select({ track: "motion3d", index });
+    const kk = Math.max(0, Math.min(keyCount(seg) - 1, k));
+    this.set({ m3dKey: kk });
+    const plan = this.s.plan;
+    if (!plan) return;
+    const src = seg.startMs + keyAt(seg, kk) * (seg.endMs - seg.startMs);
+    let f = frameForSource(plan, src);
+    if (kk === keyCount(seg) - 1) {
+      while (f > 0 && plan.frames[f]!.src >= seg.endMs) f--;
+      if (plan.frames[f]!.src < seg.startMs) f = frameForSource(plan, src);
+    }
+    this.seek(f);
+  }
+
+  /** Move interior keyframe k of block index to fraction `at` (clamped between its neighbours); live = drag / slider. */
+  setMotion3dKeyAt(index: number, k: number, at: number, live = false): void {
+    const fn = (p: ProjectConfig) => mapSegment(p, index, (s) => setKeyAt(s, k, at));
+    if (live) this.tweak("Move 3D keyframe", fn);
+    else this.edit("Move 3D keyframe", fn);
+  }
+
+  /** Keyframe k (default: the selected one) back to the flat pose: one undo step. */
+  resetMotion3dKey(index: number, k = this.s.m3dKey): void {
+    if (!this.history.doc.motion3d[index]) return;
+    this.edit("Reset 3D keyframe", (p) => mapSegment(p, index, (s) => resetKeyPose(s, Math.min(k, keyCount(s) - 1))));
+  }
+
+  /**
+   * Reset all: the block's motion back to the template it was made from (every pose, keyframe,
+   * easing, perspective, hold, blend), keeping its place and length; a Custom block goes flat.
+   */
+  resetMotion3d(index: number): void {
+    const seg = this.history.doc.motion3d[index];
+    if (!seg) return;
+    const t = m3dLib.findMotion3dTemplate(seg.template) ?? m3dLib.findMotion3dTemplate("custom")!;
+    this.edit("Reset 3D motion", (p) => mapSegment(p, index, (s) => ({ ...applyTemplate(s, t, Infinity), endMs: s.endMs })));
+    this.set({ m3dKey: 0 });
+  }
+
+  /** Delete the selected interior keyframe of the selected 3D block. False when none is selected (Start / End). */
+  deleteSelectedMotion3dKey(): boolean {
+    const s = this.selectedMotion3d();
+    if (!s) return false;
+    const k = this.s.m3dKey;
+    if (k <= 0 || k >= keyCount(s.seg) - 1) return false;
+    this.deleteMotion3dKey(s.index, k);
+    return true;
   }
 
   /** Alt+Arrow: turn the selected keyframe of the selected 3D block about an axis. False when no 3D block is selected. */

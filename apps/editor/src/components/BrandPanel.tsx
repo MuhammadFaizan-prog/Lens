@@ -31,7 +31,7 @@ function Card({ which, b }: { which: "intro" | "outro"; b: BrandKit }) {
             <span className="ctl-label">Subtitle</span>
             <input value={c.subtitle} placeholder={which === "outro" ? "yourproduct.com" : ""} onChange={(e) => set(`${name} subtitle`, { subtitle: e.target.value }, true)} />
           </label>
-          <Slider label="Length" value={c.durationMs} min={500} max={6000} step={100} format={sec} onChange={(v) => set(`${name} length`, { durationMs: v }, true)} />
+          <Slider defaultValue={2000} label="Length" value={c.durationMs} min={500} max={6000} step={100} format={sec} onChange={(v) => set(`${name} length`, { durationMs: v }, true)} />
           <Toggle label="Show logo" value={c.logo} onChange={(v) => set(`${name} logo`, { logo: v })} />
         </>
       )}
@@ -92,9 +92,9 @@ export function BrandPanel() {
               <Segmented label="Corner" value={b.logo.corner} stacked
                 options={[{ value: "top-left", label: "↖" }, { value: "top-right", label: "↗" }, { value: "bottom-left", label: "↙" }, { value: "bottom-right", label: "↘" }] as Array<{ value: Corner; label: string }>}
                 testId="brand-corner" onChange={(v) => store.editBrand("Watermark corner", (x) => ({ ...x, logo: { ...x.logo, corner: v } }))} />
-              <Slider label="Size" value={b.logo.size} min={0.03} max={0.3} step={0.005} format={pct} testId="brand-logo-size" onChange={(v) => live("Watermark size", (x) => ({ ...x, logo: { ...x.logo, size: v } }))} />
-              <Slider label="Opacity" value={b.logo.opacity} min={0.05} max={1} step={0.01} format={pct} testId="brand-logo-opacity" onChange={(v) => live("Watermark opacity", (x) => ({ ...x, logo: { ...x.logo, opacity: v } }))} />
-              <Slider label="Safe margin" value={b.logo.margin} min={0} max={0.12} step={0.005} format={pct} onChange={(v) => live("Watermark margin", (x) => ({ ...x, logo: { ...x.logo, margin: v } }))} />
+              <Slider defaultValue={0.1} label="Size" value={b.logo.size} min={0.03} max={0.3} step={0.005} format={pct} testId="brand-logo-size" onChange={(v) => live("Watermark size", (x) => ({ ...x, logo: { ...x.logo, size: v } }))} />
+              <Slider defaultValue={0.85} label="Opacity" value={b.logo.opacity} min={0.05} max={1} step={0.01} format={pct} testId="brand-logo-opacity" onChange={(v) => live("Watermark opacity", (x) => ({ ...x, logo: { ...x.logo, opacity: v } }))} />
+              <Slider defaultValue={0.035} label="Safe margin" value={b.logo.margin} min={0} max={0.12} step={0.005} format={pct} onChange={(v) => live("Watermark margin", (x) => ({ ...x, logo: { ...x.logo, margin: v } }))} />
             </>
           )}
         </Section>
