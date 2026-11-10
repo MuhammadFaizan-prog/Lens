@@ -303,7 +303,10 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
       const d = activeDrag;
       if (!d) return;
       let p = toOut(e);
-      if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < 2) return;
+      // a click that wobbles must not move anything: the screen card (picked on press, dragged from
+      // the first move) waits for 4 screen px, the rest for 2 output px
+      const minMove = d.orig.kind === "screen" ? 4 * (W / Math.max(1, cssW)) : 2;
+      if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < minMove) return;
       d.moved = true;
       const o = d.orig;
       let b: Box;
