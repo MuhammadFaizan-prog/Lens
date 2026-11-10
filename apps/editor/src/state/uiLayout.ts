@@ -13,6 +13,8 @@ export interface UiLayout {
   tlH: number;
   leftOpen: boolean;
   rightOpen: boolean;
+  /** Width of the timeline's lane-header column (the "Zoom / Cuts / ... / Audio" labels). */
+  tlLabelW: number;
   fullscreen: boolean;
   /** Preview scale: fit the stage, or 100 % (one output pixel per device pixel, scrollable). */
   previewZoom: "fit" | "100";
@@ -24,8 +26,17 @@ export const SPLIT = 5;
 export const MIN_CENTER_W = 380;
 export const MIN_STAGE_H = 240;
 export const MIN_TL_H = 120;
+/** Timeline lane-header column: default fits the longest label ("Annotations" + count + menu + add). */
+export const TL_LABEL_W = 176;
+export const TL_LABEL_MIN = 90;
+export const TL_LABEL_MAX = 320;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** Lane-header width kept inside its bounds (a bad saved value falls back to the default). */
+export function clampLabelW(w: number | undefined): number {
+  return typeof w === "number" && Number.isFinite(w) ? clamp(Math.round(w), TL_LABEL_MIN, TL_LABEL_MAX) : TL_LABEL_W;
+}
 
 /** Defaults for a viewport: panels and timeline scale with the window inside sane bounds. */
 export function defaultLayout(vw: number, vh: number): Pick<UiLayout, "leftW" | "rightW" | "tlH" | "leftOpen" | "rightOpen"> {
@@ -54,7 +65,7 @@ export function clampLayout<T extends Pick<UiLayout, "leftW" | "rightW" | "tlH" 
 }
 
 const KEY = "lens.editor.layout.v1";
-type Saved = Partial<Pick<UiLayout, "leftW" | "rightW" | "tlH" | "leftOpen" | "rightOpen">>;
+type Saved = Partial<Pick<UiLayout, "leftW" | "rightW" | "tlH" | "leftOpen" | "rightOpen" | "tlLabelW">>;
 
 function readSaved(): Saved {
   try {
@@ -78,7 +89,7 @@ class UiStore {
   }
   private compute(): UiLayout {
     const base = { ...defaultLayout(this.vw(), this.vh()), ...this.saved };
-    return { ...clampLayout(base, this.vw(), this.vh()), ...this.extra };
+    return { ...clampLayout(base, this.vw(), this.vh()), tlLabelW: clampLabelW(this.saved.tlLabelW), ...this.extra };
   }
   get = (): UiLayout => this.s;
   subscribe = (l: () => void) => {

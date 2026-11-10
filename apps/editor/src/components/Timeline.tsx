@@ -19,8 +19,8 @@ import {
 } from "../state/timelineOps";
 import { Icon } from "./Icon";
 import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
+import { clampLabelW, ui, useUi } from "../state/uiLayout";
 
-const LABEL_W = 132;
 const SNAP_PX = 8;
 const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
@@ -86,7 +86,48 @@ function niceStep(pxPerSec: number): number {
   return steps.find((s) => s * pxPerSec >= 70) ?? 600;
 }
 
+/**
+ * Drag handle on the right edge of the lane-header column (Windows v0.1.3: "i cant shrink or grow
+ * this"). The lane area is a sibling flex box and every x <-> time conversion is relative to the
+ * scroller's own box, so resizing the column never shifts the ruler / playhead / block math.
+ * Double-click resets the default width; the width is remembered with the rest of the layout.
+ */
+function LabelResizer() {
+  const onDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const w0 = ui.get().tlLabelW;
+    const x0 = e.clientX;
+    const move = (ev: PointerEvent) => ui.set({ tlLabelW: clampLabelW(w0 + ev.clientX - x0) });
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.classList.remove("resizing");
+    };
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div
+      className="tl-labels-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize lane names"
+      data-testid="tl-labels-resizer"
+      title="Drag to resize the lane names · double-click to reset"
+      onPointerDown={onDown}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        ui.set({ tlLabelW: undefined as unknown as number });
+      }}
+    />
+  );
+}
+
 export function Timeline() {
+  const labelW = useUi((s) => s.tlLabelW);
   const plan = useEditor((s) => s.plan);
   const project = useEditor((s) => s.project);
   const bundle = useEditor((s) => s.bundle);
@@ -497,17 +538,18 @@ export function Timeline() {
         </button>
       </div>
       <div className="timeline-body">
-        <div className="tl-labels" style={{ width: LABEL_W }}>
+        <div className="tl-labels" style={{ width: labelW }} data-testid="tl-labels">
+          <LabelResizer />
           <div className="tl-ruler-spacer" />
           {TRACKS.map((t) => (
-            <div key={t.kind} className={`tl-label tl-label-${t.kind}`} style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
+            <div key={t.kind} className={`tl-label tl-label-${t.kind}`} title={t.label} data-testid={`tl-label-${t.kind}`} style={t.kind === "annotation" ? { height: annLaneH } : undefined}>
               {t.kind === "annotation" ? (
                 <button className="lane-toggle" aria-expanded={annExpanded} data-testid="ann-lane-toggle" title={annExpanded ? "Collapse to one row" : "Expand into rows"} onClick={toggleAnn}>
                   {annExpanded ? "▾" : "▸"}
                 </button>
               ) : null}
               <span className={`dot dot-${t.kind}`} />
-              <span className="lane-name" title={t.label}>{t.label}</span>
+              <span className="lane-name" title={t.label} data-testid={`lane-name-${t.kind}`}>{t.label}</span>
               {t.kind === "annotation" && project.annotations.length > 0 && (
                 <span className="lane-count" data-testid="ann-lane-rows" title={annExpanded ? `${annPack.rowCount} row${annPack.rowCount > 1 ? "s" : ""}` : `${project.annotations.length} items, collapsed`}>
                   {annExpanded ? annPack.rowCount : project.annotations.length}
