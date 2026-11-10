@@ -26,10 +26,10 @@ export function UpdateBanner() {
     void api.state().then(setU);
     api.onUpdate((s) => setU((p) => ({ ...p, ...s })));
   }, [api]);
-  if (!api || !["available", "downloading", "downloaded", "error"].includes(u.status)) return null;
+  if (!api || !["available", "downloading", "downloaded", "installing", "error"].includes(u.status)) return null;
   const text =
-    u.status === "available" ? `Update available v${u.version}` : u.status === "downloading" ? `Downloading v${u.version}… ${Math.round(u.percent ?? 0)}%` : u.status === "downloaded" ? `v${u.version} is ready` : `Update failed: ${u.message ?? "unknown error"}`;
-  const label = u.status === "available" ? "Update" : u.status === "downloaded" ? "Restart to update" : u.status === "error" ? "Retry" : "Update";
+    u.status === "available" ? `Update available v${u.version}` : u.status === "downloading" ? `Downloading v${u.version}… ${Math.round(u.percent ?? 0)}%` : u.status === "downloaded" ? `v${u.version} is ready` : u.status === "installing" ? `Installing v${u.version}… Lens will reopen` : `Update failed: ${u.message ?? "unknown error"}`;
+  const label = u.status === "available" ? "Update" : u.status === "downloaded" || u.status === "installing" ? "Restart to update" : u.status === "error" ? "Retry" : "Update";
   const act = () => {
     if (u.status === "available") void api.download();
     else if (u.status === "downloaded") void api.install();
@@ -38,7 +38,7 @@ export function UpdateBanner() {
   return (
     <div className="update-banner" data-testid="update-banner" role="status">
       <span data-testid="update-banner-text">{text}</span>
-      <button className="btn" data-testid="update-banner-btn" disabled={u.status === "downloading"} onClick={act}>
+      <button className="btn" data-testid="update-banner-btn" disabled={u.status === "downloading" || u.status === "installing"} onClick={act}>
         {label}
       </button>
     </div>

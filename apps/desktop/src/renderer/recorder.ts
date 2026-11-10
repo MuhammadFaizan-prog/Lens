@@ -751,7 +751,7 @@ function renderUpdate(u: UpdateUi): void {
   const box = $("update");
   const btn = $<HTMLButtonElement>("update-btn");
   const text = $("update-text");
-  box.hidden = !["available", "downloading", "downloaded", "error"].includes(update.status);
+  box.hidden = !["available", "downloading", "downloaded", "installing", "error"].includes(update.status);
   btn.hidden = false;
   btn.disabled = false;
   if (update.status === "available") {
@@ -764,6 +764,10 @@ function renderUpdate(u: UpdateUi): void {
   } else if (update.status === "downloaded") {
     text.textContent = `v${update.version} is ready`;
     btn.textContent = "Restart to update";
+  } else if (update.status === "installing") {
+    text.textContent = `Installing v${update.version}… Lens will reopen`;
+    btn.textContent = "Restart to update";
+    btn.disabled = true;
   } else if (update.status === "error") {
     text.textContent = `Update failed: ${update.message ?? "unknown error"}`;
     btn.textContent = "Retry";

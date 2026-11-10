@@ -14,8 +14,20 @@ once and never download again.
 - A newer release shows a banner in the recorder: **Update available vX** with an **Update** button.
   Update downloads the installer (differentially from the blockmap when the previous installer is in the
   updater cache, otherwise in full) and electron-updater checks its sha512 against `latest.yml`. Then the
-  button becomes **Restart to update**, which calls `quitAndInstall` (silent per-user install, relaunch).
-  If the user just quits instead, the downloaded update installs on quit.
+  button becomes **Restart to update** (silent per-user install, relaunch). If the user just quits
+  instead, the downloaded update installs on quit.
+- **Restart to update** (since 0.1.4, fix/updater-014): the main process first sets a quit-for-update
+  flag (the recorder's close no longer hides it to the tray), kills and awaits every child process it
+  started (ffmpeg.exe / whisper-cli.exe run from inside the install folder, and the NSIS installer only
+  kills `Lens.exe`), stops the keyboard hook and the editor server, then calls
+  `quitAndInstall(true, true)` (electron-updater spawns `<installer> --updated /S --force-run` and
+  quits). If that throws or refuses, Lens spawns the installer itself with the same arguments and
+  exits; a watchdog exits the app if it is still running 8 s later. If the installer cannot be started,
+  the quit is cancelled and a dialog offers **Download installer manually** (the release page). Every
+  step and every updater event/error is in `lens.log` (`[update] ...`).
+- The fix only works for updates **from** a version that has it: whatever runs *Restart to update* is
+  the old version's code. Users on 0.1.3 or older must install the next version manually once
+  (download `Lens-Setup-<version>.exe` from the release page and run it; settings and recordings stay).
 - It only installs a **newer** version (`allowDowngrade` off, no prereleases).
 - The installer is NSIS, one-click, per-user (`%LOCALAPPDATA%\Programs\Lens`). The portable target cannot
   auto-update, so it is not built.
@@ -139,6 +151,12 @@ new build, and checks: update detected and shown, Update downloads it, the downl
 equals `latest.yml`'s, **Restart to update** shows; a feed with a wrong sha512 is refused. Running the
 installer (`quitAndInstall`) is Windows-only and is not exercised.
 
+`apps/desktop/e2e/update-install.spec.ts` covers *Restart to update* in a real Electron on Linux with
+a stand-in installer (a shell script that records its arguments): Lens's child processes are killed,
+the installer gets `--updated /S --force-run`, the app exits, and an installer that cannot start leaves
+Lens open with the error. `apps/desktop/test/updater.test.ts` unit-tests the same flow (mocked and real
+electron-updater). The NSIS installer itself can only be verified on Windows.
+
 ```bash
 # keep the old build's staged app before building the new one
 cp -r out/desktop-cache/stage out/desktop/releases/0.1.0/app
@@ -151,4 +169,4 @@ LENS_UPDATE_OLD_APP=... LENS_UPDATE_FEED=$PWD/downloaded-v0.1.1 npx playwright t
 ```
 
 Switches (development and tests only): `LENS_UPDATE_URL` (generic feed URL), `LENS_UPDATE_NSIS=1`,
-`LENS_UPDATE_NO_INSTALL=1`, `LENS_UPDATE_FIRST_CHECK_MS`, `LENS_NO_UPDATE=1`.
+`LENS_UPDATE_NO_INSTALL=1`, `LENS_UPDATE_FIRST_CHECK_MS`, `LENS_UPDATE_WATCHDOG_MS`, `LENS_NO_UPDATE=1`.
