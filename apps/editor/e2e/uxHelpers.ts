@@ -31,6 +31,16 @@ function deepMerge(a: any, b: any): any {
 
 export const urlFor = (dir: string) => `/?dir=${encodeURIComponent(dir)}`;
 
+/**
+ * Which export path the run exercises. "browser" = the shipped desktop app's path (store.exportInBrowser:
+ * the preview's renderer draws every frame, server/browserExport.ts encodes; desktop editorServer.ts sets
+ * LENS_EXPORT=browser and has no Python). "compositor" = the dev / web server's Python reference
+ * (/api/export, compositor/render.py, Pillow text). Chosen by LENS_EXPORT for the server the run starts
+ * (playwright.config.ts webServer inherits it); the packaged app (LENS_PACKAGED_APP) is always "browser".
+ * exportMp4 checks that the server really took this path, so a reused server on the other path fails loudly.
+ */
+export const EXPORT_PATH: "browser" | "compositor" = process.env.LENS_PACKAGED_APP || process.env.LENS_EXPORT === "browser" ? "browser" : "compositor";
+
 /** Export through the UI (Export MP4) and return the MP4 path once done. */
 export async function exportMp4(page: Page, dir: string, timeoutMs = 240_000): Promise<string> {
   await page.getByTestId("export").click();
@@ -42,6 +52,8 @@ export async function exportMp4(page: Page, dir: string, timeoutMs = 240_000): P
   }, null, { timeout: timeoutMs, polling: 500 });
   const ex = await page.evaluate(() => (window as any).__lens.store.get().exporting);
   if (ex.state !== "done") throw new Error(`export failed: ${ex.error}`);
+  const took = ex.path === "browser" ? "browser" : "compositor";
+  if (took !== EXPORT_PATH) throw new Error(`export took the ${took} path, the run expects ${EXPORT_PATH} (LENS_EXPORT=${process.env.LENS_EXPORT ?? ""}; a server reused from another run?)`);
   const file = path.join(dir, ".lens-export", ex.id, "export.mp4");
   if (fs.existsSync(file)) return file;
   // fall back to downloading it from the server

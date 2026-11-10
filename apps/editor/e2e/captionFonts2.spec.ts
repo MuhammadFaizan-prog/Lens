@@ -15,6 +15,14 @@
  * caption-free preview (RGB sum > 90). Preview vs export, per look: mean |RGB| over the region <= 12
  * (JPEG / H.264 noise only); glyph-mask IoU >= 0.8 for looks with a solid text colour; the region has
  * > 2000 px. The imported font differs from the default face (glyph IoU <= 0.6).
+ *
+ * Export path (uxHelpers EXPORT_PATH, LENS_EXPORT): those bounds hold for the browser export, the path
+ * the shipped desktop app takes (the preview's renderer draws the frames). The dev server's Python
+ * reference (/api/export, render.py, Pillow / FreeType text) gets a separate, recorded tolerance: mean
+ * |RGB| <= 16 and glyph IoU >= 0.70. Reason, Rules.md section 4 "caption export paths": Pillow's glyphs
+ * sit 0.3-0.6 px higher and are thinner than Chromium's at 27 px, and the neon glow differs over the
+ * checkerboard (measured 2026-11-10, Pillow 13.0 / FreeType 2.14.3: classic-subtitle IoU 0.726, neon
+ * mean 14.36); widths and line metrics already match (a823e35).
  */
 import { test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -22,7 +30,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, shot, EDITOR } from "./helpers";
 import { closeAll, openLens, PACKAGED } from "./lensApp";
-import { editProject, exportMp4, frameAt, proj, seekSrc, uxBundle } from "./uxHelpers";
+import { EXPORT_PATH, editProject, exportMp4, frameAt, proj, seekSrc, uxBundle } from "./uxHelpers";
+
+/** Preview-vs-export bounds per export path (see the header). */
+const BOUND = EXPORT_PATH === "browser" ? { mean: 12, iou: 0.8 } : { mean: 16, iou: 0.7 };
 
 test.afterAll(() => closeAll());
 
@@ -135,10 +146,10 @@ test("new caption styles and an imported font: exports match the preview; My fon
     for (let p = 0; p < region.length; p++) if (region[p]) { n++; s += diff3(prev.rgb, exp.rgb, p * 3) / 3; }
     const mean = n ? s / n : 0;
     const gi = iou(glyphs(prev, region), glyphs(exp, region));
-    console.log(`${label}: caption px ${n}, preview-vs-export mean |RGB| ${mean.toFixed(2)} (bound 12), glyph IoU ${gi.toFixed(3)}${glyphIou ? " (bound >= 0.8)" : ""}`);
+    console.log(`${label}: caption px ${n}, preview-vs-export mean |RGB| ${mean.toFixed(2)} (bound ${BOUND.mean}), glyph IoU ${gi.toFixed(3)}${glyphIou ? ` (bound >= ${BOUND.iou})` : ""} [${EXPORT_PATH} export]`);
     expect(n).toBeGreaterThan(2000);
-    expect(mean).toBeLessThanOrEqual(12);
-    if (glyphIou) expect(gi).toBeGreaterThanOrEqual(0.8);
+    expect(mean).toBeLessThanOrEqual(BOUND.mean);
+    if (glyphIou) expect(gi).toBeGreaterThanOrEqual(BOUND.iou);
     return { prev, exp, region };
   };
 
