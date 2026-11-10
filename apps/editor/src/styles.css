@@ -203,8 +203,9 @@ button { font: inherit; color: inherit; }
 .ctl-label { color: var(--text-2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctl-value { color: var(--text); font: 12px var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 /* slider rows: label / range (all the free width) / editable number / reset (fix/3d-inspector-014) */
-.ctl.slider { grid-template-columns: minmax(48px, 72px) minmax(60px, 1fr) 52px; gap: 6px; }
-.ctl.slider.has-reset { grid-template-columns: minmax(48px, 72px) minmax(60px, 1fr) 52px 18px; }
+.ctl.slider { grid-template-columns: minmax(72px, max-content) minmax(60px, 1fr) 52px; gap: 6px; }
+.ctl.slider .ctl-label { max-width: 104px; }
+.ctl.slider.has-reset { grid-template-columns: minmax(72px, max-content) minmax(60px, 1fr) 52px 18px; }
 .ctl-num {
   width: 100%; min-width: 0; box-sizing: border-box; height: 22px; padding: 0 4px; border-radius: 5px;
   border: 1px solid transparent; background: transparent; cursor: text;
