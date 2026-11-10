@@ -244,6 +244,8 @@ export class Recording {
       });
     })();
     const tracks: unknown[] = [];
+    // a diagnostic log line must never throw (a missing file here used to fail the whole finalize)
+    const sizeOf = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.statSync(path.join(dir, f)).size : 0);
     const nonEmpty = (f: string) => fs.existsSync(path.join(dir, f)) && fs.statSync(path.join(dir, f)).size > 0;
     // pinned to 48 kHz stereo, so every later step (preview, STT, export) reads one fixed format
     // (a mono / layout-less Opus mic broke the v0.1.0 export graph on Windows)
@@ -281,7 +283,7 @@ export class Recording {
     }
     await Promise.all(jobs);
     if (info.webcam || info.webcamDevice || info.webcamError) {
-      logLine(cameraError ? "WARN" : "INFO", `camera ${JSON.stringify(info.webcamDevice ?? null)}: ${webcam ? `cam.mp4 written (${fs.statSync(path.join(dir, "cam.mp4")).size} bytes, from cam.webm ${fs.existsSync(path.join(dir, "cam.webm")) ? fs.statSync(path.join(dir, "cam.webm")).size : 0} bytes)` : `no camera track: ${cameraError}`}`);
+      logLine(cameraError ? "WARN" : "INFO", `camera ${JSON.stringify(info.webcamDevice ?? null)}: ${webcam ? `cam.mp4 written (${sizeOf("cam.mp4")} bytes, from cam.webm ${sizeOf("cam.webm")} bytes)` : `no camera track: ${cameraError}`}`);
     }
     onProgress?.("Preparing… 100%");
     const probe = await probeDuration(ffmpeg, path.join(dir, "screen.mp4"));
