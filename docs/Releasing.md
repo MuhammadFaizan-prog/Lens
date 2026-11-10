@@ -58,8 +58,10 @@ From the repo root, on `main`, with the change committed and the suites green (R
    (every upload to `uploads.github.com` answers 400 through its gateway):
 
    ```bash
-   node apps/desktop/scripts/release.mjs --no-upload --notes notes.md
+   node apps/desktop/scripts/release.mjs --no-upload --notes docs/releases/v<version>.md
    ```
+
+   Release notes live in `docs/releases/v<version>.md` (from 0.1.3) and are the release body.
 
    creates release `v<version>` at `HEAD` (it still checks that `out/desktop/latest.yml` is for this
    version) and prints its URL. Auth: in Hark the shell runs with the GitHub credential (credentials
