@@ -160,27 +160,41 @@ function standIn(b: Backdrop, W: number, H: number): AnyCanvas {
   return c;
 }
 
-let worker: Worker | null = null;
+/**
+ * Two workers: "main" renders the backdrop the preview / export draws, "thumb" the picker thumbnails,
+ * so 50 thumbnails queued when the Background picker opens never delay the frame's own backdrop.
+ */
+type Lane = "main" | "thumb";
+const workers: Record<Lane, Worker | null> = { main: null, thumb: null };
+const owned: Record<Lane, Set<number>> = { main: new Set(), thumb: new Set() };
 let jobs = 0;
 const waiting = new Map<number, (px: Uint8ClampedArray | null) => void>();
-function renderInWorker(b: Backdrop, W: number, H: number): Promise<Uint8ClampedArray | null> {
+function settle(id: number, px: Uint8ClampedArray | null): void {
+  waiting.get(id)?.(px);
+  waiting.delete(id);
+}
+function renderInWorker(b: Backdrop, W: number, H: number, lane: Lane = "main"): Promise<Uint8ClampedArray | null> {
   try {
+    let worker = workers[lane];
     if (!worker) {
       worker = new Worker(new URL("./backdropWorker.ts", import.meta.url), { type: "module" });
       worker.onmessage = (e: MessageEvent<{ id: number; px: Uint8ClampedArray | null }>) => {
-        waiting.get(e.data.id)?.(e.data.px);
-        waiting.delete(e.data.id);
+        owned[lane].delete(e.data.id);
+        settle(e.data.id, e.data.px);
       };
       worker.onerror = () => {
-        for (const f of waiting.values()) f(null);
-        waiting.clear();
-        worker = null;
+        for (const id of owned[lane]) settle(id, null);
+        owned[lane].clear();
+        workers[lane] = null;
       };
+      workers[lane] = worker;
     }
     const id = ++jobs;
+    owned[lane].add(id);
+    const w = worker;
     return new Promise((res) => {
       waiting.set(id, res);
-      worker!.postMessage({ id, b, W, H });
+      w.postMessage({ id, b, W, H });
     });
   } catch {
     return Promise.resolve(null);
@@ -258,6 +272,30 @@ export function backdropThumb(b: Backdrop, w: number, h: number): AnyCanvas {
     thumbs.set(key, c);
   }
   return c;
+}
+const thumbPending = new Map<string, Promise<AnyCanvas>>();
+/**
+ * The picker thumbnail, a field style rendered in the thumbnail worker (v0.1.4 speed pass: 51 field
+ * thumbnails were ~0.1-0.4 s of per-pixel math on the UI thread, 0.85 s of main-thread time while an
+ * editor with an image backdrop opened). Same function, same size: the same pixels as backdropThumb.
+ */
+export function backdropThumbAsync(b: Backdrop, w: number, h: number): Promise<AnyCanvas> {
+  const key = `${b.id}|${w}x${h}`;
+  const hit = thumbs.get(key);
+  if (hit) return Promise.resolve(hit);
+  if (!isFieldStyle(b.style) || !onUiThread()) return Promise.resolve(backdropThumb(b, w, h));
+  let p = thumbPending.get(key);
+  if (!p) {
+    p = renderInWorker(b, w, h, "thumb").then((px) => {
+      thumbPending.delete(key);
+      if (!px) return backdropThumb(b, w, h); // no worker: render here rather than never
+      const c = toCanvas(px, w, h);
+      thumbs.set(key, c);
+      return c;
+    });
+    thumbPending.set(key, p);
+  }
+  return p;
 }
 export function thumbCached(id: string, w: number, h: number): boolean {
   return thumbs.has(`${id}|${w}x${h}`);

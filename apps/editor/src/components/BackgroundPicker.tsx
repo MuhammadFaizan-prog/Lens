@@ -5,8 +5,8 @@
  * same in the preview and the export (render/renderer.ts background()).
  */
 import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { projectPalette, type ProjectConfig } from "@lens/engine";
-import { BACKDROP_CATEGORIES, BUILTIN_BACKDROPS, backdropCategories, backdropThumb, gradientCss, gradientStops, thumbCached, type BackdropCategory } from "../render/backdrops";
+import { isFieldStyle, projectPalette, type ProjectConfig } from "@lens/engine";
+import { BACKDROP_CATEGORIES, BUILTIN_BACKDROPS, backdropCategories, backdropThumb, backdropThumbAsync, gradientCss, gradientStops, thumbCached, type BackdropCategory } from "../render/backdrops";
 import { store } from "../state/store";
 import { Section, Segmented, Slider } from "./Controls";
 
@@ -53,8 +53,9 @@ const TH = 72;
 
 /**
  * Thumbnails render once per session (backdropThumb caches them). A cached one is copied in before
- * paint; an uncached one is queued and rendered a few per frame, so the grid opens at once and fills
- * in instead of blocking on 60 procedural renders.
+ * paint; an uncached field-style one renders in the thumbnail worker (backdropThumbAsync), an uncached
+ * classic one is queued and drawn a few per frame, so the grid opens at once and fills in instead of
+ * blocking on 60 procedural renders.
  */
 const queue: Array<() => void> = [];
 let pumping = false;
@@ -77,14 +78,15 @@ function Thumb({ id }: { id: string }) {
     const c = ref.current;
     if (!b || !c) return;
     let live = true;
-    const paint = () => {
+    const paint = (t?: CanvasImageSource) => {
       if (!live) return;
-      c.getContext("2d")!.drawImage(backdropThumb(b, TW, TH) as CanvasImageSource, 0, 0);
+      c.getContext("2d")!.drawImage(t ?? (backdropThumb(b, TW, TH) as CanvasImageSource), 0, 0);
       c.dataset.ready = "1";
     };
     if (thumbCached(id, TW, TH)) paint();
+    else if (isFieldStyle(b.style)) void backdropThumbAsync(b, TW, TH).then((t) => paint(t as CanvasImageSource));
     else {
-      queue.push(paint);
+      queue.push(() => paint());
       pump();
     }
     return () => {
