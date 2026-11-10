@@ -940,14 +940,35 @@ function fontVMetrics(g: Canvas2D, wt: string, size: number, family: string, sam
   g.font = `${wt} ${size * 64}px ${family}`;
   const m = g.measureText(sample);
   const v: [number, number] = [Math.ceil(m.fontBoundingBoxAscent / 64 - 1e-6), Math.ceil(m.fontBoundingBoxDescent / 64 - 1e-6)];
-  let loaded = true;
-  try {
-    loaded = fontSet().check(`${wt} ${size}px ${family}`, sample);
-  } catch {
-    loaded = true;
-  }
-  if (loaded) vMetricsCache.set(key, v);
+  if (primaryFaceReady(family) && checkLoaded(`${wt} ${size}px ${family}`, sample)) vMetricsCache.set(key, v);
   return v;
+}
+
+function checkLoaded(font: string, sample: string): boolean {
+  try {
+    return fontSet().check(font, sample);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether the first family of a font stack is really there to measure. FontFaceSet.check() is also
+ * true for a family that has no face in the set yet (nothing to load, the fallback is drawn), so a
+ * caption drawn while a plan font (an imported one, "Lens Lobster") was still loading cached the
+ * fallback's ascent / descent for good: the preview's lines then sat 1 px off the export's, which
+ * measures after ensurePlanAssets. Only "Lens <family>" faces are registered at run time; any other
+ * family (the built-in caption face, system stacks) counts as ready.
+ */
+function primaryFaceReady(family: string): boolean {
+  const first = family.split(",")[0]!.trim().replace(/^["']|["']$/g, "");
+  if (!first.startsWith("Lens ")) return true;
+  try {
+    for (const f of fontSet() as unknown as Iterable<FontFace>) if (f.family.replace(/^["']|["']$/g, "") === first && f.status === "loaded") return true;
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 function setNoKerning(g: Canvas2D): void {
