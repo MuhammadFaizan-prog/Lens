@@ -9,7 +9,7 @@ import { Icon } from "./Icon";
 import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
 import { AspectRow } from "./AspectPicker";
-import { ScreenSection } from "./ScreenSection";
+import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dCard, Motion3dLookSection } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
@@ -204,9 +204,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
       <ScreenSection />
       <Section title="Output">
         <AspectRow />
-        <Segmented label="Screen" value={p.output.fit ?? "fit"} testId="output-fit" options={[{ value: "fit", label: "Fit" }, { value: "fill", label: "Fill & follow" }]}
-          onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
-        {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
+        <FramingTiles idPrefix="out-framing" tilesOnly />
       </Section>
       <Motion3dLookSection />
     </>

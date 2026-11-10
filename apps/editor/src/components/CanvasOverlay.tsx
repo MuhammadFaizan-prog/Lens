@@ -15,17 +15,18 @@
  * project.card (canvas fractions); a free shape trims the source, never stretches.
  */
 import { useEffect, useRef, useState } from "react";
-import { cardRect, validCard } from "@lens/engine";
+import { cardRect, framingMode, normalizeCrop, validCard } from "@lens/engine";
 import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
 import { captionBox } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
 import { selectedZoomDocIndex, store, useEditor } from "../state/store";
 import { updateBlock } from "../state/timelineOps";
 import { centre, clampedNormCentre, moveBox, resizeBoxFrom, snapBox, snapLines, snapPoint, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
-import { cardFit, setCardRect } from "../state/layoutOps";
+import { cardFit, framingWindowOf, setCardRect, setFramingRect } from "../state/layoutOps";
+import { boxToWindow, editViewRect, windowFromDraggedScreen, windowToBox } from "../state/framingEdit";
 import { spaceOf } from "./AnnotationOverlay";
 
-export type CanvasKind = "screen" | "mask" | "logo" | "webcam" | "caption" | "zoom";
+export type CanvasKind = "screen" | "mask" | "logo" | "webcam" | "caption" | "zoom" | "framing";
 
 export interface CanvasObj {
   kind: CanvasKind;
@@ -49,6 +50,30 @@ export function zoomEditing(): boolean {
   return selectedZoomDocIndex(store.get()) >= 0;
 }
 
+/** True while the custom framing window is being placed (the preview shows the whole recording). */
+export function framingEditing(): boolean {
+  const s = store.get();
+  return s.framingEdit && !!s.bundle && framingMode(s.project.output) === "custom" && !validCard(s.project.card);
+}
+
+/** The custom window as an edit-view object (output px), aspect locked to the canvas. */
+function framingObject(plan: RenderPlan, project: ProjectConfig): CanvasObj | null {
+  const meta = store.get().bundle?.meta;
+  if (!meta) return null;
+  const out = { width: plan.output.width, height: plan.output.height };
+  const uc = normalizeCrop(project.crop, meta);
+  const view = editViewRect(project, meta, out);
+  const win = framingWindowOf(project, meta, out);
+  return {
+    kind: "framing",
+    index: 0,
+    box: windowToBox(win, uc, view),
+    keepAspect: true,
+    label: `shown part · ${win.w}×${win.h}`,
+    apply: (b) => (p) => setFramingRect(p, boxToWindow(b, uc, view), meta, out),
+  };
+}
+
 const scratch = (() => {
   let g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
   return () => (g ??= makeCanvas(8, 8).getContext("2d") as CanvasRenderingContext2D);
@@ -58,6 +83,10 @@ const scratch = (() => {
 export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectConfig): CanvasObj[] {
   const out: CanvasObj[] = [];
   const { width: W, height: H } = plan.output;
+  if (framingEditing()) {
+    const fo = framingObject(plan, project);
+    return fo ? [fo] : [];
+  }
   const sel = store.get().selection;
   // zoom selections index the plan; the project segment is found by id
   const zoomIdx = selectedZoomDocIndex(store.get());
@@ -67,7 +96,13 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
   // the screen card first: picked lowest, so masks, webcam, caption, logo and zoom targets win
   const sb = screenBox(plan, f, project);
   if (sb) {
-    out.push({ kind: "screen", index: 0, box: sb, keepAspect: false, label: "screen", apply: (b) => (p) => setCardRect(p, b, { width: W, height: H }) });
+    const mode = framingMode(project.output);
+    const meta = store.get().bundle?.meta;
+    if (meta && !validCard(project.card) && (mode === "fill" || mode === "custom")) {
+      // Fill / Custom: dragging the picture pans (corners zoom) the shown part: it becomes Custom
+      const win = framingWindowOf(project, meta, { width: W, height: H });
+      out.push({ kind: "screen", index: 0, box: sb, keepAspect: true, label: "screen · drag to pan", apply: (b) => (p) => setFramingRect(p, windowFromDraggedScreen(win, b, { width: W, height: H }), meta, { width: W, height: H }) });
+    } else out.push({ kind: "screen", index: 0, box: sb, keepAspect: false, label: "screen", apply: (b) => (p) => setCardRect(p, b, { width: W, height: H }) });
   }
   const toBox = (r: { x: number; y: number; w: number; h: number }): Box => {
     const a = sp.toOut({ x: r.x, y: r.y });
@@ -180,7 +215,8 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
 export function screenBox(plan: RenderPlan, f: PlanFrame, project: ProjectConfig): Box | null {
   if (!(f.layout.screenOpacity > 0.5)) return null;
   const out = { width: plan.output.width, height: plan.output.height };
-  if (project.output.fit === "fill" && !validCard(project.card)) return { x: 0, y: 0, w: out.width, h: out.height };
+  // Fill / Follow / Custom framing with no free card: the screen covers the canvas
+  if (framingMode(project.output) !== "fit" && !validCard(project.card)) return { x: 0, y: 0, w: out.width, h: out.height };
   const [, , cw, ch] = plan.source.crop;
   const r = cardRect(out, cw / Math.max(1, ch), project);
   const [x, y, w, h] = f.layout.screen;
@@ -198,6 +234,7 @@ function fromBoxF(sp: ReturnType<typeof spaceOf>, b: Box): Box {
 
 function selectedKey(): { kind: CanvasKind; index: number } | null {
   const s = store.get();
+  if (framingEditing()) return { kind: "framing", index: 0 };
   if (s.canvasSel) return { kind: s.canvasSel, index: 0 };
   if (s.selection?.track === "mask") return { kind: "mask", index: s.selection.index };
   if (s.selection?.track === "zoom") return { kind: "zoom", index: selectedZoomDocIndex(s) };
@@ -215,6 +252,10 @@ interface Drag {
 let activeDrag: Drag | null = null;
 
 function selectObj(o: CanvasObj): void {
+  if (o.kind === "framing") {
+    canvasFocus = true;
+    return;
+  }
   if (o.kind === "mask") store.select({ track: "mask", index: o.index });
   else if (o.kind === "zoom") store.selectZoom(o.index);
   else store.selectCanvas(o.kind);
@@ -241,7 +282,7 @@ export function pickCanvasObject(p: Vec2, startDrag = true): boolean {
     if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) {
       selectObj(o);
       // the screen card drags from the first press (no select-then-drag)
-      if (o.kind === "screen" && startDrag) {
+      if ((o.kind === "screen" || o.kind === "framing") && startDrag) {
         store.pause();
         store.beginGesture();
         activeDrag = { mode: "move", start: p, orig: o, moved: false };
@@ -287,6 +328,7 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
   const project = useEditor((s) => s.project);
   useEditor((s) => s.selection);
   useEditor((s) => s.canvasSel);
+  useEditor((s) => s.framingEdit);
   const svg = useRef<SVGSVGElement>(null);
   const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
   const f = plan?.frames[frame];
@@ -303,7 +345,10 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
       const d = activeDrag;
       if (!d) return;
       let p = toOut(e);
-      if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < 2) return;
+      // a click that wobbles must not move anything: the screen card (picked on press, dragged from
+      // the first move) waits for 4 screen px, the rest for 2 output px
+      const minMove = d.orig.kind === "screen" ? 4 * (W / Math.max(1, cssW)) : 2;
+      if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) < minMove) return;
       d.moved = true;
       const o = d.orig;
       let b: Box;
@@ -312,12 +357,12 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
       const isScreen = o.kind === "screen";
       if (d.mode === "move") {
         b = moveBox(o.box, o.kind === "caption" ? 0 : p.x - d.start.x, p.y - d.start.y);
-        if (!e.altKey) {
+        if (!e.altKey && o.kind !== "framing" && !(isScreen && o.keepAspect)) {
           const sn = snapBox(b, W, H, thr, isScreen);
           b = o.kind === "caption" ? { ...sn.box, x: o.box.x } : sn.box;
           g = { gx: o.kind === "caption" ? [] : sn.gx, gy: sn.gy };
         }
-      } else if (isScreen) {
+      } else if (isScreen && !o.keepAspect) {
         // screen card: Shift keeps the aspect, Alt resizes about the centre; the free corner snaps
         if (!e.shiftKey) {
           const sp = snapPoint(p, snapLines(W, H, true), thr);
@@ -383,6 +428,9 @@ export function CanvasOverlay({ cssW, cssH }: { cssW: number; cssH: number }) {
 
   return (
     <svg ref={svg} className="canvas-overlay" data-testid="canvas-overlay" viewBox={`0 0 ${W} ${H}`} style={{ width: cssW, height: cssH }}>
+      {sel?.kind === "framing" && (
+        <path className="co-dim" data-testid="framing-dim" fillRule="evenodd" d={`M0 0H${W}V${H}H0Z M${sel.box.x} ${sel.box.y}h${sel.box.w}v${sel.box.h}h${-sel.box.w}Z`} />
+      )}
       {objs.map((o) =>
         o === sel ? null : <rect key={`${o.kind}-${o.index}`} className={`co-outline co-${o.kind}`} data-testid={`co-${o.kind}-${o.index}`} x={o.box.x} y={o.box.y} width={o.box.w} height={o.box.h} />,
       )}

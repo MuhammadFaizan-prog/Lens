@@ -5,7 +5,8 @@
  */
 import { useEffect, useState } from "react";
 import { store, useEditor } from "../state/store";
-import { ASPECTS, aspectChoiceOf, aspectLabel, setAspect, setCustomSize, type AspectChoice } from "../state/layoutOps";
+import { ASPECTS, aspectChoiceOf, aspectLabel, FRAMING_HINTS, FRAMING_LABELS, framingChoiceOf, setAspect, setCustomSize, setFraming, type AspectChoice } from "../state/layoutOps";
+import { FRAMING_MODES, type FramingMode } from "@lens/engine";
 
 const OPTIONS: AspectChoice[] = [...ASPECTS, "custom"];
 
@@ -50,12 +51,31 @@ function CustomSize({ compact }: { compact?: boolean }) {
   );
 }
 
+/** Compact framing picker next to the toolbar aspect (fix/aspect-framing-014). */
+function FramingSelect() {
+  const choice = useEditor((s) => framingChoiceOf(s.project));
+  const meta = useEditor((s) => s.bundle?.meta);
+  const out = useEditor((s) => s.plan?.output);
+  if (!meta || !out) return null;
+  return (
+    <select className="tb-select" value={choice} aria-label="Framing" title="Which part of the recording fills the canvas" data-testid="tb-framing"
+      onChange={(e) => {
+        const m = e.target.value as FramingMode;
+        store.edit(`Framing: ${FRAMING_LABELS[m]}`, (q) => setFraming(q, m, meta, { width: out.width, height: out.height }));
+        store.setFramingEdit(m === "custom");
+      }}>
+      {choice === "free" && <option value="free" disabled>Free</option>}
+      {FRAMING_MODES.map((m) => <option key={m} value={m} title={FRAMING_HINTS[m]}>{FRAMING_LABELS[m]}</option>)}
+    </select>
+  );
+}
+
 /** Compact toolbar picker. */
 export function AspectSelect() {
   const choice = useEditor((s) => aspectChoiceOf(s.project));
   return (
     <span className="aspect-select" data-testid="tb-aspect-wrap">
-      <select className="tb-select" value={choice} aria-label="Canvas aspect" title="Canvas aspect: the screen re-fits, nothing is cropped" data-testid="tb-aspect" onChange={(e) => pick(e.target.value as AspectChoice)}>
+      <select className="tb-select" value={choice} aria-label="Canvas aspect" title="Canvas aspect: the screen re-fits, centred; pick the framing next to it" data-testid="tb-aspect" onChange={(e) => pick(e.target.value as AspectChoice)}>
         {OPTIONS.map((a) => (
           <option key={a} value={a}>
             {a === "custom" ? "Custom W×H" : aspectLabel(a)}
@@ -63,6 +83,7 @@ export function AspectSelect() {
         ))}
       </select>
       {choice === "custom" && <CustomSize compact />}
+      <FramingSelect />
     </span>
   );
 }

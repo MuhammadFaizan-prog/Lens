@@ -7,7 +7,8 @@ import { stepSpring, type SpringState } from "./spring.js";
 import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalizeCrop, zoomableEvents } from "./crop.js";
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
-import { canvasSize, cardCrop, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
+import { canvasSize, cardCrop, fillCard, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
+import { customWindow, fillWindow, framingMode } from "./framing.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
@@ -148,12 +149,19 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const out = canvasSize(rawProject.output, { width: userCrop.w, height: userCrop.h });
   // Theme (demand #9): resolve "@slot" references (built-in < preset < brand < item), add brand cards.
   const theme = applyTheme(rawProject, fullMeta.durationMs, out);
-  const project = theme.project;
+  // Framing (fix/aspect-framing-014): Fill / Custom show a window of the source, cropped to the canvas
+  // shape, on a card covering the whole canvas. A free card (project.card) owns the placement instead.
+  const mode = framingMode(theme.project.output);
+  const framed = !validCard(theme.project.card) && (mode === "fill" || mode === "custom");
+  const project: ProjectConfig = framed ? { ...theme.project, card: fillCard() } : theme.project;
   const resScale = Math.min(out.width, out.height) / 1080;
 
   // 0. Crop (LOOK-14): move everything into cropped space. A custom card trims the crop to its own
   // shape first (cardCrop, centred), so the card never stretches and every conversion below agrees.
-  const crop: Rect = cardCrop(normalizeCrop(project.crop, fullMeta), out, project);
+  const baseCrop = normalizeCrop(project.crop, fullMeta);
+  const crop: Rect = framed
+    ? mode === "custom" ? customWindow(baseCrop, out.width / out.height, project.output.framingRect) : fillWindow(baseCrop, out.width / out.height)
+    : cardCrop(baseCrop, out, project);
   const meta = cropMeta(fullMeta, crop);
   const events = cropEvents(rawEvents, crop);
   const masks = project.masks.map((m) => ({ ...m, rect: cropRect(m.rect, crop), keys: m.keys?.map((k) => ({ tMs: k.tMs, rect: cropRect(k.rect, crop) })) }));
@@ -165,7 +173,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const staticLayout = layoutFor(project.camera.enabled ? "camera-overlay" : "screen-only", out, sourceAspect, project);
   // Fill mode (Windows bug #8): crop in to fill a differently shaped output and pan with the action.
   // A custom card owns the placement: fill mode (and its pan-follow) is off while one is set.
-  const fill = !validCard(project.card) && project.output.fit === "fill" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
+  // Old projects: fit "fill" is framing "follow" (framingMode), so they take this same path.
+  const fill = !validCard(project.card) && mode === "follow" && Math.abs(out.width / out.height - sourceAspect) > 0.01;
   const camera: CameraSample[] = buildCameraTrack(cursor, zoomSegments, meta, {
     spring: project.zoom.spring,
     followDeadzone: project.zoom.followDeadzone,
@@ -278,8 +287,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     style: {
       background: project.background,
       ...(project.background.kind === "image" && project.background.imagePath && backdropById(project.background.imagePath) ? { backdropArt: backdropById(project.background.imagePath)! } : {}),
-      radius: project.background.kind === "hidden" ? 0 : project.frame.radius * resScale,
-      shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
+      // Fill / Custom framing covers the canvas edge to edge: no rounded corners or shadow to show
+      radius: project.background.kind === "hidden" || framed ? 0 : project.frame.radius * resScale,
+      shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" || framed ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
       cursorSize: project.cursor.size,
       cursorShape: project.cursor.shape,
       clickEffect: project.cursor.clickEffect,

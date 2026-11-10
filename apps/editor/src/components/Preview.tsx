@@ -3,7 +3,9 @@ import type { RenderPlan } from "@lens/engine";
 import { PlanRenderer } from "../render/renderer";
 import { store, useEditor } from "../state/store";
 import { AnnotationOverlay } from "./AnnotationOverlay";
-import { CanvasOverlay, zoomEditFrame, zoomEditing } from "./CanvasOverlay";
+import { CanvasOverlay, framingEditing, zoomEditFrame, zoomEditing } from "./CanvasOverlay";
+import { editViewRect, framingEditPlan } from "../state/framingEdit";
+import { normalizeCrop } from "@lens/engine";
 import { useUi } from "../state/uiLayout";
 
 /** Draw frame i of plan into g with the right source images (awaits decoding when needed). */
@@ -15,7 +17,16 @@ function withZoomEdit(plan: RenderPlan, i: number): RenderPlan {
   return { ...plan, frames };
 }
 
-export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, i: number, editPlan = false): Promise<boolean> {
+/** The custom framing edit view of frame i (fix/aspect-framing-014): the whole recording, the window drawn by the overlay. */
+function withFramingEdit(plan: RenderPlan, i: number): RenderPlan {
+  const s = store.get();
+  const meta = s.bundle?.meta;
+  if (!meta) return plan;
+  const out = { width: plan.output.width, height: plan.output.height };
+  return framingEditPlan(plan, i, normalizeCrop(s.project.crop, meta), editViewRect(s.project, meta, out));
+}
+
+export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, plan: RenderPlan, i: number, editPlan = false, framingPlan = false): Promise<boolean> {
   const f = plan.frames[i];
   if (!f || !store.screen) return false;
   const si = store.screen.indexAt(f.src);
@@ -26,7 +37,7 @@ export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingCo
   if (!scr || (wantCam && !cam)) {
     [scr, cam] = await Promise.all([scr ?? store.screen.load(si), wantCam ? cam ?? store.cam!.load(ci) : Promise.resolve(null)]);
   }
-  renderer.draw(g, editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null });
+  renderer.draw(g, framingPlan ? withFramingEdit(plan, i) : editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null });
   // time from page start to the first real source frame on screen (window.__lens.state().firstPaintMs)
   if (scr && store.firstPaintMs == null) store.firstPaintMs = Math.round(performance.now());
   return true;
@@ -78,7 +89,8 @@ export function Preview() {
           const s = store.get();
           if (!s.plan) break;
           const ze = zoomEditing();
-          const key = `${s.revision}:${s.frame}:${ze ? "z" : ""}`;
+          const fe = framingEditing();
+          const key = `${s.revision}:${s.frame}:${ze ? "z" : ""}${fe ? "f" : ""}`;
           if (key === drawnKey) break;
           // Size is owned here, never by React: assigning width clears the canvas.
           if (canvas.width !== s.plan.output.width || canvas.height !== s.plan.output.height) {
@@ -88,7 +100,7 @@ export function Preview() {
           const g = canvas.getContext("2d")!;
           let ok = false;
           try {
-            ok = await drawPlanFrame(renderer, g, s.plan, s.frame, ze);
+            ok = await drawPlanFrame(renderer, g, s.plan, s.frame, ze, fe);
           } catch (e) {
             // e.g. 3D motion without WebGL2: say so instead of freezing on a stale frame
             const msg = e instanceof Error ? e.message : String(e);
@@ -101,9 +113,10 @@ export function Preview() {
             drawnKey = key;
             canvas.dataset.frame = String(s.frame);
             canvas.dataset.revision = String(s.revision);
+            canvas.dataset.framingEdit = fe ? "1" : "0";
           }
           const now = store.get();
-          if (`${now.revision}:${now.frame}:${zoomEditing() ? "z" : ""}` !== drawnKey) again = true;
+          if (`${now.revision}:${now.frame}:${zoomEditing() ? "z" : ""}${framingEditing() ? "f" : ""}` !== drawnKey) again = true;
         } while (again);
       } finally {
         busy = false;
