@@ -246,14 +246,27 @@ export function Motion3dCard({ index, seg }: { index: number; seg: Motion3DSegme
   );
 }
 
-/** Look tab: pick a template on the tile grid, add a 3D block with it at the playhead. */
-export function Motion3dLookSection() {
+/** The inspector's 3D tab: the selected 3D block's controls, then the template grid that adds a block. */
+export function Motion3dTab() {
+  const sel = useEditor((s) => s.selection);
+  const multiN = useEditor((s) => s.multi.length);
+  const seg = useEditor((s) => (s.selection?.track === "motion3d" ? s.project.motion3d[s.selection.index] : undefined));
+  return (
+    <div className="m3d-tab" data-testid="m3d-tab">
+      {sel && seg && multiN <= 1 ? <Motion3dCard index={sel.index} seg={seg} /> : <p className="note m3d-tab-hint">Select a block on the 3D lane to edit its poses and keyframes, or add one below.</p>}
+      <Motion3dAddSection />
+    </div>
+  );
+}
+
+/** 3D tab: pick a template on the tile grid, add a 3D block with it at the playhead. */
+export function Motion3dAddSection() {
   const templates = useEditor((s) => s.motion3dTemplates);
   const count = useEditor((s) => s.project.motion3d.length);
   const [tpl, setTpl] = useState("tilt-in");
   const valid = templates.some((t) => tplKey(t) === tpl) ? tpl : "tilt-in";
   return (
-    <Section title="3D motion" aside={count ? <span className="lane-count" data-testid="m3d-count">{count}</span> : undefined}>
+    <Section title="Add 3D motion" aside={count ? <span className="lane-count" data-testid="m3d-count">{count}</span> : undefined}>
       <Motion3dTemplateGrid value={valid} testPrefix="look-m3d-tpl" onPick={setTpl} />
       <button className="chip-btn accent" data-testid="look-add-3d" onClick={() => store.addMotion3d(valid)}>
         <Icon name="plus" size={12} /> Add {templates.find((t) => tplKey(t) === valid)?.name ?? "3D"} at playhead

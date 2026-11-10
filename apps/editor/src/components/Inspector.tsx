@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
 import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
 import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
@@ -10,17 +10,18 @@ import { AnnotationCard, SlideCard } from "./AnnotationInspector";
 import { BackgroundPicker } from "./BackgroundPicker";
 import { AspectRow } from "./AspectPicker";
 import { ScreenSection } from "./ScreenSection";
-import { Motion3dCard, Motion3dLookSection } from "./Motion3dInspector";
+import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
 
-type Tab = "look" | "zoom" | "cursor" | "camera" | "captions" | "audio";
+type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "look", label: "Look" },
   { id: "zoom", label: "Zoom" },
+  { id: "motion3d", label: "3D" },
   { id: "cursor", label: "Cursor" },
   { id: "camera", label: "Webcam" },
   { id: "captions", label: "Captions" },
@@ -66,7 +67,7 @@ function MultiSelectionCard({ n }: { n: number }) {
   );
 }
 
-function SelectionCard() {
+function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const sel = useEditor((s) => s.selection);
   const multiN = useEditor((s) => s.multi.length);
   const project = useEditor((s) => s.project);
@@ -80,8 +81,19 @@ function SelectionCard() {
     return a ? <AnnotationCard a={a} /> : null;
   }
   if (sel.track === "motion3d") {
+    // the block's controls live on the 3D tab; from another tab, one line leads back there
     const m = project.motion3d[sel.index];
-    return m ? <Motion3dCard index={sel.index} seg={m} /> : null;
+    if (!m || tab === "motion3d") return null;
+    return (
+      <div className="selection-card m3d-mini" data-testid="m3d-mini">
+        <div className="sel-head">
+          <span className="dot dot-motion3d" />
+          <b>3D motion</b>
+          <span className="sel-time">{timecode(m.startMs, fps)} – {timecode(m.endMs, fps)}</span>
+          <button className="chip-btn" data-testid="m3d-open-tab" onClick={() => onTab("motion3d")}>Edit on 3D tab</button>
+        </div>
+      </div>
+    );
   }
   if (sel.track === "slide") {
     const s = project.slides[sel.index];
@@ -211,7 +223,6 @@ function LookTab({ p }: { p: ProjectConfig }) {
           onChange={(v) => store.edit(v === "fill" ? "Fill frame and follow" : "Fit whole screen", (q) => ({ ...q, output: { ...q.output, fit: v as "fit" | "fill" } }))} />
         {p.output.aspect !== "16:9" && <p className="note">Fill crops in to the frame and pans with the cursor or a fixed zoom target; Fit shows the whole screen.</p>}
       </Section>
-      <Motion3dLookSection />
     </>
   );
 }
@@ -542,10 +553,16 @@ function AudioTab({ p }: { p: ProjectConfig }) {
 export function Inspector() {
   const [tab, setTab] = useState<Tab>("look");
   const p = useEditor((s) => s.project);
+  // selecting a 3D block (timeline click, lane add, Add 3D) opens the 3D tab, where its controls are
+  const sel = useEditor((s) => s.selection);
+  // (keyed on the selection object: every click selects anew, so re-clicking the block comes back too)
+  useEffect(() => {
+    if (sel?.track === "motion3d") setTab("motion3d");
+  }, [sel]);
   const planMs = useEditor((s) => s.planMs);
   return (
     <aside className="inspector" data-testid="inspector">
-      <SelectionCard />
+      <SelectionCard tab={tab} onTab={setTab} />
       <nav className="tabs" role="tablist">
         {TABS.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} data-testid={`tab-${t.id}`} onClick={() => setTab(t.id)}>
@@ -556,6 +573,7 @@ export function Inspector() {
       <div className="insp-scroll">
         {tab === "look" && <LookTab p={p} />}
         {tab === "zoom" && <ZoomTab p={p} />}
+        {tab === "motion3d" && <Motion3dTab />}
         {tab === "cursor" && <CursorTab p={p} />}
         {tab === "camera" && <CameraTab p={p} />}
         {tab === "captions" && (
