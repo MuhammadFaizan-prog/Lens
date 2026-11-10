@@ -2,6 +2,7 @@
  * Local dev-server endpoints for the Lens editor (Vite plugin; Tauri commands replace these later).
  *
  *   GET  /api/bundle[?dir=]          meta, events, project, transcript and frame counts of a bundle
+ *   GET  /api/silences[?dir=]        { silences }: measured mic silences (measured once in the background, cached)
  *   GET  /api/frames/:track/:n.jpg   decoded source frame n (0-based) of screen | cam
  *   GET  /api/media/:name            a file inside the bundle (audio tracks)
  *   GET  /api/font/caption.ttf       the caption font the reference compositor uses (DejaVu Sans Bold)
@@ -38,7 +39,8 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { startJob } from "./jobs";
 import { transcribe } from "./stt";
-import { detectSilencesSync, type Range } from "./silence";
+import { detectSilences, type Range } from "./silence";
+import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput } from "../../../packages/engine/src/index";
 
@@ -324,25 +326,23 @@ function startTranscribe(bundle: string, auto = false): TranscribeJob {
 
 /**
  * Measured silences on the mic track, on the recording clock (Windows #17: "Shorten pauses" works with
- * no transcript). Cached in .lens-cache/silences.json, keyed by the mic file's size, mtime and offset.
+ * no transcript). Two ffmpeg passes (~1.5 s on a minute): async and cached (memory + .lens-cache/silences.json,
+ * keyed by the mic file's path, size, mtime and offset), so /api/bundle never waits for them; the editor
+ * gets them from GET /api/silences.
  */
-function micSilences(bundle: string): Range[] {
+const silenceCache = new FileCache<Range[]>(async (file) => (await detectSilences(FFMPEG, file, { minMs: 300 })).silences, "sil-v2");
+function micSilences(bundle: string): Promise<Range[]> {
+  const mic = micTrack(bundle);
+  if (!mic) return Promise.resolve([]);
+  return silenceCache.get(mic.file, path.join(bundle, ".lens-cache", "silences.json"))
+    .then((s) => s.map((r) => ({ startMs: r.startMs + mic.offsetMs, endMs: r.endMs + mic.offsetMs })), () => []);
+}
+/** The silences when already measured (no work started), else undefined. */
+function micSilencesReady(bundle: string): Range[] | undefined {
   const mic = micTrack(bundle);
   if (!mic) return [];
-  const st = fs.statSync(mic.file);
-  const key = `${path.basename(mic.file)}:${st.size}:${st.mtimeMs}:${mic.offsetMs}:v1`;
-  const cache = path.join(bundle, ".lens-cache", "silences.json");
-  const c = readJson(cache) as { key?: string; silences?: Range[] } | null;
-  if (c?.key === key && Array.isArray(c.silences)) return c.silences;
-  let silences: Range[] = [];
-  try {
-    silences = detectSilencesSync(FFMPEG, mic.file, { minMs: 300 }).silences.map((r) => ({ startMs: r.startMs + mic.offsetMs, endMs: r.endMs + mic.offsetMs }));
-  } catch {
-    return [];
-  }
-  fs.mkdirSync(path.dirname(cache), { recursive: true });
-  fs.writeFileSync(cache, JSON.stringify({ key, silences }));
-  return silences;
+  const s = silenceCache.peek(mic.file, path.join(bundle, ".lens-cache", "silences.json"));
+  return s?.map((r) => ({ startMs: r.startMs + mic.offsetMs, endMs: r.endMs + mic.offsetMs }));
 }
 
 const extracting = new Map<string, Extraction>();
@@ -442,28 +442,10 @@ function extractFrames(bundle: string, track: "screen" | "cam"): Extraction {
   return x;
 }
 
-/** Number of video frames without decoding: a stream copy to null counts the packets (~0.1 s for a 1080p60 minute). Cached by mtime. */
-const counted = new Map<string, number>();
-function frameCount(bundle: string, track: "screen" | "cam"): number {
-  const video = path.join(bundle, `${track}.mp4`);
-  const mtime = String(fs.statSync(video).mtimeMs);
-  const memo = counted.get(`${video}|${mtime}`);
-  if (memo) return memo;
-  const cache = path.join(bundle, ".lens-cache", `${track}.count.json`);
-  const c = readJson(cache) as { mtime?: string; frames?: number } | null;
-  if (c?.mtime === mtime && typeof c.frames === "number" && c.frames > 0) {
-    counted.set(`${video}|${mtime}`, c.frames);
-    return c.frames;
-  }
-  const r = spawnSync(FFMPEG, ["-hide_banner", "-i", video, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"], { encoding: "utf8", windowsHide: true, timeout: 60_000 });
-  if (r.error) throw new Error(`could not run ffmpeg (${FFMPEG}) to read ${track}.mp4: ${r.error.message}`);
-  const all = [...String(r.stderr ?? "").matchAll(/frame=\s*(\d+)/g)];
-  const frames = all.length ? Number(all[all.length - 1]![1]) : 0;
-  if (!frames) throw new Error(`${track}.mp4 has no readable video frames (ffmpeg: ${String(r.stderr ?? "").trim().split(/\r?\n/).slice(-2).join(" / ").slice(0, 300)})`);
-  fs.mkdirSync(path.dirname(cache), { recursive: true });
-  fs.writeFileSync(cache, JSON.stringify({ mtime, frames }));
-  counted.set(`${video}|${mtime}`, frames);
-  return frames;
+/** Size, fps and frame count of a track: one async probe per file, cached by path + size + mtime (memory and .lens-cache). */
+const probeCache = new FileCache<VideoProbe>((f) => probeVideoFile(FFMPEG, FFPROBE, f), "probe-v1");
+function probeTrack(bundle: string, track: "screen" | "cam"): Promise<VideoProbe> {
+  return probeCache.get(path.join(bundle, `${track}.mp4`), path.join(bundle, ".lens-cache", `${track}.probe.json`));
 }
 
 // at most 3 seek decodes at a time (scrubbing far ahead of the pass must not start dozens of ffmpegs)
@@ -542,11 +524,15 @@ async function loadBundle(dir: string) {
   const project = readJson(path.join(dir, "project.json")) ?? {};
   const transcript = readJson(path.join(dir, "transcript.json"));
   const hasCam = fs.existsSync(path.join(dir, "cam.mp4"));
-  // frame counts without decoding; the JPEG pass starts in the background (served as it lands)
-  const screenFrames = frameCount(dir, "screen");
-  const camFrames = hasCam ? frameCount(dir, "cam") : 0;
+  // one probe per track (size, fps, frame count; both tracks at once, off the event loop); the JPEG pass
+  // starts in the background (served as it lands)
+  const [screen, camera] = await Promise.all([probeTrack(dir, "screen"), hasCam ? probeTrack(dir, "cam") : null]);
   extractFrames(dir, "screen");
   if (hasCam) extractFrames(dir, "cam");
+  const mic = micTrack(dir);
+  // measured silences: in the answer when already cached, else measured in the background (GET /api/silences)
+  const silences = micSilencesReady(dir);
+  if (silences === undefined) void micSilences(dir);
   return {
     dir,
     name: path.basename(dir),
@@ -556,48 +542,20 @@ async function loadBundle(dir: string) {
     events,
     project,
     transcript,
-    hasMic: !!micTrack(dir),
-    /** Measured silences on the mic (pauses for Cleanup when there is no transcript). */
-    silences: micSilences(dir),
+    hasMic: !!mic,
+    /** Measured silences on the mic (pauses for Cleanup when there is no transcript); absent while being measured. */
+    ...(silences !== undefined ? { silences } : { silencesPending: true }),
     // a fresh desktop recording with a mic (recording.json autoTranscribe, written at Stop): the editor
     // starts on-device speech-to-text once; the marker stops a failed run from repeating on every open
     translateUnavailable: translateUnavailable(),
-    autoTranscribe: !transcript && !!micTrack(dir) && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
+    autoTranscribe: !transcript && !!mic && (readJson(path.join(dir, "recording.json")) as { autoTranscribe?: boolean } | null)?.autoTranscribe === true
       && !fs.existsSync(path.join(dir, ".lens-cache", "transcribe-auto")),
-    screen: { ...probeVideoCached(path.join(dir, "screen.mp4")), frames: screenFrames },
-    camera: hasCam ? { ...probeVideoCached(path.join(dir, "cam.mp4")), frames: camFrames } : null,
+    screen,
+    camera,
   };
 }
 
-const probed = new Map<string, { width: number; height: number; fps: number }>();
-function probeVideoCached(f: string): { width: number; height: number; fps: number } {
-  const k = `${f}|${fs.statSync(f).mtimeMs}`;
-  let v = probed.get(k);
-  if (!v) probed.set(k, (v = probeVideo(f)));
-  return v;
-}
-
-/** Width, height and frame rate of a video's first stream: ffprobe, or `ffmpeg -i` when no ffprobe is shipped (desktop build). */
-export function probeVideo(f: string): { width: number; height: number; fps: number } {
-  const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", f], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
-  if (r.status === 0 && r.stdout) {
-    const s = JSON.parse(r.stdout).streams[0];
-    const [n, d] = String(s.r_frame_rate).split("/").map(Number);
-    return { width: s.width as number, height: s.height as number, fps: (n ?? 30) / (d ?? 1) };
-  }
-  const info = spawnSync(FFMPEG, ["-hide_banner", "-i", f], { encoding: "utf8", windowsHide: true, timeout: 30_000 }).stderr ?? "";
-  return parseFfmpegVideoInfo(info);
-}
-
-/** Parse "Stream #0:0...: Video: h264 ..., 1280x720 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr" from `ffmpeg -i`. */
-export function parseFfmpegVideoInfo(text: string): { width: number; height: number; fps: number } {
-  const line = text.split(/\r?\n/).find((l) => /Stream #\d+:\d+.*: Video:/.test(l));
-  if (!line) throw new Error("no video stream");
-  const size = / (\d{2,5})x(\d{2,5})[ ,]/.exec(line);
-  const fps = /([\d.]+) fps/.exec(line) ?? /([\d.]+) tbr/.exec(line);
-  if (!size) throw new Error("no video size");
-  return { width: Number(size[1]), height: Number(size[2]), fps: fps ? Number(fps[1]) : 30 };
-}
+export { parseFfmpegVideoInfo } from "./probe";
 
 /** Resolve a project against the bundle: audio paths made absolute so the compositor finds them. */
 function exportProject(bundle: string, raw: unknown) {
@@ -609,7 +567,7 @@ function exportProject(bundle: string, raw: unknown) {
   return p;
 }
 
-function startExport(bundle: string, rawProject: unknown): ExportJob {
+async function startExport(bundle: string, rawProject: unknown): Promise<ExportJob> {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const dir = path.join(bundle, ".lens-export", id);
   fs.mkdirSync(dir, { recursive: true });
@@ -618,7 +576,7 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)) });
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const job: ExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now() };
@@ -650,14 +608,14 @@ function startExport(bundle: string, rawProject: unknown): ExportJob {
 }
 
 /** In-browser export (LENS_EXPORT=browser): the plan is built here, the editor posts the frames. */
-function startExportBrowser(bundle: string, rawProject: unknown): BrowserExportJob {
+async function startExportBrowser(bundle: string, rawProject: unknown): Promise<BrowserExportJob> {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const meta = JSON.parse(fs.readFileSync(path.join(bundle, "meta.json"), "utf8"));
   const events = parseEventLog(fs.readFileSync(path.join(bundle, "events.jsonl"), "utf8"));
   const tj = readJson(path.join(bundle, "transcript.json"));
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
-  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? micSilences(bundle) });
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)) });
   const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT);
   jobs.set(id, job);
   return job;
@@ -721,10 +679,11 @@ export function apiMiddleware() {
     try {
       let m: RegExpExecArray | null;
       if (url.pathname === "/api/bundle" && req.method === "GET") return sendJson(res, await loadBundle(bundle));
+      if (url.pathname === "/api/silences" && req.method === "GET") return sendJson(res, { silences: await micSilences(bundle) });
       if ((m = /^\/api\/frames\/(screen|cam)\/(\d+)\.jpg$/.exec(url.pathname))) {
         const track = m[1] as "screen" | "cam";
         const x = extractFrames(bundle, track);
-        const total = x.finished ? await x.done : frameCount(bundle, track);
+        const total = x.finished ? await x.done : (await probeTrack(bundle, track)).frames;
         const idx = Math.min(total - 1, Math.max(0, Number(m[2])));
         res.setHeader("content-type", "image/jpeg");
         res.setHeader("cache-control", "max-age=3600");
@@ -736,7 +695,7 @@ export function apiMiddleware() {
         for (let i = 0; i < 10 && !x.finished && idx >= x.written() && idx - x.written() < 30; i++) await new Promise((r) => setTimeout(r, 50));
         if (x.finished || idx < x.written()) return fs.createReadStream(file).pipe(res);
         res.setHeader("cache-control", "no-store");
-        return res.end(await frameAt(bundle, track, idx, probeVideoCached(path.join(bundle, `${track}.mp4`)).fps));
+        return res.end(await frameAt(bundle, track, idx, (await probeTrack(bundle, track)).fps));
       }
       if ((m = /^\/api\/media\/([^/]+)$/.exec(url.pathname))) {
         const file = path.join(bundle, path.basename(decodeURIComponent(m[1]!)));
@@ -781,7 +740,7 @@ export function apiMiddleware() {
       if (url.pathname === "/api/capabilities" && req.method === "GET") return sendJson(res, { export: EXPORT_PATH });
       if (url.pathname === "/api/export-browser" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));
-        const job = startExportBrowser(bundle, body.project);
+        const job = await startExportBrowser(bundle, body.project);
         return sendJson(res, { id: job.id, total: job.total });
       }
       if ((m = /^\/api\/export-browser\/([a-z0-9]+)\/(frame|finish|cancel)$/.exec(url.pathname)) && req.method === "POST") {
@@ -811,7 +770,7 @@ export function apiMiddleware() {
       }
       if (url.pathname === "/api/export" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));
-        const job = startExport(bundle, body.project);
+        const job = await startExport(bundle, body.project);
         return sendJson(res, { id: job.id, total: job.total });
       }
       if ((m = /^\/api\/export\/([a-z0-9]+)(\/file)?$/.exec(url.pathname))) {

@@ -6,7 +6,7 @@
 import type { RenderPlan } from "@lens/engine";
 import { FrameStore } from "./media/frames";
 import { PlanRenderer } from "./render/renderer";
-import { buildPlan, fetchBundle, loadCaptionFont } from "./state/bundle";
+import { buildPlan, fetchBundle, fetchSilences, loadCaptionFont } from "./state/bundle";
 import { ensurePlanAssets, setAssetBundle } from "./render/assets";
 
 declare global {
@@ -24,6 +24,7 @@ const canvas = document.getElementById("c") as HTMLCanvasElement;
 const ready = (async () => {
   const dir = new URLSearchParams(location.search).get("dir");
   const b = await fetchBundle(dir ?? undefined);
+  if (b.silencesPending) b.silences = await fetchSilences(dir ?? undefined);
   await loadCaptionFont();
   plan = buildPlan(b, b.project);
   // frames from the bundle opened with ?dir= (the annotations parity run), not the default sample
