@@ -717,13 +717,32 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .canvas-overlay .co-screen .co-body { pointer-events: none; }
 /* ---------------------------------------------------------------- 3D motion (feat/motion-3d) */
 .m3d-card { gap: 6px; }
-.m3d-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin: 4px 0 2px; }
-.m3d-tpl { position: relative; display: flex; }
-.m3d-tpl > button:first-child { flex: 1; min-width: 0; padding: 5px 4px; border-radius: 6px; border: 1px solid var(--line-2); background: transparent; color: var(--text-2); font: 550 11px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-.m3d-tpl > button:first-child:hover { color: var(--text); border-color: #3a4452; }
-.m3d-tpl.on > button:first-child { color: var(--m3d); border-color: rgba(195, 139, 255, 0.55); background: rgba(195, 139, 255, 0.1); }
-.m3d-tpl.user > button:first-child { font-style: italic; padding-right: 16px; }
-.m3d-tpl-del { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 0 3px; }
+/* 3D template tiles: the backdrop picker's swatch tiles (.bg-grid / .bg-swatch), 3 per row, each a
+   mini card in the template's pose (CSS 3D, same axes as the engine) with its name under it */
+.bg-grid.m3d-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 4px 0 4px; }
+.m3d-tile-wrap { position: relative; min-width: 0; }
+.bg-swatch.m3d-tile {
+  width: 100%; height: auto; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 2px 5px;
+  background: linear-gradient(160deg, #2a2440, #1a1d26); color: var(--text-2);
+}
+.bg-swatch.m3d-tile:hover { color: var(--text); border-color: rgba(195, 139, 255, 0.45); }
+.bg-swatch.m3d-tile.on { color: var(--m3d); box-shadow: 0 0 0 2px var(--m3d); }
+.m3d-tile-name { font: 550 10.5px var(--font); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 3px; }
+.m3d-tile-wrap.user .m3d-tile-name { font-style: italic; }
+.m3d-thumb { width: 64px; height: 36px; display: flex; align-items: center; justify-content: center; perspective-origin: 50% 50%; pointer-events: none; }
+.m3d-thumb-card {
+  width: 46px; height: 26px; border-radius: 3px; background: linear-gradient(180deg, #e9ecf3 0 22%, #b9c3d6 22% 100%);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45); transform-style: preserve-3d; backface-visibility: visible; position: relative;
+}
+.m3d-thumb-bar { position: absolute; left: 4px; right: 18px; top: 10px; height: 3px; border-radius: 2px; background: rgba(110, 120, 140, 0.8); }
+.m3d-tile:hover .m3d-thumb-card { animation: m3d-tile-play 1.6s ease-in-out infinite alternate; }
+@keyframes m3d-tile-play {
+  0% { transform: var(--m3d-t0); }
+  50% { transform: var(--m3d-tm); }
+  100% { transform: var(--m3d-t1); }
+}
+@media (prefers-reduced-motion: reduce) { .m3d-tile:hover .m3d-thumb-card { animation: none; } }
+.m3d-tpl-del { position: absolute; right: 1px; top: 1px; border: 0; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 4px; }
 .m3d-tpl-del:hover { color: var(--danger); }
 .m3d-edit-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .m3d-edit-head .note { margin: 0; }

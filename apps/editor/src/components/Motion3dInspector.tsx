@@ -8,10 +8,10 @@
  * a tile grid with a small 3D thumbnail of each template's pose (Motion3dTemplateGrid), shared by
  * the Look tab and the block's card.
  */
-import { useState } from "react";
-import { DEFAULT_PERSPECTIVE, EASINGS_3D, type Easing3D, type Motion3DSegment, type Pose3D } from "@lens/engine";
+import { useState, type CSSProperties } from "react";
+import { DEFAULT_PERSPECTIVE, EASINGS_3D, type Easing3D, type Motion3DSegment, type Motion3DTemplate, type Pose3D } from "@lens/engine";
 import { store, useEditor } from "../state/store";
-import { keyAt, keyAtRange, keyCount, keyPose } from "../state/motion3dOps";
+import { keyAt, keyAtRange, keyCount, keyPose, templateTilePose } from "../state/motion3dOps";
 import { timecode } from "../state/timelineOps";
 import { Section, Segmented, Select, Slider, Toggle } from "./Controls";
 import { Icon } from "./Icon";
@@ -32,6 +32,76 @@ function keyName(s: Motion3DSegment, k: number): string {
   return `Key ${k}`;
 }
 
+/** Thumbnail geometry: the tile's "output" is 1920 px wide drawn into THUMB_W px. */
+const THUMB_W = 64;
+const THUMB_K = THUMB_W / 1920;
+
+/** CSS transform of a pose on the thumbnail card: the engine's p' = T + Rz Ry Rx (s p), same axes as CSS. */
+export function poseCss(p: Pose3D): string {
+  const tx = p.tx * THUMB_W;
+  const ty = p.ty * THUMB_W * (9 / 16);
+  const tz = p.tz * THUMB_K;
+  return `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, ${tz.toFixed(2)}px) rotateZ(${p.rz}deg) rotateY(${p.ry}deg) rotateX(${p.rx}deg) scale(${p.scale})`;
+}
+
+function TileThumb({ t }: { t: Motion3DTemplate }) {
+  const mid = templateTilePose(t);
+  const from = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1, ...t.from };
+  const to = { rx: 0, ry: 0, rz: 0, tx: 0, ty: 0, tz: 0, scale: 1, ...t.to };
+  const style = {
+    perspective: `${Math.max(100, t.perspective) * THUMB_K}px`,
+    ["--m3d-t0" as string]: poseCss(from),
+    ["--m3d-tm" as string]: poseCss(mid),
+    ["--m3d-t1" as string]: poseCss(to),
+  } as CSSProperties;
+  return (
+    <span className="m3d-thumb" style={style} aria-hidden="true">
+      <span className={`m3d-thumb-card ${t.backface === "front" ? "front-back" : ""}`} style={{ transform: poseCss(mid) }}>
+        <span className="m3d-thumb-bar" />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The template picker: a grid of tiles (3 per row, the backdrop picker's swatch tiles), each a
+ * mini card in the template's pose with its name under it; hovering plays the motion. Saved user
+ * templates follow the built-ins (with a delete ×).
+ */
+export function Motion3dTemplateGrid({ value, onPick, testPrefix }: { value: string; onPick: (id: string) => void; testPrefix: string }) {
+  const templates = useEditor((s) => s.motion3dTemplates);
+  return (
+    <div className="bg-grid m3d-tiles" role="listbox" aria-label="3D templates" data-testid={`${testPrefix}s`}>
+      {templates.map((t) => {
+        const id = tplKey(t);
+        const on = value === id;
+        return (
+          <div key={id} className={`m3d-tile-wrap ${t.user ? "user" : ""}`}>
+            <button
+              type="button"
+              role="option"
+              aria-selected={on}
+              aria-pressed={on}
+              className={`bg-swatch m3d-tile ${on ? "on" : ""}`}
+              title={`${t.name} (${sec(t.durationMs)})`}
+              data-testid={`${testPrefix}-${id}`}
+              onClick={() => onPick(id)}
+            >
+              <TileThumb t={t} />
+              <span className="m3d-tile-name">{t.name}</span>
+            </button>
+            {t.user && (
+              <button type="button" className="m3d-tpl-del" title={`Delete saved template ${t.name}`} aria-label={`Delete template ${t.name}`} data-testid={`${testPrefix}-del-${t.id}`} onClick={() => store.deleteMotion3dTemplate(t.id)}>
+                ×
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Pose sliders: typed values may go past the slider (angles to +-3600, the engine takes any). */
 const POSE_CTL: Array<{ k: keyof Pose3D; label: string; min: number; max: number; step: number; f: (v: number) => string; lo: number; hi: number; def: number }> = [
   { k: "rx", label: "Rotate X", min: -180, max: 180, step: 1, f: deg, lo: -3600, hi: 3600, def: 0 },
@@ -44,7 +114,6 @@ const POSE_CTL: Array<{ k: keyof Pose3D; label: string; min: number; max: number
 ];
 
 export function Motion3dCard({ index, seg }: { index: number; seg: Motion3DSegment }) {
-  const templates = useEditor((s) => s.motion3dTemplates);
   const k = useEditor((s) => s.m3dKey);
   const fps = useEditor((s) => s.plan?.output.fps ?? 30);
   const [name, setName] = useState("");
@@ -70,23 +139,7 @@ export function Motion3dCard({ index, seg }: { index: number; seg: Motion3DSegme
         </button>
       </div>
 
-      <div className="m3d-grid" role="list" aria-label="3D templates" data-testid="m3d-templates">
-        {templates.map((t) => {
-          const id = tplKey(t);
-          return (
-            <div key={id} role="listitem" className={`m3d-tpl ${seg.template === id ? "on" : ""} ${t.user ? "user" : ""}`}>
-              <button type="button" title={`Apply ${t.name} (${sec(t.durationMs)})`} data-testid={`m3d-tpl-${id}`} aria-pressed={seg.template === id} onClick={() => store.applyMotion3dTemplate(index, id)}>
-                {t.name}
-              </button>
-              {t.user && (
-                <button type="button" className="m3d-tpl-del" title={`Delete saved template ${t.name}`} aria-label={`Delete template ${t.name}`} data-testid={`m3d-tpl-del-${t.id}`} onClick={() => store.deleteMotion3dTemplate(t.id)}>
-                  ×
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <Motion3dTemplateGrid value={seg.template} testPrefix="m3d-tpl" onPick={(id) => store.applyMotion3dTemplate(index, id)} />
 
       <div className="m3d-keys" data-testid="m3d-keys">
         <span className="ctl-label">Keyframes</span>
@@ -193,7 +246,7 @@ export function Motion3dCard({ index, seg }: { index: number; seg: Motion3DSegme
   );
 }
 
-/** Look tab: pick a template, add a 3D block with it at the playhead. */
+/** Look tab: pick a template on the tile grid, add a 3D block with it at the playhead. */
 export function Motion3dLookSection() {
   const templates = useEditor((s) => s.motion3dTemplates);
   const count = useEditor((s) => s.project.motion3d.length);
@@ -201,7 +254,7 @@ export function Motion3dLookSection() {
   const valid = templates.some((t) => tplKey(t) === tpl) ? tpl : "tilt-in";
   return (
     <Section title="3D motion" aside={count ? <span className="lane-count" data-testid="m3d-count">{count}</span> : undefined}>
-      <Select label="Template" value={valid} testId="look-m3d-template" options={templates.map((t) => ({ value: tplKey(t), label: t.name }))} onChange={setTpl} />
+      <Motion3dTemplateGrid value={valid} testPrefix="look-m3d-tpl" onPick={setTpl} />
       <button className="chip-btn accent" data-testid="look-add-3d" onClick={() => store.addMotion3d(valid)}>
         <Icon name="plus" size={12} /> Add {templates.find((t) => tplKey(t) === valid)?.name ?? "3D"} at playhead
       </button>
