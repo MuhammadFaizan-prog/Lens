@@ -164,6 +164,48 @@ Intentional or accepted differences:
 12. **Image backdrops** (`background.kind = "image"`) are not drawn by the preview yet (it falls back
     to the first colour).
 
+## Caption fonts, styles and import (v0.1.4, Windows v0.1.3 request "add more styles n fonts")
+
+**Fonts.** The picker (Captions tab > Style) lists the built-in families plus 44 more from
+github.com/google/fonts (OFL 1.1 or Apache 2.0, licence per entry), in categories All / Sans / Serif /
+Display / Rounded / Condensed / Mono / Handwriting / My fonts, with a search box; every option is drawn
+in its own font. The catalog is `packages/engine/src/fontCatalog.ts` (`EXTRA_FONTS`, strict JSON between
+the catalog markers, pinned google/fonts commit, SHA-256 per file). The `.ttf` files are not committed:
+`assets/fonts/fetch_extra_fonts.mjs` downloads and checks them into `assets/fonts/` (git-ignored); the
+licence texts (`<Stem>-OFL.txt` / `<Stem>-Apache.txt`) are committed. `dist-win.mjs` and the release
+workflow run the fetch and refuse to package if a catalog font or its licence is not staged.
+Single-weight families draw the same file for bold (never a synthesised bold).
+
+**Styles.** 20 more presets in `CAPTION_PRESETS` (captionStyles.ts): Reels, Karaoke pill, Word pop,
+Word boxes, Gradient, Neon, Typewriter, Lower third, Classic subtitle, Soft shadow, Comic, Emoji friendly,
+Impact, Glass, Two tone, Bounce, Underline sweep, Handwritten, Karaoke fill, Retro terminal. They are
+built from optional style fields, each mirrored in `render.py draw_caption`: background per line / per
+word (`boxMode`), square corners or a full-width bar with an accent stripe (`boxShape`, `accent`), a
+frosted backdrop (`backdropBlur`), glow, drop shadow, gradient fill, second-line colour, word-by-word
+reveal, and the pill / underline / karaoke / pop / bounce highlights. Absent fields keep the original
+look, so older projects render unchanged.
+
+**Import.** "My fonts" > Import: **From computer** (file picker; the desktop app uses the native dialog),
+**From URL** (a direct .ttf / .otf / .woff / .woff2, or a stylesheet with @font-face rules such as a
+Google Fonts css2 link) or **Google Fonts** (family name; weights 400 and 700, or what the family has).
+`apps/editor/server/fonts.ts` checks every file parses as a font (`engine/fontFile.ts`: sfnt / WOFF /
+WOFF2, required tables, a family name) and is under 10 MB, copies it into `<bundle>/fonts/` (the project
+renders offline and on another machine) and into the user font library (`LENS_FONT_LIBRARY`, default
+`~/.lens/fonts`; the desktop app uses `userData/fonts`), which lists it under My fonts in every project.
+A licence note under the picker reminds the user to check the font's licence.
+
+**Missing fonts (behaviour change).** A font whose files are gone (a project copied without `fonts/`, a
+library font deleted, a built-in that was not fetched) no longer makes the export refuse. The preview
+and both export paths apply `withFontFallback` (plan.ts): that family is drawn in DejaVu Sans, the
+plan lists it in `fontFallbacks`, and the Captions tab shows a warning ("X is missing from this project;
+captions use DejaVu Sans until you import it again"). Before, the compositor raised
+"caption font not available for the export"; that check now only guards plans built without the fallback.
+
+Tests: `packages/engine/test/captionFonts2.test.ts`, `captionStyles.test.ts`,
+`apps/editor/test/fontImport.test.ts`; Playwright `e2e/captionFonts2.spec.ts` (picker, import, My fonts,
+licence note, fallback, preview vs export) and `e2e/parity-caption-styles2.spec.ts` (all 20 styles,
+preview vs export). Text metrics: see Preview vs export item 4.
+
 ## Export dialog (demand #7)
 
 **Export…** in the top bar opens the Export dialog: **Video** (the MP4 export), **Interactive demo**
