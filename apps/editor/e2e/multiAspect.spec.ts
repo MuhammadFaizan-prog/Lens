@@ -204,9 +204,13 @@ test("several sizes: one batch, exact sizes, subject in frame, crop keys, previe
     if (s.framing !== "custom") {
       for (const t of ["1200", "1400"]) {
         const f = frameAt(file, Number(t) / 1000);
-        const c = redCentroid(f);
-        expect(c).not.toBeNull();
         const m = want[s.tid]![t]!;
+        // the target's dot: red pixels within 10 % of the frame of where the plan maps it (changed after
+        // the Follow fix, bounds unchanged: Follow now widens to keep the cursor in frame too, which
+        // brings the second marker (320, 520) into the 9:16 / 4:5 frames, and a whole-frame centroid
+        // averaged the two dots: err 0.487)
+        const c = redCentroid(f, m.x - 0.1 * s.w, m.y - 0.1 * s.h, m.x + 0.1 * s.w, m.y + 0.1 * s.h);
+        expect(c).not.toBeNull();
         const err = Math.max(Math.abs(c!.x - m.x) / s.w, Math.abs(c!.y - m.y) / s.h);
         const margin = Math.min(c!.x / s.w, (s.w - c!.x) / s.w, c!.y / s.h, (s.h - c!.y) / s.h);
         r[`red${t}`] = { x: +c!.x.toFixed(1), y: +c!.y.toFixed(1), planX: +m.x.toFixed(1), planY: +m.y.toFixed(1), err: +err.toFixed(4), margin: +margin.toFixed(3) };

@@ -13,7 +13,8 @@ Custom, `packages/engine/src/framing.ts`).
 - **Export… > Video > Several sizes…** (`sizes-enable`) turns it on: one row per size with its pixel
   size, a tick (exported or not), its framing (Fit / Fill / Follow cursor / Custom) and **Show**.
   The current aspect keeps its framing; the other shapes start on **Follow cursor**, which fills the
-  frame and pans with the cursor, or with a zoom's fixed target while that zoom is on. **One size**
+  frame and pans with the cursor, or towards a zoom's fixed target while that zoom is on, keeping the
+  cursor in frame too (see "Follow keeps the cursor and the target" below). **One size**
   turns it off (the size shown stays).
 - **Show** (or the toolbar's size picker, `tb-target`, which replaces the aspect picker while several
   sizes are on) makes that size the one the preview draws and every framing control edits, including
@@ -26,7 +27,24 @@ Custom, `packages/engine/src/framing.ts`).
 - The toolbar **Export** button becomes **Export N sizes** and runs the batch; the Video tab also has
   **Export N sizes** and **Export MP4 (shown only)**. The export sheet shows *Exporting 9:16 (2 of 4)*
   and then one row per size with its size and a **Download** link (`lens-export-9x16.mp4`). Cancel
-  stops the size being exported and skips the rest.
+  stops the size being exported (its server job too, even when pressed while that size is still
+  starting) and skips the rest.
+
+## Follow keeps the cursor and the target
+
+During a zoom on a fixed point, Follow used to aim the crop at the zoom target only; on a narrow size
+(9:16 shows ~400 of 1280 source px, less while zoomed) a cursor 600 px away left the frame. Now each
+Follow frame (`followFrame`, `packages/engine/src/framing.ts`):
+
+1. starts from the old window (Fill size, centred on the pan focus): if it already holds the cursor
+   and the target with 6 % of the window clear on each side, the frame is drawn exactly as before;
+2. otherwise moves the window the least that holds both;
+3. and if both cannot fit in a Fill window, widens it until they do: the recording shrinks in the
+   frame and the background shows above and below it (on 9:16 with the cursor and target 600 px apart,
+   about a 600 px wide window), and the camera zooms back out as far as that needs.
+
+The target's weight follows the zoom (full from half way in, fading as the camera zooms back out), so
+the frame moves continuously. A hidden or idle-hidden cursor is not kept (the old Follow then).
 
 ## Project data
 
@@ -71,17 +89,18 @@ Custom, `packages/engine/src/framing.ts`).
   playhead, nothing changes without keys.
 - Playwright `apps/editor/e2e/multiAspect.spec.ts` (bounds in the file, set before the first run):
   through the Export dialog, the toolbar size picker and the Custom keyframe panel, a 4-size batch
-  on the in-app export path. See the Tracker row for the measured numbers and the one bound that
-  fails (the cursor is not in the 9:16 / 4:5 frame while Follow aims at a zoom target 600 px away).
+  on the in-app export path, then a second batch cancelled while its first size runs. See the Tracker
+  row for the measured numbers.
+- Engine vitest `packages/engine/test/followFraming.test.ts` (7): a frame that already holds the cursor
+  is the old frame; close points held with the margin and the canvas still covered; far points held by
+  widening; continuous in the target weight; target weighting; the e2e scene's plan on 9:16 and 4:5
+  (cursor in frame on every frame, target in frame through the hold).
 
 ## Not done / known limits
 
-- **Follow cannot keep both the cursor and a distant zoom target in a narrow frame.** During a
-  fixed-target zoom, Follow aims at the target (by design); on the 9:16 and 4:5 sizes the cursor is
-  then outside the frame, and during the pans into and out of the zoom (about 0.4 s in all here) neither is. The e2e bound "cursor in
-  frame on every Follow frame" fails for that reason (31 / 60 frames on 9:16, 29 / 60 on 4:5 in the
-  test clip). A per-size "follow the cursor, ignore zoom targets" option or a cut instead of a pan
-  would be the next step.
+- **Follow widens rather than cuts.** When the cursor and a zoom target are too far apart for the
+  size, Follow shows both by shrinking the recording (background above and below) instead of a cut
+  or a split; a per-size "cursor only" option is not built.
 - Zooms are shared by all sizes (re-aimed by Follow, not re-planned per size); per-size zoom scales are
   not built.
 - GIF / step-guide exports are one size; Windows unverified.
