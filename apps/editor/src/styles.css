@@ -20,6 +20,7 @@
   --mask: #b794ff;
   --caption: #5eead4;
   --audio: #5fd4a4;
+  --voice: #f4a8d0;
   --annotation: #ff8a5c;
   --slide: #f0abfc;
   --freeze: #7dd3fc;
@@ -269,7 +270,7 @@ select {
 
 .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
 .dot-freeze { background: var(--freeze); } .dot-zoom { background: var(--zoom); } .dot-cut { background: var(--cut); } .dot-speed { background: var(--speed); } .dot-motion3d { background: var(--m3d); }
-.dot-mask { background: var(--mask); } .dot-caption { background: var(--caption); } .dot-audio { background: var(--audio); }
+.dot-mask { background: var(--mask); } .dot-caption { background: var(--caption); } .dot-audio { background: var(--audio); } .dot-voiceover { background: var(--voice); }
 
 /* ---------------------------------------------------------------- timeline */
 .timeline { border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
@@ -927,3 +928,20 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .framing-key-list li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .framing-key-list li.on .chip-btn { color: var(--text); border-color: #3a4452; }
 .framing-key-list .icon-btn { margin-left: auto; }
+/* ---------------------------------------------------------------- voiceover (demand #17) */
+.lane-voiceover .lane-hint { pointer-events: none; }
+.block-voiceover { background: var(--voice); }
+.block-voiceover.muted { opacity: 0.4; background: repeating-linear-gradient(135deg, var(--voice) 0 6px, rgba(244, 168, 208, 0.55) 6px 12px); }
+.block-voiceover.recording { background: #ff5d6c; animation: vo-pulse 1s ease-in-out infinite; cursor: default; }
+@keyframes vo-pulse { 50% { filter: brightness(1.25); } }
+.vo-lines { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; margin: 4px 0; }
+.vo-line { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line-2); font-size: 12px; }
+.vo-line.done { border-color: var(--voice); }
+.vo-line.rec { border-color: #ff5d6c; }
+.vo-line .vo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.vo-line .vo-time { font: 10.5px var(--mono); color: var(--muted); }
+.vo-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+.vo-clip { display: flex; align-items: center; gap: 8px; padding: 4px 7px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text-2); }
+.vo-clip.on { background: var(--panel-3); color: var(--text); }
+.vo-clip .dot { background: var(--voice); }
+.chip-btn.rec { color: #ff5d6c; }

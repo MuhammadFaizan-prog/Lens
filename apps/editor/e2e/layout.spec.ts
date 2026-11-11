@@ -6,7 +6,7 @@
  *    the preview area is >= 60 % of the stage (centre column) height;
  *    the page never scrolls sideways (scrollWidth <= innerWidth) and the top bar's last button ends
  *    inside the window;
- *    every timeline lane (Zoom ... Audio), scrolled into view in the timeline, is fully visible
+ *    every timeline lane (Zoom ... Audio, Voiceover), scrolled into view in the timeline, is fully visible
  *    (no lane clipped: its top and bottom lie inside the timeline's scroll box) and its "+" is clickable.
  *  - F toggles preview fullscreen: the canvas gets >= 1.3x taller, and F again restores the size.
  *  - dragging the timeline splitter up by 80 px grows the timeline by 80 +- 2 px.
@@ -25,7 +25,7 @@ const SIZES = [
   { name: "1366x768", w: 1366, h: 768, dpr: 1 },
   { name: "1920x1080@150", w: 1280, h: 720, dpr: 1.5 },
 ];
-const LANES = ["lane-zoom", "lane-cut", "lane-takes", "lane-speed", "lane-mask", "lane-annotation", "lane-caption", "lane-audio"];
+const LANES = ["lane-zoom", "lane-cut", "lane-takes", "lane-speed", "lane-mask", "lane-annotation", "lane-caption", "lane-audio", "lane-voiceover"];
 
 for (const sz of SIZES) {
   test(`layout fits at ${sz.name}`, async () => {

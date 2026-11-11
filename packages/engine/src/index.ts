@@ -39,3 +39,4 @@ export * from "./fontCatalog.js";
 export * from "./fontFile.js";
 export * from "./exportPresets.js";
 export * from "./chapters.js";
+export * from "./voiceover.js";

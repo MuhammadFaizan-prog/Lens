@@ -1,0 +1,10 @@
+import { chromium } from "@playwright/test";
+const b = await chromium.launch({ executablePath: "/usr/bin/chromium", args: ["--no-zygote","--in-process-gpu","--disable-gpu-sandbox","--disable-dev-shm-usage"] });
+const p = await b.newPage();
+p.on("console", (m) => console.log("console", m.type(), m.text().slice(0, 300)));
+p.on("pageerror", (e) => console.log("pageerror", e.message));
+console.log(await p.evaluate(() => 0));
+await p.goto("http://127.0.0.1:5171/?dir=" + encodeURIComponent(process.argv[2]));
+await p.waitForTimeout(15000);
+console.log(await p.evaluate(() => { const s = window.__lens?.state(); const c = document.querySelector('[data-testid="preview"]'); return JSON.stringify({ st: s?.status, f: s?.frame, rev: s?.revision, cf: c?.dataset.frame, cr: c?.dataset.revision, h264: document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E"'), vd: typeof VideoDecoder }); }));
+await b.close();

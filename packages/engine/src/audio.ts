@@ -3,6 +3,7 @@ import type { TimelinePiece } from "./timeline.js";
 import { sourceToOutput } from "./timeline.js";
 import type { SegmentOverride, TimeRange, Word } from "./types.js";
 import { buildMusicPlan, speechRanges, speechToOutput, type MusicPlan } from "./music.js";
+import { voicePieces, type VoicePiece } from "./voiceover.js";
 
 /**
  * Audio side of the render plan (AUD-04/06, EDT-05, CUR-08). The audio follows exactly the same
@@ -29,6 +30,8 @@ export interface AudioPlan {
   loudness: ProjectConfig["audio"]["loudness"];
   /** Music bed (demand #23); absent when the project has none, so older plans are unchanged. */
   music?: MusicPlan;
+  /** Voiceover clips on the output clock (demand #17), mixed after the tracks' cleanup; absent when none. */
+  voice?: VoicePiece[];
 }
 
 /** Gain multiplier from overrides at source time t (later overrides win). */
@@ -92,7 +95,8 @@ export function buildAudioPlan(
   const music = m && m.enabled && m.path
     ? buildMusicPlan(m, durationMs, tracks.length ? speechToOutput(pieces, speechRanges(speech.sourceMs ?? Infinity, speech.words ?? [], speech.pauses)) : [])
     : undefined;
-  if (tracks.length === 0 && !clicksOn && !music) return null;
+  const voice = voicePieces(project.voiceover, timeline, durationMs);
+  if (tracks.length === 0 && !clicksOn && !music && !voice.length) return null;
   return {
     sampleRate: project.audio.sampleRate,
     durationMs,
@@ -102,5 +106,6 @@ export function buildAudioPlan(
     noiseReduction: project.audio.noiseReduction,
     loudness: project.audio.loudness,
     ...(music ? { music } : {}),
+    ...(voice.length ? { voice } : {}),
   };
 }

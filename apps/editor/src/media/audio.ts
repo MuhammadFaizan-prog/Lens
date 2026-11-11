@@ -1,6 +1,7 @@
 /**
  * Preview audio: plays the mic track through the plan's audio pieces (cuts skipped, speed ranges
- * played at their rate, per-segment gain), and provides waveform peaks for the timeline.
+ * played at their rate, per-segment gain) and the voiceover clips (demand #17) at their output
+ * times, and provides waveform peaks for the timeline.
  * Noise reduction plays through an RNNoise AudioWorklet (rnnoiseDenoise.ts) when the project has it
  * on, so the preview sounds like the export (ffmpeg arnndn, RNNoise too); loudness normalisation is
  * export-only.
@@ -29,6 +30,11 @@ export class AudioEngine {
   private music: { path: string; buffer: AudioBuffer | null; lufs: number; loading: Promise<void> | null } | null = null;
   /** Called when the music finishes loading (the store restarts playback so it is heard). */
   onMusicReady: (() => void) | null = null;
+  /** Decoded voiceover clip files (demand #17), by project path. */
+  private voice = new Map<string, AudioBuffer>();
+  private voiceLoading = new Map<string, Promise<void>>();
+  /** Silence the recording's own track (while a voiceover take is being recorded, so the mic does not pick it up). */
+  muteOriginal = false;
   peaks: Float32Array | null = null;
   /** ms of source audio per peak bucket */
   peakMs = 10;
@@ -56,6 +62,56 @@ export class AudioEngine {
     } catch {
       this.buffer = null;
     }
+  }
+
+  /** Decode the voiceover files the project uses (once each); listeners hear when one is ready. */
+  loadVoice(paths: string[]): Promise<void> {
+    const dir = new URLSearchParams(location.search).get("dir");
+    const jobs = [...new Set(paths)].filter((p) => !this.voice.has(p)).map((p) => {
+      let j = this.voiceLoading.get(p);
+      if (!j) {
+        j = (async () => {
+          try {
+            const r = await fetch(`/api/asset?path=${encodeURIComponent(p)}${dir ? `&dir=${encodeURIComponent(dir)}` : ""}`);
+            if (!r.ok) return;
+            const off = new OfflineAudioContext(2, 1, 48000);
+            this.voice.set(p, await off.decodeAudioData(await r.arrayBuffer()));
+            for (const l of this.listeners) l();
+          } catch {
+            /* unreadable file: the clip stays silent in the preview */
+          } finally {
+            this.voiceLoading.delete(p);
+          }
+        })();
+        this.voiceLoading.set(p, j);
+      }
+      return j;
+    });
+    return Promise.all(jobs).then(() => undefined);
+  }
+
+  /** Whether a voiceover file is decoded (diagnostics, e2e). */
+  voiceReady(path: string): boolean {
+    return this.voice.has(path);
+  }
+
+  /** The decoded voice file's duration in ms (null until loaded). */
+  voiceFileMs(path: string): number | null {
+    const b = this.voice.get(path);
+    return b ? b.duration * 1000 : null;
+  }
+
+  /**
+   * The preview's audio rendered offline as a mono (L+R)/2 mix: `ms` of output from frame `frame` at
+   * 1x, 48 kHz, through the same schedule live playback uses (denoise and loudness excluded, as the live
+   * preview without them). Voiceover e2e (demand #17); renderOffline below is the stereo version.
+   */
+  async renderOfflineMono(plan: RenderPlan, frame: number, ms: number): Promise<Float32Array> {
+    const x = await this.renderOffline(plan, frame, ms / 1000);
+    const n = x.length / 2;
+    const m = new Float32Array(n);
+    for (let i = 0; i < n; i++) m[i] = (x[2 * i]! + x[2 * i + 1]!) / 2;
+    return m;
   }
 
   private context(): AudioContext | null {
@@ -162,12 +218,13 @@ export class AudioEngine {
 
   /**
    * Schedule the plan's audio from output frame `frame` at `rate` into `dest` of `ctx`, starting at
-   * context time `t0`: speech pieces of the first track (track volume on `trackGain`) and the music bed.
+   * context time `t0`: speech pieces of the first track (track volume on `trackGain`; skipped while muteOriginal), the
+   * voiceover clips and the music bed.
    */
   private schedule(ctx: BaseAudioContext, trackGain: AudioNode, dest: AudioNode, plan: RenderPlan, frame: number, rate: number, t0: number, nodes: AudioScheduledSourceNode[]): void {
     const audio = plan.audio;
     if (!audio || rate <= 0) return;
-    if (this.buffer && audio.tracks[0]) {
+    if (this.buffer && audio.tracks[0] && !this.muteOriginal) {
       for (const s of audioSchedule(plan, frame, rate, this.buffer.duration * 1000)) {
         const node = ctx.createBufferSource();
         node.buffer = this.buffer;
@@ -178,6 +235,26 @@ export class AudioEngine {
         node.start(t0 + s.whenS, s.offsetS, s.durationS);
         nodes.push(node);
       }
+    }
+    // voiceover clips (demand #17) at their output times, straight out like the music (the export adds
+    // them after its denoise / loudnorm), 3 ms fades at both ends as the export mixes them
+    for (const v of voiceSchedule(plan, frame, rate)) {
+      const buf = this.voice.get(v.path);
+      if (!buf) continue;
+      const node = ctx.createBufferSource();
+      node.buffer = buf;
+      node.playbackRate.value = v.playbackRate;
+      const g = ctx.createGain();
+      const at = t0 + v.whenS;
+      const len = v.durationS / v.playbackRate;
+      const f = Math.min(0.003, len / 2);
+      g.gain.setValueAtTime(v.fadeIn ? 0 : v.gain, at);
+      if (v.fadeIn) g.gain.linearRampToValueAtTime(v.gain, at + f);
+      g.gain.setValueAtTime(v.gain, Math.max(at + f, at + len - f));
+      g.gain.linearRampToValueAtTime(0, at + len);
+      node.connect(g).connect(dest);
+      node.start(at, v.offsetS, v.durationS);
+      nodes.push(node);
     }
     const m = audio.music;
     const mb = this.music?.path === m?.path ? this.music?.buffer : null;
@@ -212,7 +289,7 @@ export class AudioEngine {
   restart(plan: RenderPlan, frame: number, rate: number): void {
     this.stop();
     if (plan.audio?.music) void this.loadMusic(plan.audio.music.path);
-    if (!plan.audio || rate <= 0 || (!this.buffer && !this.music?.buffer)) return;
+    if (!plan.audio || rate <= 0 || (!this.buffer && !this.music?.buffer && !plan.audio.voice?.length)) return;
     const ctx = this.context();
     if (!ctx || !this.gain) return;
     void ctx.resume();
@@ -298,6 +375,27 @@ export function audioSchedule(plan: Pick<RenderPlan, "audio" | "output">, frame:
     // a piece that starts before the file does: wait for the file's first sample
     const lead = (from - srcAt) / p.rate;
     out.push({ whenS: (startOut - outNow + lead) / 1000 / rate, offsetS: from / 1000, durationS: (srcEnd - from) / 1000, playbackRate: p.rate * rate, gain: p.gain });
+  }
+  return out;
+}
+
+export interface ScheduledVoice extends ScheduledPiece {
+  path: string;
+  /** Starts at the clip's first sample (fade in) rather than part-way through it. */
+  fadeIn: boolean;
+}
+
+/** Voiceover clips (plan.audio.voice) to play from output frame `frame` at transport rate `rate`. */
+export function voiceSchedule(plan: Pick<RenderPlan, "audio" | "output">, frame: number, rate: number): ScheduledVoice[] {
+  const voice = plan.audio?.voice;
+  if (!voice?.length || rate <= 0) return [];
+  const outNow = (frame * 1000) / plan.output.fps;
+  const out: ScheduledVoice[] = [];
+  for (const v of voice) {
+    const end = v.outMs + v.durMs;
+    if (end <= outNow) continue;
+    const from = Math.max(v.outMs, outNow);
+    out.push({ path: v.path, whenS: (from - outNow) / 1000 / rate, offsetS: (v.fileOffsetMs + (from - v.outMs)) / 1000, durationS: (end - from) / 1000, playbackRate: rate, gain: v.gain, fadeIn: from === v.outMs });
   }
   return out;
 }

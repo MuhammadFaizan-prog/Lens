@@ -396,6 +396,83 @@ export async function mixMusic(ffmpeg: string, audio: AudioPlan, file: string, n
   }
 }
 
+/**
+ * A voiceover file decoded to raw f32 stereo at `sr`, as the preview's Web Audio plays it: a mono file
+ * goes to both channels at full level (ffmpeg's own mono -> stereo upmix is -3 dB per channel, which
+ * would make the export 3 dB quieter than the preview), stereo stays stereo. Returns the frame count.
+ */
+export async function decodeVoiceToRaw(ffmpeg: string, input: string, sr: number, out: string): Promise<number> {
+  const wav = `${out}.wav`;
+  await run(ffmpeg, ["-v", "error", "-nostdin", "-y", "-i", input, "-vn", "-af", `aresample=${sr},aformat=sample_fmts=flt:channel_layouts=mono|stereo:sample_rates=${sr}`, "-c:a", "pcm_f32le", "-f", "wav", wav]);
+  try {
+    const b = fs.readFileSync(wav);
+    let i = 12, ch = 2, data: Buffer | null = null;
+    while (i + 8 <= b.length) {
+      const id = b.toString("ascii", i, i + 4);
+      const size = b.readUInt32LE(i + 4);
+      if (id === "fmt ") ch = b.readUInt16LE(i + 10);
+      if (id === "data") {
+        data = b.subarray(i + 8, Math.min(b.length, i + 8 + size));
+        break;
+      }
+      i += 8 + size + (size & 1);
+    }
+    if (!data) throw new Error(`no audio in ${input}`);
+    const x = new Float32Array(data.buffer.slice(data.byteOffset, data.byteOffset + (data.byteLength - (data.byteLength % (4 * ch)))));
+    const n = Math.floor(x.length / ch);
+    const y = new Float32Array(n * 2);
+    for (let k = 0; k < n; k++) {
+      y[2 * k] = x[k * ch]!;
+      y[2 * k + 1] = x[k * ch + (ch > 1 ? 1 : 0)]!;
+    }
+    fs.writeFileSync(out, Buffer.from(y.buffer));
+    return n;
+  } finally {
+    fs.rmSync(wav, { force: true });
+  }
+}
+
+/**
+ * Voiceover clips (demand #17) into the rendered audio, after the tracks' cleanup: each clip's file
+ * decoded as the preview plays it (decodeVoiceToRaw), the trimmed part added at its output time with its gain and 3 ms
+ * fades at both ends.
+ */
+async function addVoice(ffmpeg: string, file: string, audio: AudioPlan, nOut: number, dir: string): Promise<void> {
+  const voice = audio.voice ?? [];
+  if (!voice.length) return;
+  const sr = audio.sampleRate;
+  const fd = fs.openSync(file, "r+");
+  try {
+    for (const [k, v] of voice.entries()) {
+      const raw = path.join(dir, `voice${k}.f32`);
+      const frames = await decodeVoiceToRaw(ffmpeg, v.path, sr, raw);
+      const o0 = Math.round((v.outMs * sr) / 1000);
+      const f0 = Math.round((v.fileOffsetMs * sr) / 1000);
+      const n = Math.min(Math.round((v.durMs * sr) / 1000), frames - f0, nOut - o0);
+      if (n > 0) {
+        const src = Buffer.alloc(n * BYTES);
+        const dst = Buffer.alloc(n * BYTES);
+        const vf = fs.openSync(raw, "r");
+        fs.readSync(vf, src, 0, n * BYTES, f0 * BYTES);
+        fs.closeSync(vf);
+        fs.readSync(fd, dst, 0, n * BYTES, o0 * BYTES);
+        const a = new Float32Array(src.buffer, src.byteOffset, n * 2);
+        const b = new Float32Array(dst.buffer, dst.byteOffset, n * 2);
+        const fade = Math.min(Math.max(1, Math.round(0.003 * sr)), Math.floor(n / 2));
+        for (let i = 0; i < n; i++) {
+          const e = Math.min(1, i / fade, (n - 1 - i) / fade) * v.gain;
+          b[2 * i] = b[2 * i]! + a[2 * i]! * e;
+          b[2 * i + 1] = b[2 * i + 1]! + a[2 * i + 1]! * e;
+        }
+        fs.writeSync(fd, dst, 0, n * BYTES, o0 * BYTES);
+      }
+      fs.rmSync(raw, { force: true });
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export interface RenderedAudio {
   /** raw f32le, 2 channels, sampleRate */
   file: string;
@@ -412,7 +489,7 @@ export interface RenderedAudio {
 export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null, outMs: number, dir: string, root: string): Promise<RenderedAudio | null> {
   if (!audio) return null;
   const hasClicks = audio.clickSound.enabled && audio.clickSound.times.length > 0;
-  if (!audio.tracks.length && !hasClicks && !audio.music) return null;
+  if (!audio.tracks.length && !hasClicks && !audio.music && !audio.voice?.length) return null;
   const sr = audio.sampleRate;
   const nOut = Math.max(1, Math.round((outMs * sr) / 1000));
   fs.mkdirSync(dir, { recursive: true });
@@ -436,6 +513,8 @@ export async function renderExportAudio(ffmpeg: string, audio: AudioPlan | null,
     const fd = fs.openSync(file, "r+");
     fs.ftruncateSync(fd, nOut * BYTES);
     fs.closeSync(fd);
+    // voiceover clips (demand #17) first: the music bed (demand #23) is levelled against the speech as heard
+    await addVoice(ffmpeg, file, audio, nOut, dir);
     let music: MusicMixInfo | null = null;
     if (audio.music) {
       // the music sits relative to the speech as it will be heard: measured after denoise / loudnorm

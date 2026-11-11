@@ -14,6 +14,7 @@ import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { MusicSection } from "./MusicPanel";
 import { webcamPanelState } from "../state/webcamPanel";
+import { VoiceoverSection } from "./VoiceoverPanel";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
@@ -553,6 +554,7 @@ function AudioTab({ p }: { p: ProjectConfig }) {
         <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
       </Section>
       <MusicSection />
+      <VoiceoverSection />
       <Section title="Cleanup">
         {/* Windows #17: the two toggles are the switches (each turns cleanup on); pauses come from the mic's
             measured silences, so they work with no transcript; fillers need the transcript's words */}
@@ -580,6 +582,11 @@ export function Inspector() {
   useEffect(() => {
     if (sel?.track === "motion3d") setTab("motion3d");
   }, [sel]);
+  // selecting a voiceover clip (lane click, import, a new take) opens the Audio tab, where its controls are
+  const voiceSel = useEditor((s) => s.voiceSel);
+  useEffect(() => {
+    if (voiceSel) setTab("audio");
+  }, [voiceSel]);
   const planMs = useEditor((s) => s.planMs);
   return (
     <aside className="inspector" data-testid="inspector">

@@ -62,6 +62,29 @@ def decode_pcm(path: str, sr: int) -> np.ndarray:
     return np.frombuffer(p.stdout, np.float32).reshape(-1, CHANNELS).copy()
 
 
+def decode_voice(path: str, sr: int) -> np.ndarray:
+    """A voiceover file (demand #17) as float32 [n, 2] at sr, as the editor preview's Web Audio plays it:
+    mono goes to both channels at full level (ffmpeg's mono -> stereo upmix is -3 dB per channel),
+    stereo stays stereo."""
+    p = _ff(["-i", path, "-vn", "-af", f"aresample={sr},aformat=sample_fmts=flt:channel_layouts=mono|stereo:sample_rates={sr}",
+             "-acodec", "pcm_f32le", "-f", "wav", "-"])
+    b = p.stdout
+    i, ch, data = 12, 2, None
+    while i + 8 <= len(b):
+        cid = b[i:i + 4]
+        size = int.from_bytes(b[i + 4:i + 8], "little")
+        if cid == b"fmt ":
+            ch = int.from_bytes(b[i + 10:i + 12], "little")
+        if cid == b"data":
+            data = b[i + 8:]  # piped WAV: the size field is a placeholder, the data runs to the end
+            break
+        i += 8 + size + (size & 1)
+    if data is None:
+        return np.zeros((0, CHANNELS), np.float32)
+    x = np.frombuffer(data[: len(data) - len(data) % (4 * ch)], np.float32).reshape(-1, ch)
+    return np.ascontiguousarray(np.repeat(x, 2, axis=1) if ch == 1 else x[:, :2]).copy()
+
+
 def _filter_pcm(x: np.ndarray, sr: int, af: str) -> np.ndarray:
     """Run float PCM through an ffmpeg audio filter chain (raw in, raw out)."""
     p = _ff(["-f", "f32le", "-ar", str(sr), "-ac", str(CHANNELS), "-i", "-", "-af", af,
@@ -275,6 +298,18 @@ def build_audio(plan: dict, plan_dir: Optional[Path], n_out: int) -> Optional[np
             L = a["loudness"]
             voice = loudnorm_two_pass(voice, sr, L["targetLufs"], L["truePeakDb"], L["lra"])
     mix = voice
+    # voiceover clips (demand #17): after the tracks' cleanup, at their own gain, 3 ms fades at the ends
+    for v in a.get("voice") or []:
+        x = decode_voice(_resolve(v["path"], plan_dir), sr)
+        i = int(round(v["outMs"] * sr / 1000))
+        f0 = int(round(v["fileOffsetMs"] * sr / 1000))
+        n = min(int(round(v["durMs"] * sr / 1000)), len(x) - f0, n_out - i)
+        if n <= 0:
+            continue
+        fade = max(1, min(int(round(0.003 * sr)), n // 2))
+        k = np.arange(n, dtype=np.float32)
+        env = np.minimum(1.0, np.minimum(k / fade, (n - 1 - k) / fade)).astype(np.float32) * float(v["gain"])
+        mix[i : i + n] += x[f0 : f0 + n] * env[:, None]
     if a.get("music"):
         mix = mix_music(mix, a, plan_dir, sr, n_out, have_voice)
     cs = a.get("clickSound") or {}

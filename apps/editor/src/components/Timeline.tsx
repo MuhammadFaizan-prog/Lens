@@ -20,6 +20,7 @@ import {
 } from "../state/timelineOps";
 import { Icon } from "./Icon";
 import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
+import { pickVoiceFiles, VoiceoverLane } from "./VoiceoverLane";
 import { clampLabelW, ui, useUi } from "../state/uiLayout";
 
 const SNAP_PX = 8;
@@ -48,8 +49,8 @@ function m3dLabel(id: string, templates: Array<{ id: string; name: string; user?
   const bare = id.startsWith("user:") ? id.slice(5) : id;
   return `3D · ${templates.find((t) => t.id === bare && !!t.user === id.startsWith("user:"))?.name ?? bare}`;
 }
-const ADDABLE = ["zoom", "cut", "speed", "freeze", "motion3d", "mask", "annotation", "caption", "audio"];
-const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
+const ADDABLE = ["zoom", "cut", "speed", "freeze", "motion3d", "mask", "annotation", "caption", "audio", "voiceover"];
+const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes" | "voiceover"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
   { kind: "takes", label: "Alt takes" },
@@ -60,6 +61,7 @@ const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: st
   { kind: "annotation", label: "Annotations" },
   { kind: "caption", label: "Captions" },
   { kind: "audio", label: "Audio" },
+  { kind: "voiceover", label: "Voiceover" },
 ];
 
 /** Lane id in TRACKS -> the block track it holds (takes hold none). */
@@ -653,10 +655,10 @@ export function Timeline() {
               {ADDABLE.includes(t.kind) && (
                 <button
                   className="mini-add"
-                  title={t.kind === "motion3d" ? "Add a 3D motion at playhead" : t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
+                  title={t.kind === "voiceover" ? "Import audio at the playhead (record per line on the Audio tab)" : t.kind === "motion3d" ? "Add a 3D motion at playhead" : t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
                   aria-label={`Add ${t.kind}`}
                   data-testid={`add-${t.kind}`}
-                  onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : t.kind === "motion3d" ? store.addMotion3d() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
+                  onClick={() => (t.kind === "voiceover" ? pickVoiceFiles() : t.kind === "zoom" ? addZoomAtPlayhead() : t.kind === "motion3d" ? store.addMotion3d() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
                 >
                   <Icon name="plus" size={12} />
                 </button>
@@ -806,6 +808,9 @@ export function Timeline() {
             <div className="lane lane-audio" data-testid="lane-audio" onPointerDown={laneDown} onDoubleClick={(e) => create("volume", msOf(laneX(e.clientX)))}>
               {project.overrides.filter((o) => o.volume !== undefined).map((o, i) => block("volume", i, o, `vol ${Math.round((o.volume ?? 1) * 100)}%`, "", `block-volume-${i}`))}
               <Waveform peaks={peaks} peakMs={store.audio.peakMs} width={innerW} pps={pps} offsetMs={project.audio.tracks[0]?.offsetMs ?? 0} muted={project.audio.tracks[0]?.muted ?? false} />
+            </div>
+            <div className="lane lane-voiceover" data-testid="lane-voiceover" onPointerDown={(e) => { store.selectVoice(null); laneDown(e); }} onDoubleClick={(e) => pickVoiceFiles(msOf(laneX(e.clientX)))}>
+              <VoiceoverLane xOf={xOf} msOf={msOf} laneX={laneX} />
             </div>
             {guide !== null && <div className="snap-guide" style={{ left: xOf(guide) }} />}
             {marquee && (

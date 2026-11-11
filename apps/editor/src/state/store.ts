@@ -12,6 +12,7 @@ import { defaultMusic, type MusicSettings } from "@lens/engine";
 import { applyExportPreset, type ExportPresetId, type ExportVideoSettings } from "@lens/engine";
 import { chaptersVtt, draftContentForPlan, youtubeChapterIssues, youtubeChapterList, type ChapterSettings } from "@lens/engine";
 import { disableTargets, enabledTargets, enableTargets, projectForTarget, switchTarget, updateTarget, type FramingMode } from "@lens/engine";
+import { addVoiceClip, clipLengthMs, removeVoiceClip, transcriptLines, updateVoiceClip, type TranscriptLine, type VoiceClip } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
@@ -77,6 +78,10 @@ export interface PrivacyScanState {
 }
 
 export interface EditorState {
+  /** A voiceover take being recorded (demand #17): for transcript line `line` (null: at the playhead). */
+  voiceRec: { line: number | null; srcMs: number; startedAt: number } | null;
+  /** The voiceover clip selected on the lane / in the Audio tab. */
+  voiceSel: string | null;
   status: "loading" | "ready" | "error";
   error: string | null;
   bundle: Bundle | null;
@@ -211,6 +216,8 @@ export class EditorStore {
     audition: null,
     privacyScan: null,
     exportWarning: null,
+    voiceRec: null,
+    voiceSel: null,
     missingFonts: [],
     fontLibrary: [],
     fontImport: { busy: null, error: null },
@@ -336,6 +343,7 @@ export class EditorStore {
     const t0 = performance.now();
     const plan = withFontFallback(buildPlan(b, planProject), this.s.missingFonts);
     const planMs = performance.now() - t0;
+    if (planProject.voiceover?.clips.length) void this.audio.loadVoice(planProject.voiceover.clips.map((c) => c.path));
     const frame = Math.min(this.s.frame, plan.frames.length - 1);
     const musicChanged = JSON.stringify(this.s.plan?.audio?.music ?? null) !== JSON.stringify(plan.audio?.music ?? null);
     // fonts and logo images the plan uses: redraw once they have loaded
@@ -1636,6 +1644,126 @@ export class EditorStore {
   step(n: number): void {
     this.pause();
     this.seek(this.s.frame + n);
+  }
+
+  // ------------------------------------------------------------------ voiceover (demand #17)
+
+  /** Transcript lines to narrate (sentences / pauses), from the transcript's words. */
+  voiceLines(): TranscriptLine[] {
+    return transcriptLines(this.s.bundle?.transcript?.words ?? []);
+  }
+
+  private async uploadVoice(data: Blob, name: string): Promise<{ path: string; durationMs: number }> {
+    const q = this.dirQuery();
+    const r = await fetch(`/api/voiceover${q}${q ? "&" : "?"}name=${encodeURIComponent(name)}`, { method: "POST", body: data });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error ?? `upload failed (${r.status})`);
+    return j;
+  }
+
+  /** Import audio files onto the Voiceover lane, one after another from source time `atMs` (default: the playhead). */
+  async importVoiceFiles(files: File[], atMs = playheadSrc()): Promise<void> {
+    let at = Math.max(0, Math.round(atMs));
+    for (const f of files) {
+      try {
+        const up = await this.uploadVoice(f, f.name);
+        const id = `vo${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+        const clip: VoiceClip = { id, name: f.name, path: up.path, fileMs: up.durationMs, srcMs: at, trimStartMs: 0, trimEndMs: up.durationMs, gainDb: 0 };
+        this.edit(`Import ${f.name}`, (p) => ({ ...p, voiceover: addVoiceClip(p.voiceover, clip) }));
+        this.set({ voiceSel: id });
+        at += up.durationMs;
+      } catch (e) {
+        this.notify(`Could not import ${f.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+
+  private voiceRecorder: { rec: MediaRecorder; stream: MediaStream; chunks: Blob[] } | null = null;
+
+  /**
+   * Record a voiceover take for transcript line `line` (null: at the playhead): the microphone through
+   * MediaRecorder while the video plays from the line's start with the recording's own sound muted.
+   */
+  async startVoiceRecording(line: number | null): Promise<void> {
+    if (this.voiceRecorder || !this.s.bundle) return;
+    const l = line === null ? null : this.voiceLines()[line];
+    const srcMs = l ? l.startMs : playheadSrc();
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    } catch (e) {
+      this.notify(`No microphone: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].find((m) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) ?? "";
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    this.voiceRecorder = { rec, stream, chunks };
+    this.audio.muteOriginal = true;
+    this.seekSource(srcMs);
+    rec.start(250);
+    this.set({ voiceRec: { line, srcMs, startedAt: Date.now() } });
+    this.play(1);
+  }
+
+  /** Stop the take: it is uploaded and placed on the Voiceover lane at the line's start. */
+  async stopVoiceRecording(): Promise<void> {
+    const r = this.voiceRecorder;
+    const st = this.s.voiceRec;
+    if (!r || !st) return;
+    this.voiceRecorder = null;
+    this.pause();
+    await new Promise<void>((res) => {
+      r.rec.onstop = () => res();
+      r.rec.stop();
+    });
+    for (const t of r.stream.getTracks()) t.stop();
+    this.audio.muteOriginal = false;
+    this.set({ voiceRec: null });
+    const l = st.line === null ? null : this.voiceLines()[st.line];
+    const ext = (r.rec.mimeType || "audio/webm").includes("ogg") ? "ogg" : "webm";
+    try {
+      const up = await this.uploadVoice(new Blob(r.chunks, { type: r.rec.mimeType || "audio/webm" }), `take-${l ? `line${l.index + 1}` : "playhead"}-${Date.now().toString(36)}.${ext}`);
+      const id = `vo${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      const clip: VoiceClip = { id, name: l ? `Line ${l.index + 1}: ${l.text.slice(0, 40)}` : "Voiceover take", path: up.path, fileMs: up.durationMs, srcMs: st.srcMs, trimStartMs: 0, trimEndMs: up.durationMs, gainDb: 0, ...(l ? { line: { startMs: l.startMs, endMs: l.endMs, text: l.text } } : {}) };
+      // one take per line: a new take replaces the line's previous clip
+      this.edit(l ? `Record line ${l.index + 1}` : "Record voiceover", (p) => {
+        const kept = l ? (p.voiceover?.clips ?? []).filter((c) => !(c.line && c.line.startMs === l.startMs)) : p.voiceover?.clips ?? [];
+        return { ...p, voiceover: addVoiceClip({ clips: kept }, clip) };
+      });
+      this.set({ voiceSel: id });
+      this.notify(`Voiceover recorded (${(up.durationMs / 1000).toFixed(1)} s)`);
+    } catch (e) {
+      this.notify(`Voiceover not saved: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  setVoiceClip(id: string, label: string, patch: Partial<Omit<VoiceClip, "id">>, live = false): void {
+    const fn = (p: ProjectConfig) => ({ ...p, voiceover: updateVoiceClip(p.voiceover, id, patch) });
+    if (live) this.tweak(label, fn);
+    else this.edit(label, fn);
+  }
+
+  removeVoiceClip(id: string): void {
+    this.edit("Remove voiceover", (p) => {
+      const v = removeVoiceClip(p.voiceover, id);
+      const { voiceover: _drop, ...rest } = p;
+      return v ? { ...p, voiceover: v } : (rest as ProjectConfig);
+    });
+    if (this.s.voiceSel === id) this.set({ voiceSel: null });
+  }
+
+  /** Silence the recording's own sound under a clip (a volume-0 segment over its span, on the Audio lane). */
+  muteOriginalUnder(id: string): void {
+    const c = this.s.project.voiceover?.clips.find((x) => x.id === id);
+    if (!c) return;
+    const span = c.line ? { startMs: c.line.startMs, endMs: Math.max(c.line.endMs, c.srcMs + clipLengthMs(c)) } : { startMs: c.srcMs, endMs: c.srcMs + clipLengthMs(c) };
+    this.edit("Mute original under voiceover", (p) => ({ ...p, overrides: [...p.overrides, { ...span, volume: 0 }] }));
+  }
+
+  selectVoice(id: string | null): void {
+    this.set({ voiceSel: id });
   }
 
   play(rate = 1): void {
