@@ -13,8 +13,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AudioPlan, RenderPlan } from "../../../packages/engine/src/index";
+import type { ChildProcess } from "node:child_process";
+import type { AudioPlan, EncodeSettings, RenderPlan } from "../../../packages/engine/src/index";
 import { mux, renderExportAudio, type RenderedAudio } from "./exportAudio";
+import { CancelledError, finishExport, type FinishResult } from "./exportFinish";
 
 /** ffmpeg filter chain for a playback rate (atempo takes 0.5..100 per stage). */
 export function atempoChain(rate: number): string {
@@ -89,9 +91,10 @@ export function exportBitrateMbps(env: NodeJS.ProcessEnv = process.env): number 
 /**
  * ffmpeg arguments: JPEG frames on stdin -> H.264 MP4 (video only; exportAudio.ts adds the audio).
  * Rate control: crf 18 (auto), or the Settings bitrate as an average with a 1.5x peak (v0.1.3: the
- * setting was saved but never reached ffmpeg; Windows report 2026-11-09).
+ * setting was saved but never reached ffmpeg; Windows report 2026-11-09), or a platform preset's
+ * average / peak (demand #24: `maxrateMbps` given).
  */
-export function browserExportArgs(plan: RenderPlan, out: string, opts: { bitrateMbps?: number } = {}): string[] {
+export function browserExportArgs(plan: RenderPlan, out: string, opts: { bitrateMbps?: number; maxrateMbps?: number } = {}): string[] {
   const { width, height, fps } = plan.output;
   const durationMs = outputMs(plan);
   const args = ["-v", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "pipe:0"];
@@ -100,7 +103,8 @@ export function browserExportArgs(plan: RenderPlan, out: string, opts: { bitrate
   // threads / lookahead capped: x264's default (1.5 x cores frame threads, 40-frame lookahead at
   // veryfast = 10) is the bulk of its memory; this keeps it small on low-RAM machines.
   const mbps = opts.bitrateMbps && opts.bitrateMbps > 0 ? opts.bitrateMbps : 0;
-  const rate = mbps ? ["-b:v", `${mbps}M`, "-maxrate", `${mbps * 1.5}M`, "-bufsize", `${mbps * 2}M`] : ["-crf", "18"];
+  const peak = opts.maxrateMbps && opts.maxrateMbps >= mbps ? opts.maxrateMbps : mbps * 1.5;
+  const rate = mbps ? ["-b:v", `${mbps}M`, "-maxrate", `${peak}M`, "-bufsize", `${mbps * 2}M`] : ["-crf", "18"];
   args.push("-c:v", "libx264", "-preset", "veryfast", ...rate, "-threads", "2", "-x264-params", "rc-lookahead=10:sync-lookahead=0", "-r", String(fps),
     "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
     "-t", sec(durationMs), "-movflags", "+faststart", out);
@@ -124,15 +128,36 @@ export interface BrowserExportJob {
   chain: Promise<void>;
   /** The audio, rendered while the frames stream in (null: silent export). */
   audio?: Promise<RenderedAudio | null>;
-  stage?: "frames" | "audio" | "mux";
+  stage?: "frames" | "audio" | "mux" | "gif" | "cap";
+  /** The ffmpeg child of a step after the frames (mux, GIF, size cap), killed by Cancel. */
+  child?: ChildProcess | null;
+  /** Platform preset output (demand #24): GIF or MP4, and the size-cap pass. */
+  format?: "mp4" | "gif";
+  cap?: FinishResult["cap"];
 }
 
-export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string, id: string, root = process.cwd()): BrowserExportJob {
+/** Cancel (Windows bug #11): stop ffmpeg and whatever step runs after the frames. */
+export function cancelBrowserExport(job: BrowserExportJob): void {
+  if (job.state !== "running") return;
+  job.state = "error";
+  job.error = "cancelled";
+  job.finishedAt = Date.now();
+  for (const p of [job.ff, job.child]) {
+    try {
+      p?.kill("SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
+export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string, id: string, root = process.cwd(), enc?: EncodeSettings): BrowserExportJob {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
   const out = path.join(dir, "export.mp4");
   const video = path.join(dir, "video.mp4");
-  const ff = spawn(ffmpeg, browserExportArgs(plan, video, { bitrateMbps: exportBitrateMbps() }), { windowsHide: true });
+  const rate = enc ? { bitrateMbps: enc.bitrateMbps, maxrateMbps: enc.maxrateMbps } : { bitrateMbps: exportBitrateMbps() };
+  const ff = spawn(ffmpeg, browserExportArgs(plan, video, rate), { windowsHide: true });
   const job: BrowserExportJob = { id, state: "running", done: 0, total: plan.frames.length, out, startedAt: Date.now(), ff, chain: Promise.resolve(), stage: "frames" };
   job.audio = renderExportAudio(ffmpeg, plan.audio, outputMs(plan), path.join(dir, "audio"), root);
   job.audio.catch(() => undefined); // reported when the video is done
@@ -153,12 +178,22 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
       return;
     }
     void (async () => {
+      const cancelled = () => job.state !== "running";
       try {
         job.stage = "audio";
         const a = await job.audio!;
+        if (cancelled()) throw new CancelledError();
         job.stage = "mux";
         if (a) await mux(ffmpeg, video, a, out, outputMs(plan));
         else fs.renameSync(video, out);
+        if (cancelled()) throw new CancelledError();
+        if (enc && (enc.format === "gif" || enc.maxBytes)) {
+          const r = await finishExport(ffmpeg, out, enc, outputMs(plan), !!a, { child: (c) => (job.child = c), cancelled, stage: (s) => (job.stage = s) });
+          job.out = r.out;
+          job.format = r.format;
+          job.cap = r.cap;
+        }
+        if (cancelled()) throw new CancelledError();
         job.state = "done";
         // desktop Settings > Export location (Windows #19): a copy of the finished export lands there
         const exportDir = process.env.LENS_EXPORT_DIR;
@@ -167,16 +202,21 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
             fs.mkdirSync(exportDir, { recursive: true });
             const bundle = path.basename(path.dirname(path.dirname(dir)));
             const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
-            const dest = path.join(exportDir, `${bundle}-${stamp}.mp4`);
-            fs.copyFileSync(out, dest);
+            const dest = path.join(exportDir, `${bundle}-${stamp}${path.extname(job.out)}`);
+            fs.copyFileSync(job.out, dest);
             job.copiedTo = dest;
           } catch (e) {
             job.copyError = e instanceof Error ? e.message : String(e);
           }
         }
       } catch (e) {
-        job.state = "error";
-        job.error = `audio: ${e instanceof Error ? e.message : String(e)}`;
+        if (e instanceof CancelledError || job.error === "cancelled") {
+          job.state = "error";
+          job.error = "cancelled";
+        } else if (job.state === "running") {
+          job.state = "error";
+          job.error = `${job.stage === "gif" || job.stage === "cap" ? job.stage === "gif" ? "gif" : "size cap" : "audio"}: ${e instanceof Error ? e.message : String(e)}`;
+        }
       } finally {
         job.finishedAt = Date.now();
         fs.rmSync(path.join(dir, "audio"), { recursive: true, force: true });
