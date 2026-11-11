@@ -3,6 +3,7 @@
  * transcript line (or at the playhead) with the recording's own sound muted while you speak, and edit
  * the selected clip: start, trim, gain, mute, silence the original under it, remove.
  */
+import { NO_CLIPS } from "./VoiceoverLane";
 import { clipLengthMs } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { timecode } from "../state/timelineOps";
@@ -12,7 +13,7 @@ import { pickVoiceFiles } from "./VoiceoverLane";
 const s2 = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
 
 export function VoiceoverSection() {
-  const clips = useEditor((s) => s.project.voiceover?.clips ?? []);
+  const clips = useEditor((s) => s.project.voiceover?.clips ?? NO_CLIPS);
   const selId = useEditor((s) => s.voiceSel);
   const rec = useEditor((s) => s.voiceRec);
   const words = useEditor((s) => s.bundle?.transcript?.words);

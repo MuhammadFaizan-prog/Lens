@@ -10,6 +10,9 @@ import { useEffect, useState } from "react";
 import { clipLengthMs, updateVoiceClip, type VoiceClip } from "@lens/engine";
 import { playheadSrc, store, useEditor } from "../state/store";
 
+/** Stable empty list for selectors (a fresh [] each call loops useSyncExternalStore). */
+export const NO_CLIPS: VoiceClip[] = [];
+
 interface Props {
   xOf: (ms: number) => number;
   msOf: (x: number) => number;
@@ -17,7 +20,7 @@ interface Props {
 }
 
 export function VoiceoverLane({ xOf, msOf, laneX }: Props) {
-  const clips = useEditor((s) => s.project.voiceover?.clips ?? []);
+  const clips = useEditor((s) => s.project.voiceover?.clips ?? NO_CLIPS);
   const sel = useEditor((s) => s.voiceSel);
   const rec = useEditor((s) => s.voiceRec);
   const [, tick] = useState(0);
