@@ -1972,15 +1972,25 @@ export class EditorStore {
   private async currentExportId(): Promise<string | null> {
     const ex = this.s.exporting;
     if (ex?.state === "done" && ex.id && this.exportProject === this.s.project) return ex.id;
+    if (this.shareExport && this.shareExport.project === this.s.project) return this.shareExport.id;
+    // the Share tab shows this export's progress; the Export sheet stays closed (it would cover the link)
     this.setShare({ busy: "export" });
     await this.exportVideo();
     if (this.s.exportWarning) return null; // unreviewed privacy items: the sheet asks first
     for (;;) {
       const e = this.s.exporting;
-      if (e && (e.state === "done" || e.state === "error")) return e.state === "done" && e.id ? e.id : null;
+      if (e && (e.state === "done" || e.state === "error")) {
+        if (e.state !== "done" || !e.id) return null;
+        this.shareExport = { id: e.id, project: this.exportProject! };
+        this.closeExport();
+        return e.id;
+      }
       await new Promise((r) => setTimeout(r, 300));
     }
   }
+
+  /** The last export Share made itself (its sheet was never shown), reused while the project is unchanged. */
+  private shareExport: { id: string; project: ProjectConfig } | null = null;
 
   /** Upload export + poster + viewer page; the link lands in share.job.url and on the clipboard. */
   async shareLink(title: string): Promise<string | null> {

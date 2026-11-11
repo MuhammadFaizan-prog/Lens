@@ -371,6 +371,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Time from stop to link (target <3 s for a 5-minute take). Attach rate of the BYO-storage setup in a beta.
 
+**Status (2026-11-11): built, first version (branch feat/share-link-015, not merged).** Share tab: connect your own S3-compatible bucket (Cloudflare R2, Amazon S3, Supabase Storage, MinIO…), then one button exports if needed and uploads the video, a poster and a static player page (title, chapters) with SigV4-signed requests and copies the link; public-URL or presigned (≤7 day) links; keys in the OS keychain on the desktop, never in projects or logs (see `docs/ShareLink.md`). Measured against a local mock S3: uploaded video SHA-256 = export, player page plays (readyState 4), no credential in logs / project / bundle files. Not done: the <3 s stop-to-link target (needs progressive upload during recording), multipart, Drive / Dropbox, viewed webhook, real-provider runs.
+
 ---
 
 ## 14. Transitions plus enter/exit animations — 144 · M

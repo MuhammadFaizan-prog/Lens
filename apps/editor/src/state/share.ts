@@ -29,6 +29,7 @@ export interface ShareConfigView {
 
 export interface ShareJobView {
   id: string;
+  exportId: string;
   state: "running" | "done" | "error";
   stage: string;
   sent: number;

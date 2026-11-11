@@ -90,7 +90,7 @@ export function validateSettings(s: Partial<ShareSettings>): string[] {
       e.push("public URL must be a URL");
     }
   }
-  if (s.prefix && !/^[A-Za-z0-9!\-_.*'()/]*$/.test(s.prefix)) e.push("prefix may only use letters, digits and - _ . / ( ) ! * '");
+  if (s.prefix && !/^[A-Za-z0-9!\-_.*'()/ ]*$/.test(s.prefix)) e.push("folder may only use letters, digits, spaces and - _ . / ( ) ! * '");
   if (!(Number(s.linkDays) >= 1 && Number(s.linkDays) <= 7)) e.push("link lifetime must be 1-7 days");
   return e;
 }
@@ -282,6 +282,8 @@ export async function testShare(): Promise<{ ok: true; key: string }> {
 
 export interface ShareJob {
   id: string;
+  /** The export that was shared (.lens-export/<exportId>/export.mp4). */
+  exportId: string;
   state: "running" | "done" | "error";
   stage: string;
   sent: number;
@@ -344,7 +346,7 @@ export interface ShareRequest {
 export function startShare(r: ShareRequest): ShareJob {
   const { settings, keys } = needConfig();
   if (!fs.existsSync(r.exportFile)) throw new ShareError("Export the video first: no finished export to share", 400);
-  const job: ShareJob = { id: crypto.randomBytes(6).toString("hex"), state: "running", stage: "preparing", sent: 0, total: fs.statSync(r.exportFile).size, startedAt: Date.now() };
+  const job: ShareJob = { id: crypto.randomBytes(6).toString("hex"), exportId: path.basename(path.dirname(r.exportFile)), state: "running", stage: "preparing", sent: 0, total: fs.statSync(r.exportFile).size, startedAt: Date.now() };
   jobs.set(job.id, job);
   void (async () => {
     try {

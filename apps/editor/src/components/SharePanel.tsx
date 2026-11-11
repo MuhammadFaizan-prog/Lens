@@ -55,7 +55,7 @@ export function ShareTab() {
             </Field>
             <p className="note" data-testid="share-chapters">
               {chapters.length ? `${chapters.length} chapter${chapters.length === 1 ? "" : "s"} on the player page.` : "No chapters in this project."}{" "}
-              {exporting?.state === "done" ? "Uses the latest export (re-exported first if the project changed)." : "Exports the video first."}
+              Exports the video first unless this version was already exported.
             </p>
             <div className="sheet-actions" style={{ justifyContent: "flex-start", marginTop: 8 }}>
               <button className="btn primary" data-testid="share-go" disabled={!!share.busy} onClick={() => void store.shareLink(title.trim() || name)}>

@@ -148,7 +148,7 @@ describe("viewerChapters (project.chapters, recording clock -> output clock)", (
   const EV: InputEvent[] = [{ t: 0, type: "move", x: 10, y: 10 }];
   it("maps through cuts and skips chapters without a title", () => {
     const p = defaultProject();
-    const project = { ...p, output: { ...p.output, fps: 30 }, edits: { ...p.edits, cuts: [{ startMs: 2000, endMs: 4000 }] } };
+    const project = { ...p, output: { ...p.output, fps: 30 as const }, edits: { ...p.edits, cuts: [{ startMs: 2000, endMs: 4000 }] } };
     const plan = buildRenderPlan({ meta: META, events: EV, project });
     const ch = viewerChapters({ ...project, chapters: { items: [{ srcMs: 0, title: "Start" }, { srcMs: 5000, title: "After cut" }, { srcMs: 6000, title: " " }] } }, plan);
     expect(ch.map((c) => c.title)).toEqual(["Start", "After cut"]);

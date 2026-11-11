@@ -52,6 +52,7 @@ export function viewerHtml(v: ViewerInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src * data: blob:; img-src * data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
 <title>${title}</title>
 <meta property="og:title" content="${title}">
 <meta property="og:type" content="video.other">

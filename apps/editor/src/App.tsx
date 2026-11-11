@@ -167,7 +167,9 @@ function ExportWarning() {
 
 function ExportSheet() {
   const ex = useEditor((s) => s.exporting);
-  if (!ex) return null;
+  // an export started by Share (demand #13) shows its progress in the Share tab instead
+  const forShare = useEditor((s) => s.share.busy === "export");
+  if (!ex || forShare) return null;
   const pct = ex.total ? Math.round((ex.done / ex.total) * 100) : 0;
   const dir = new URLSearchParams(location.search).get("dir");
   const fileUrl = `/api/export/${ex.id}/file${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`;
