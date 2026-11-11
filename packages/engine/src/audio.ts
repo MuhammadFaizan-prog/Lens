@@ -1,7 +1,8 @@
 import type { ProjectConfig } from "./project.js";
 import type { TimelinePiece } from "./timeline.js";
 import { sourceToOutput } from "./timeline.js";
-import type { SegmentOverride } from "./types.js";
+import type { SegmentOverride, TimeRange, Word } from "./types.js";
+import { buildMusicPlan, speechRanges, speechToOutput, type MusicPlan } from "./music.js";
 
 /**
  * Audio side of the render plan (AUD-04/06, EDT-05, CUR-08). The audio follows exactly the same
@@ -26,6 +27,8 @@ export interface AudioPlan {
   clickSound: { enabled: boolean; volume: number; times: number[] };
   noiseReduction: ProjectConfig["audio"]["noiseReduction"];
   loudness: ProjectConfig["audio"]["loudness"];
+  /** Music bed (demand #23); absent when the project has none, so older plans are unchanged. */
+  music?: MusicPlan;
 }
 
 /** Gain multiplier from overrides at source time t (later overrides win). */
@@ -77,19 +80,27 @@ export function buildAudioPlan(
   timeline: TimelinePiece[],
   durationMs: number,
   clickSrcTimes: number[],
+  speech: { words?: Word[]; pauses?: TimeRange[]; sourceMs?: number } = {},
 ): AudioPlan | null {
   const tracks = project.audio.tracks
     .filter((t) => !t.muted && t.volume > 0)
     .map((t) => ({ id: t.id, kind: t.kind, path: t.path, offsetMs: t.offsetMs, volume: t.volume }));
   const clicksOn = project.cursor.clickSound && project.cursor.clickSoundVolume > 0;
-  if (tracks.length === 0 && !clicksOn) return null;
+  const pieces = audioPieces(timeline, project.overrides);
+  // the music ducks under audible speech only (a muted mic leaves the music at its level)
+  const m = project.audio.music;
+  const music = m && m.enabled && m.path
+    ? buildMusicPlan(m, durationMs, tracks.length ? speechToOutput(pieces, speechRanges(speech.sourceMs ?? Infinity, speech.words ?? [], speech.pauses)) : [])
+    : undefined;
+  if (tracks.length === 0 && !clicksOn && !music) return null;
   return {
     sampleRate: project.audio.sampleRate,
     durationMs,
     tracks,
-    pieces: audioPieces(timeline, project.overrides),
+    pieces,
     clickSound: { enabled: clicksOn, volume: project.cursor.clickSoundVolume, times: clicksOn ? clickSoundTimes(timeline, clickSrcTimes) : [] },
     noiseReduction: project.audio.noiseReduction,
     loudness: project.audio.loudness,
+    ...(music ? { music } : {}),
   };
 }

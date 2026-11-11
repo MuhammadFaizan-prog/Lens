@@ -182,6 +182,80 @@ def denoise(x: np.ndarray, sr: int, amount_db: float) -> np.ndarray:
     return _fit(_filter_pcm(x, sr, f"afftdn=nr={nr}:nf={nf}"), len(x))
 
 
+# ---------------------------------------------------------------- music bed (demand #23)
+# The same numbers as the in-app export (apps/editor/server/exportAudio.ts mixMusic) and the preview:
+# BS.1770 integrated loudness (engine loudness.ts), level = speech + volumeDb - music, duck x fade
+# envelopes from the plan's piecewise-linear keys, music looped on the output clock.
+
+def _k_weighting(sr: int):
+    f0, G, Q = 1681.974450955533, 3.999843853973347, 0.7071752369554196
+    K = math.tan(math.pi * f0 / sr)
+    Vh = 10 ** (G / 20)
+    Vb = Vh ** 0.4996667741545416
+    a0 = 1 + K / Q + K * K
+    shelf = ([(Vh + Vb * K / Q + K * K) / a0, 2 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0], [1.0, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0])
+    f1, Q1 = 38.13547087602444, 0.5003270373238773
+    K1 = math.tan(math.pi * f1 / sr)
+    d = 1 + K1 / Q1 + K1 * K1
+    hp = ([1.0, -2.0, 1.0], [1.0, 2 * (K1 * K1 - 1) / d, (1 - K1 / Q1 + K1 * K1) / d])
+    return shelf, hp
+
+
+def integrated_loudness(x: np.ndarray, sr: int) -> float:
+    """BS.1770-4 integrated loudness of float [n, 2] (or [n]) audio, LUFS; -inf when gated out."""
+    from scipy.signal import lfilter
+    if x.ndim == 1:
+        x = np.stack([x, x], axis=1)
+    (b1, a1), (b2, a2) = _k_weighting(sr)
+    y = lfilter(b2, a2, lfilter(b1, a1, x[:, :2].astype(np.float64), axis=0), axis=0)
+    step = int(round(sr / 10))
+    n = (len(y) // step) * step
+    if n < 4 * step:
+        return -math.inf
+    sub = (y[:n] ** 2).sum(axis=1).reshape(-1, step).mean(axis=1)
+    z = (sub[:-3] + sub[1:-2] + sub[2:-1] + sub[3:]) / 4
+    lk = lambda v: -0.691 + 10 * np.log10(np.maximum(v, 1e-30))
+    z = z[(z > 0) & (lk(z) > -70)]
+    if not len(z):
+        return -math.inf
+    rel = lk(z.mean()) - 10
+    g = z[lk(z) > rel]
+    return float(lk(g.mean())) if len(g) else -math.inf
+
+
+def _keys_at(keys: list, t: np.ndarray) -> np.ndarray:
+    if not keys:
+        return np.ones_like(t)
+    k = np.asarray(keys, np.float64)
+    return np.interp(t, k[:, 0], k[:, 1])
+
+
+def mix_music(mix: np.ndarray, a: dict, plan_dir: Optional[Path], sr: int, n_out: int, have_voice: bool) -> np.ndarray:
+    m = a["music"]
+    try:
+        src = decode_pcm(_resolve(m["path"], plan_dir), sr)
+    except RuntimeError:
+        return mix
+    if not len(src):
+        return mix
+    speech = integrated_loudness(mix, sr) if have_voice else -math.inf
+    music = integrated_loudness(src, sr)
+    if not math.isfinite(music):
+        return mix
+    ref = speech if math.isfinite(speech) else (a["loudness"]["targetLufs"] if a["loudness"]["enabled"] else -16.0)
+    gain = 10 ** (min(30.0, ref + float(m["volumeDb"]) - music) / 20)
+    idx = int(round(float(m.get("startMs", 0)) * sr / 1000)) + np.arange(n_out)
+    if m.get("loop", True):
+        bed = src[idx % len(src)]
+    else:
+        bed = np.zeros((n_out, CHANNELS), np.float32)
+        ok = idx < len(src)
+        bed[ok] = src[idx[ok]]
+    t = np.arange(n_out) * (1000.0 / sr)
+    env = _keys_at(m.get("duck") or [], t) * _keys_at(m.get("fade") or [], t)
+    return (mix + bed * (env * gain)[:, None]).astype(np.float32)
+
+
 def build_audio(plan: dict, plan_dir: Optional[Path], n_out: int) -> Optional[np.ndarray]:
     """Render the plan's audio block to float32 [n_out, 2] at plan sampleRate, or None if silent."""
     a = plan.get("audio")
@@ -201,6 +275,8 @@ def build_audio(plan: dict, plan_dir: Optional[Path], n_out: int) -> Optional[np
             L = a["loudness"]
             voice = loudnorm_two_pass(voice, sr, L["targetLufs"], L["truePeakDb"], L["lra"])
     mix = voice
+    if a.get("music"):
+        mix = mix_music(mix, a, plan_dir, sr, n_out, have_voice)
     cs = a.get("clickSound") or {}
     if cs.get("enabled") and cs.get("times"):
         click = synth_click(sr) * float(cs["volume"])

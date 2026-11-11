@@ -8,6 +8,7 @@ import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET
 import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
 import { setDemoHotspot } from "@lens/engine";
 import { defaultImageSlide, defaultSlide, videoTime, withFontFallback, type ProjectFont } from "@lens/engine";
+import { defaultMusic, type MusicSettings } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
@@ -261,6 +262,8 @@ export class EditorStore {
       this.set({ bundle, status: "ready", error: null, frame: 0, selection: null, selectedWords: [], savedAt: null, dirty: false });
       this.rebuild(bundle.project);
       void this.audio.load(bundle.project.audio.tracks.find((t) => !t.muted)?.path ?? null);
+      // the music bed (demand #23): heard as soon as it has loaded, also mid-play
+      this.audio.onMusicReady = () => this.restartAudioIfPlaying();
       if (def) this.notify(`New project: default preset ${def.name} applied`);
       // a camera the recorder could not save is said out loud, not only in the Webcam tab
       else if (bundle.cameraWarning && !bundle.camera) this.notify(`No camera in this recording: ${bundle.cameraWarning}`);
@@ -282,7 +285,8 @@ export class EditorStore {
       this.set({ bundle });
       // pauses feed the plan only without a transcript and with "Shorten pauses" on: rebuild then
       const c = this.s.project.edits.cleanup;
-      if (!bundle.transcript && silences.length && c.enabled && c.shortenPauses && !this.s.audition) this.rebuild(this.s.project);
+      // ... and the music bed ducks under the speech they delimit
+      if (!this.s.audition && ((!bundle.transcript && silences.length && c.enabled && c.shortenPauses) || this.s.project.audio.music)) this.rebuild(this.s.project);
     } catch {
       // no silences: "Shorten pauses" stays unavailable without a transcript, as before
     }
@@ -308,6 +312,7 @@ export class EditorStore {
     const plan = withFontFallback(buildPlan(b, planProject), this.s.missingFonts);
     const planMs = performance.now() - t0;
     const frame = Math.min(this.s.frame, plan.frames.length - 1);
+    const musicChanged = JSON.stringify(this.s.plan?.audio?.music ?? null) !== JSON.stringify(plan.audio?.music ?? null);
     // fonts and logo images the plan uses: redraw once they have loaded
     void ensurePlanAssets(plan).then(async (changed) => {
       if (this.s.plan !== plan) return;
@@ -333,6 +338,73 @@ export class EditorStore {
       undoLabel: h.undoLabel,
       redoLabel: h.redoLabel,
       dirty: h.canUndo || this.s.dirty,
+    });
+    // a music change (level, duck, fades, file) is heard right away while playing
+    if (musicChanged) this.restartAudioIfPlaying();
+  }
+
+  private restartAudioIfPlaying(): void {
+    const p = this.s.plan;
+    if (!this.s.playing || !p) return;
+    this.playStart = { t: performance.now(), frame: this.s.frame };
+    this.audio.restart(p, this.s.frame, this.s.rate);
+  }
+
+  // ------------------------------------------------------------------ music bed (demand #23)
+
+  /** Edit the music settings: one undo step, or a live slider tweak. */
+  editMusic(label: string, fn: (m: MusicSettings) => MusicSettings, live = false): void {
+    const f = (p: ProjectConfig) => (p.audio.music ? { ...p, audio: { ...p.audio, music: fn(p.audio.music) } } : p);
+    if (live) this.tweak(label, f);
+    else this.edit(label, f);
+  }
+
+  private useMusic(label: string, file: { path: string; name: string; source: string }): void {
+    this.edit(label, (p) => ({
+      ...p,
+      // replacing the file keeps the user's level, duck and fades
+      audio: { ...p.audio, music: p.audio.music ? { ...p.audio.music, path: file.path, name: file.name, source: file.source, enabled: true } : defaultMusic(file.path, file.name, file.source) },
+    }));
+  }
+
+  /** Import an audio file as the music bed (copied into the bundle's music/ folder). */
+  async importMusic(file: File): Promise<boolean> {
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+      const q = this.dirQuery();
+      const r = await fetch(`/api/music${q}${q ? "&" : "?"}name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: btoa(bin) }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? String(r.status));
+      this.useMusic(`Music: ${j.name}`, j);
+      this.notify(`Music added: ${j.name}`);
+      return true;
+    } catch (e) {
+      this.notify(`Music import failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  /** Use one of Lens's built-in beds (synthesised, CC0). */
+  async addBuiltinMusic(id: string): Promise<boolean> {
+    try {
+      const r = await fetch(`/api/music/builtin${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? String(r.status));
+      this.useMusic(`Music: ${j.name}`, j);
+      this.notify(`Music added: ${j.name} (built-in, CC0)`);
+      return true;
+    } catch (e) {
+      this.notify(`Music failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  removeMusic(): void {
+    this.edit("Remove music", (p) => {
+      const { music: _m, ...audio } = p.audio;
+      return { ...p, audio };
     });
   }
 

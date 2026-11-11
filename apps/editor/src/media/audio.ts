@@ -4,8 +4,15 @@
  * Noise reduction plays through an RNNoise AudioWorklet (rnnoiseDenoise.ts) when the project has it
  * on, so the preview sounds like the export (ffmpeg arnndn, RNNoise too); loudness normalisation is
  * export-only.
+ *
+ * The music bed (demand #23) plays on the output clock through three gains: its level (the engine's
+ * musicLevelGain from the same BS.1770 measurements the export makes: the music file and the speech
+ * it is mixed with), the plan's duck envelope and its fade envelope, both scheduled as Web Audio
+ * linear ramps between the plan's keys, i.e. the same piecewise-linear curve the export evaluates
+ * per sample. renderOffline() runs this exact graph in an OfflineAudioContext (e2e: preview audio).
  */
-import type { RenderPlan } from "@lens/engine";
+import type { GainKey, RenderPlan } from "@lens/engine";
+import { integratedLoudness, keyAt, musicLevelGain } from "@lens/engine";
 import { createRnnoise } from "./rnnoiseDenoise";
 
 export class AudioEngine {
@@ -17,6 +24,11 @@ export class AudioEngine {
   private denoiseLoading: Promise<void> | null = null;
   private denoiseOn = false;
   private loadedPath: string | null = null;
+  /** Integrated loudness of the mic file (LUFS), measured once per load. */
+  private speechLufs = -Infinity;
+  private music: { path: string; buffer: AudioBuffer | null; lufs: number; loading: Promise<void> | null } | null = null;
+  /** Called when the music finishes loading (the store restarts playback so it is heard). */
+  onMusicReady: (() => void) | null = null;
   peaks: Float32Array | null = null;
   /** ms of source audio per peak bucket */
   peakMs = 10;
@@ -39,6 +51,7 @@ export class AudioEngine {
       const off = new OfflineAudioContext(1, 1, 48000);
       this.buffer = await off.decodeAudioData(bytes);
       this.peaks = computePeaks(this.buffer, this.peakMs);
+      this.speechLufs = bufferLoudness(this.buffer);
       for (const l of this.listeners) l();
     } catch {
       this.buffer = null;
@@ -111,10 +124,95 @@ export class AudioEngine {
     return (await ctx.startRendering()).getChannelData(0);
   }
 
+  /** Load the plan's music file (bundle-relative path) once; the level needs its loudness. */
+  loadMusic(path: string | null): Promise<void> {
+    if (!path) {
+      this.music = null;
+      return Promise.resolve();
+    }
+    if (this.music?.path === path) return this.music.loading ?? Promise.resolve();
+    const m: NonNullable<AudioEngine["music"]> = { path, buffer: null, lufs: -Infinity, loading: null };
+    this.music = m;
+    m.loading = (async () => {
+      try {
+        const dir = new URLSearchParams(location.search).get("dir");
+        const url = /^(\/|[A-Za-z]:\\)/.test(path) ? null : `/api/asset?path=${encodeURIComponent(path)}${dir ? `&dir=${encodeURIComponent(dir)}` : ""}`;
+        if (!url) return;
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const off = new OfflineAudioContext(2, 1, 48000);
+        const buf = await off.decodeAudioData(await r.arrayBuffer());
+        if (this.music !== m) return;
+        m.buffer = buf;
+        m.lufs = bufferLoudness(buf);
+        this.onMusicReady?.();
+      } catch (e) {
+        console.warn("[lens] music could not be loaded:", e);
+      } finally {
+        m.loading = null;
+      }
+    })();
+    return m.loading;
+  }
+
+  /** What the music is doing right now (diagnostics, e2e). */
+  musicState(): { path: string | null; loaded: boolean; musicLufs: number; speechLufs: number } {
+    return { path: this.music?.path ?? null, loaded: !!this.music?.buffer, musicLufs: this.music?.lufs ?? -Infinity, speechLufs: this.speechLufs };
+  }
+
+  /**
+   * Schedule the plan's audio from output frame `frame` at `rate` into `dest` of `ctx`, starting at
+   * context time `t0`: speech pieces of the first track (track volume on `trackGain`) and the music bed.
+   */
+  private schedule(ctx: BaseAudioContext, trackGain: AudioNode, dest: AudioNode, plan: RenderPlan, frame: number, rate: number, t0: number, nodes: AudioScheduledSourceNode[]): void {
+    const audio = plan.audio;
+    if (!audio || rate <= 0) return;
+    if (this.buffer && audio.tracks[0]) {
+      for (const s of audioSchedule(plan, frame, rate, this.buffer.duration * 1000)) {
+        const node = ctx.createBufferSource();
+        node.buffer = this.buffer;
+        node.playbackRate.value = s.playbackRate;
+        const g = ctx.createGain();
+        g.gain.value = s.gain;
+        node.connect(g).connect(trackGain);
+        node.start(t0 + s.whenS, s.offsetS, s.durationS);
+        nodes.push(node);
+      }
+    }
+    const m = audio.music;
+    const mb = this.music?.path === m?.path ? this.music?.buffer : null;
+    if (!m || !mb) return;
+    const outNow = (frame * 1000) / plan.output.fps;
+    const total = (plan.frames.length * 1000) / plan.output.fps;
+    if (outNow >= total) return;
+    // speech reference: the mic as it plays here (track volume); the export measures its cleaned mix
+    const tr = audio.tracks[0];
+    const speech = tr && this.buffer ? this.speechLufs + 20 * Math.log10(Math.max(1e-9, tr.volume)) : -Infinity;
+    const level = musicLevelGain(speech, this.music!.lufs, m.volumeDb, audio.loudness.enabled ? audio.loudness.targetLufs : -16);
+    const fileMs = mb.duration * 1000;
+    const pos = m.startMs + outNow;
+    if (!m.loop && pos >= fileMs) return;
+    const src = ctx.createBufferSource();
+    src.buffer = mb;
+    src.loop = m.loop;
+    src.playbackRate.value = rate;
+    const lv = ctx.createGain();
+    lv.gain.value = level;
+    const duck = ctx.createGain();
+    const fade = ctx.createGain();
+    scheduleKeys(duck.gain, m.duck, outNow, t0, rate);
+    scheduleKeys(fade.gain, m.fade, outNow, t0, rate);
+    src.connect(lv).connect(duck).connect(fade).connect(dest);
+    src.start(t0, ((m.loop ? pos % fileMs : pos) / 1000));
+    src.stop(t0 + (total - outNow) / 1000 / rate);
+    nodes.push(src);
+  }
+
   /** (Re)start playback from output frame `frame`. Only forward 1x-4x plays sound. */
   restart(plan: RenderPlan, frame: number, rate: number): void {
     this.stop();
-    if (!this.buffer || !plan.audio || rate <= 0) return;
+    if (plan.audio?.music) void this.loadMusic(plan.audio.music.path);
+    if (!plan.audio || rate <= 0 || (!this.buffer && !this.music?.buffer)) return;
     const ctx = this.context();
     if (!ctx || !this.gain) return;
     void ctx.resume();
@@ -124,20 +222,49 @@ export class AudioEngine {
       this.route(nr);
     }
     const track = plan.audio.tracks[0];
-    if (!track) return;
-    this.gain.gain.value = track.volume;
-    const t0 = ctx.currentTime + 0.03;
-    for (const s of audioSchedule(plan, frame, rate, this.buffer.duration * 1000)) {
-      const node = ctx.createBufferSource();
-      node.buffer = this.buffer;
-      node.playbackRate.value = s.playbackRate;
-      const g = ctx.createGain();
-      g.gain.value = s.gain;
-      node.connect(g).connect(this.gain);
-      node.start(t0 + s.whenS, s.offsetS, s.durationS);
-      this.nodes.push(node);
-    }
+    this.gain.gain.value = track?.volume ?? 1;
+    // the music goes straight out (RNNoise is for the voice; the export adds the music after its denoise)
+    this.schedule(ctx, this.gain, ctx.destination, plan, frame, rate, ctx.currentTime + 0.03, this.nodes);
   }
+
+  /**
+   * The preview's audio graph rendered offline: `seconds` of output from frame `frame` at 1x, stereo
+   * 48 kHz, as interleaved Float32 (denoise not applied; e2e runs with it off). Loads the music first.
+   */
+  async renderOffline(plan: RenderPlan, frame: number, seconds: number): Promise<Float32Array> {
+    if (plan.audio?.music) await this.loadMusic(plan.audio.music.path);
+    const n = Math.max(1, Math.round(seconds * 48000));
+    const ctx = new OfflineAudioContext(2, n, 48000);
+    const g = ctx.createGain();
+    g.gain.value = plan.audio?.tracks[0]?.volume ?? 1;
+    g.connect(ctx.destination);
+    this.schedule(ctx, g, ctx.destination, plan, frame, 1, 0, []);
+    const out = await ctx.startRendering();
+    const l = out.getChannelData(0), r = out.getChannelData(1);
+    const x = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      x[2 * i] = l[i]!;
+      x[2 * i + 1] = r[i]!;
+    }
+    return x;
+  }
+}
+
+/** Integrated loudness of a decoded buffer (a mono file counts as the stereo it plays as). */
+export function bufferLoudness(b: AudioBuffer): number {
+  const ch = Array.from({ length: Math.min(2, b.numberOfChannels) }, (_, i) => b.getChannelData(i));
+  return integratedLoudness(ch, b.sampleRate);
+}
+
+/**
+ * Schedule a piecewise-linear envelope on an AudioParam: its value at output time `outNow` at context
+ * time `t0`, then a linear ramp to every later key (times scaled by the transport rate). Between keys
+ * Web Audio interpolates linearly, which is exactly keyAt().
+ */
+export function scheduleKeys(param: AudioParam, keys: GainKey[], outNow: number, t0: number, rate: number): void {
+  param.cancelScheduledValues(0);
+  param.setValueAtTime(keyAt(keys, outNow), t0);
+  for (const [t, g] of keys) if (t > outNow) param.linearRampToValueAtTime(g, t0 + (t - outNow) / 1000 / rate);
 }
 
 export interface ScheduledPiece {

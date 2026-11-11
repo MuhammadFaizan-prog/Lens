@@ -891,3 +891,7 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .slide-image-row { display: flex; align-items: center; gap: 8px; }
 .slide-image-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .lane-freeze .lane-hint { color: rgba(125, 211, 252, 0.7); }
+/* Music bed (demand #23) */
+.music-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.music-row .ctl.select { flex: 1 1 140px; min-width: 0; }
+.music-graph { display: block; margin: 6px 0 2px; }

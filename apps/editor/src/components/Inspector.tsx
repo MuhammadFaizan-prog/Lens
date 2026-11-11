@@ -12,6 +12,7 @@ import { AspectRow } from "./AspectPicker";
 import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
+import { MusicSection } from "./MusicPanel";
 import { webcamPanelState } from "../state/webcamPanel";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
@@ -551,6 +552,7 @@ function AudioTab({ p }: { p: ProjectConfig }) {
         <Slider defaultValue={D.audio.loudness.targetLufs} label="Target" value={p.audio.loudness.targetLufs} min={-24} max={-10} step={1} format={(v) => `${v} LUFS`} onChange={(v) => store.tweak("Loudness target", (q) => ({ ...q, audio: { ...q.audio, loudness: { ...q.audio.loudness, targetLufs: v } } }))} />
         <p className="note">Denoise and loudness are applied in the export; the preview plays the raw track.</p>
       </Section>
+      <MusicSection />
       <Section title="Cleanup">
         {/* Windows #17: the two toggles are the switches (each turns cleanup on); pauses come from the mic's
             measured silences, so they work with no transcript; fillers need the transcript's words */}

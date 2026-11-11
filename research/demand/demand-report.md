@@ -495,6 +495,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Proposed Lens feature:** A music track that ducks automatically under VAD speech and fades at the ends. **Size:** S. **Test:** Loudness check (speech-to-music LU gap ≥ 10 LU).
 
+**Status (2026-11-11): built, first version (branch feat/music-ducking-015, not merged).** A music bed under the whole video: three built-in beds synthesised by Lens (CC0) or an imported file, level set relative to the speech by loudness, automatic ducking under the speech found from the mic's measured silences (look-ahead attack, hold, release, no pumping in short gaps), fades, loop, and an Audio-tab graph of the level; the same envelope in the preview, the desktop export and the Python export (see `docs/Music.md`). Measured on the exported MP4 (desktop export path) with ffmpeg's ebur128 per band: speech 21 LU above the music during speech (target ≥ 10 LU met), the music comes back 14.9 LU in the gaps (depth set to 15), preview and export within 0.0 LU of each other. Not done: several music clips / music that follows cuts, loop cross-fade for imported files, real-voice test, usage share.
+
 ---
 
 ## 24. Platform export presets — 60 · S

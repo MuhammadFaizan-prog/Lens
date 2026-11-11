@@ -325,7 +325,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       },
     },
     export: project.export,
-    audio: buildAudioPlan(project, timeline, durationMs, clicks(rawEvents).map((c) => c.t)),
+    audio: buildAudioPlan(project, timeline, durationMs, clicks(rawEvents).map((c) => c.t), { words, pauses, sourceMs: meta.durationMs }),
     cuts: allCuts.map((c) => ({ startMs: r2(Math.max(0, c.startMs)), endMs: r2(Math.min(meta.durationMs, c.endMs)) })),
     cleanupCuts: autoCuts.map((c) => ({ startMs: r2(c.startMs), endMs: r2(c.endMs) })),
     takes: takes.groups,
