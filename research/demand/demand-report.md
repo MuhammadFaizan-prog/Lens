@@ -499,6 +499,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Size:** M–L. **Test:** OCR accuracy on zoomed small text against baseline.
 
+**Status (2026-11-11): built, first version (branch feat/zoom-sharpen-015, not merged).** Zoom tab *Sharpen text in zooms* + Amount: above 1.5x the screen is resampled with an anti-ringing Lanczos-3 and a halo-free unsharp mask, in the preview, the desktop app's browser export and the Python compositor; old projects render unchanged (see `docs/ZoomSharpen.md`). Measured on 11 px UI text at 2.5x: Laplacian variance 2.37x (browser export) / 1.42x (Python) of sharpening off (bound >= 1.25x), ringing <= 4 levels, preview vs export 2.3-2.5 mean |RGB|, off identical to main (0.000 over 24 frames). Not done: the OCR accuracy test, capture at native backing scale, Windows verification.
+
 ---
 
 ## 23. Music bed with automatic ducking — 60 · S

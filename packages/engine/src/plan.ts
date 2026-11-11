@@ -55,6 +55,8 @@ export interface RenderPlan {
     clickEffectMs: number;
     motionBlur: ProjectConfig["motionBlur"];
     zoomStyle: ProjectConfig["zoom"]["style"];
+    /** Sharper text in zooms (demand #22); present only when on, so other plans are unchanged. */
+    zoomSharpen?: { amount: number };
     cameraShape: ProjectConfig["camera"]["shape"];
     cameraMirror: boolean;
     /** Webcam crop [x, y, w, h] in camera px, or null. */
@@ -367,6 +369,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       clickEffectMs: project.cursor.clickEffectMs,
       motionBlur: project.motionBlur,
       zoomStyle: project.zoom.style,
+      ...(project.zoom.sharpen?.enabled && project.zoom.sharpen.amount > 0 ? { zoomSharpen: { amount: project.zoom.sharpen.amount } } : {}),
       cameraShape: project.camera.shape,
       cameraMirror: project.camera.mirror,
       cameraCrop: project.camera.crop ? [project.camera.crop.x, project.camera.crop.y, project.camera.crop.w, project.camera.crop.h] : null,

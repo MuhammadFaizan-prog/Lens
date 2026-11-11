@@ -37,6 +37,7 @@ from . import annotations as ann
 from .annotations import draw_items, image_premul, resolve_asset, set_fonts, shaped_font, text_font
 from .audio import build_audio, export_gif, mux_audio
 from .backdrop_art import draw_backdrop_art
+from .sharpen import sharpen_amount_at, sharpened_view, unsharp
 
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -1036,6 +1037,9 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
         vx, vy, vs = f["camVel"]
         k = sw / (src_w / cam[2])  # output px per source px
         speed_out = math.hypot(vx, vy) * k / fps + abs(vs) * sw / fps
+        # demand #22: sharper text above 1.5x, only when the plan carries style.zoomSharpen
+        zs = style.get("zoomSharpen")
+        zs_amt = sharpen_amount_at(zs["amount"], cam[2]) if zs else 0.0
         if mb["enabled"] and speed_out > 1.5:
             n = max(2, int(mb["samples"]))
             acc = np.zeros((sh, sw, 3), np.float32)
@@ -1045,6 +1049,10 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                 c2 = [cam[0] + vx * dt, cam[1] + vy * dt, max(1.0, cam[2] + vs * dt)]
                 acc += _viewport_warp(src_frame, c2, sw, sh, src_w, src_h).astype(np.float32)
             view = acc / n
+            if zs_amt > 0:
+                view = unsharp(view, zs_amt)
+        elif zs_amt > 0:
+            view = sharpened_view(src_frame, cam, sw, sh, src_w, src_h, zs_amt)
         else:
             view = _viewport_warp(src_frame, cam, sw, sh, src_w, src_h).astype(np.float32)
 

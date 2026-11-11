@@ -126,6 +126,12 @@ export interface ProjectConfig {
     budget: { enabled: boolean; maxPerMinute: number; minHoldMs: number };
     /** Which intensity preset produced these numbers ("custom" once a value is edited by hand). */
     preset: ZoomPresetName | "custom";
+    /**
+     * Sharper text in zooms (demand #22): above 1.5x the screen is resampled with Lanczos-3 and
+     * unsharp-masked (edge-aware, no halos) in the preview and the export. amount 0..1.5 (0.6 is a
+     * good default). Absent (projects made before this) = off, rendering exactly as before.
+     */
+    sharpen?: { enabled: boolean; amount: number };
   };
   cursor: {
     visible: boolean;
@@ -593,6 +599,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     errs.push("zoom.defaultScale outside min..max");
   if (p.zoom.budget.maxPerMinute < 1) errs.push("zoom.budget.maxPerMinute must be >= 1");
   if (p.zoom.budget.minHoldMs < 0) errs.push("zoom.budget.minHoldMs must be >= 0");
+  if (p.zoom.sharpen !== undefined && !(typeof p.zoom.sharpen.enabled === "boolean" && Number.isFinite(p.zoom.sharpen.amount) && p.zoom.sharpen.amount >= 0 && p.zoom.sharpen.amount <= 1.5))
+    errs.push("zoom.sharpen must be {enabled, amount 0..1.5}");
   if (!["calm", "default", "punchy", "custom"].includes(p.zoom.preset)) errs.push(`zoom.preset ${String(p.zoom.preset)} unknown`);
   for (const s of p.zoom.segments) {
     if (s.endMs <= s.startMs) errs.push(`zoom segment ${s.id} ends before it starts`);
