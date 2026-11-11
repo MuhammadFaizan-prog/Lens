@@ -40,6 +40,8 @@ export function brandSlides(p: ProjectConfig, durationMs: number, pal: Palette =
   const card = (id: string, atMs: number, c: typeof b.intro): TextSlide => ({
     id, atMs, durationMs: c.durationMs, title: c.title || b.name, subtitle: c.subtitle, background: pal.background.colors[0] ?? "#000000", textColor: text,
     accent: "@primary", fadeMs: 300, titleSize: 84, subtitleSize: 38, font: "@font", fill: "theme", logo: c.logo ? logo : null,
+    ...(c.enter ? { enter: c.enter } : {}),
+    ...(c.exit ? { exit: c.exit } : {}),
   });
   if (b.intro.enabled) out.push(card(BRAND_INTRO_ID, 0, b.intro));
   if (b.outro.enabled) out.push(card(BRAND_OUTRO_ID, durationMs, b.outro));

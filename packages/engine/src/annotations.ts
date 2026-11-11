@@ -16,6 +16,7 @@
  *    the output resolution like captions). Drawn as a fixed overlay above the webcam.
  */
 import type { Rect, Vec2 } from "./types.js";
+import { EASINGS, SLIDE_ANIM_KINDS, ease, slideFx, validateElementAnim, type Easing, type ElementAnim, type SlideAnimKind } from "./transitions.js";
 import { BUILTIN_PALETTE, DEFAULT_FONT, FONT_TOKEN, isColorValue, resolveColor, resolveFont, type Palette } from "./palette.js";
 
 export type AnnotationKind = "text" | "arrow" | "rect" | "ellipse" | "badge" | "callout";
@@ -51,6 +52,11 @@ export interface AnnotationStyle {
 export interface AnimationSpec<K> {
   kind: K;
   ms: number;
+  /**
+   * Progress curve (demand #14). Absent = each kind's own curve as before: fade ease-out, draw-on
+   * ease-in-out, typewriter linear, pop the spring.
+   */
+  easing?: Easing;
 }
 
 export interface Annotation {
@@ -98,8 +104,11 @@ export interface TextSlide {
   textColor: string;
   /** Short accent bar under the title; null = none. */
   accent: string | null;
-  /** Cross-fade with the video at both ends (ms, inside durationMs). */
+  /** Cross-fade with the video at both ends (ms, inside durationMs); used by a side without enter / exit. */
   fadeMs: number;
+  /** Enter / exit animation (demand #14): fade, slide in from a side, zoom, blur; absent = the fadeMs cross-fade. */
+  enter?: ElementAnim<SlideAnimKind> | null;
+  exit?: ElementAnim<SlideAnimKind> | null;
   /** px at 1080p */
   titleSize: number;
   subtitleSize: number;
@@ -179,6 +188,11 @@ export interface SlideFrame {
   id: string;
   opacity: number;
   ops: AnnOp[];
+  /**
+   * Enter / exit transform (demand #14): [dx, dy] output px, scale about the frame centre, blur sigma
+   * (output px). Absent when the slide sits still, so plans without enter / exit are unchanged.
+   */
+  fx?: [number, number, number, number];
 }
 
 // ------------------------------------------------------------------------------ animation curves
@@ -240,25 +254,25 @@ export function animState(a: Pick<Annotation, "startMs" | "endMs" | "in" | "out"
   const inMs = a.in.kind === "none" ? 0 : Math.max(0, Math.min(a.in.ms, life / 2));
   const outMs = a.out.kind === "none" ? 0 : Math.max(0, Math.min(a.out.ms, life / 2));
   const s: AnimState = { opacity: 1, scale: 1, draw: 1, type: 1 };
-  const apply = (kind: InAnimation | OutAnimation, u: number) => {
+  const apply = (kind: InAnimation | OutAnimation, u: number, easing: Easing | undefined) => {
     switch (kind) {
       case "fade":
-        s.opacity *= easeOutCubic(u);
+        s.opacity *= easing ? ease(easing, u) : easeOutCubic(u);
         break;
       case "pop":
-        s.scale *= popScale(u);
+        s.scale *= easing ? 0.4 + 0.6 * ease(easing, u) : popScale(u);
         s.opacity *= clamp01(u / 0.3);
         break;
       case "draw":
-        s.draw = Math.min(s.draw, easeInOutCubic(u));
+        s.draw = Math.min(s.draw, easing ? ease(easing, u) : easeInOutCubic(u));
         break;
       case "typewriter":
-        s.type = Math.min(s.type, clamp01(u));
+        s.type = Math.min(s.type, easing ? ease(easing, u) : clamp01(u));
         break;
     }
   };
-  if (inMs > 0 && t < a.startMs + inMs) apply(a.in.kind, (t - a.startMs) / inMs);
-  if (outMs > 0 && t > a.endMs - outMs) apply(a.out.kind, (a.endMs - t) / outMs);
+  if (inMs > 0 && t < a.startMs + inMs) apply(a.in.kind, (t - a.startMs) / inMs, a.in.easing);
+  if (outMs > 0 && t > a.endMs - outMs) apply(a.out.kind, (a.endMs - t) / outMs, a.out.easing);
   return s;
 }
 
@@ -621,7 +635,13 @@ export function annotationsAt(items: Annotation[], t: number, sp: AnnotationSpac
 /** The slide drawn at output time t inside its span (output px). Theme references resolve against `pal`. */
 export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number, resScale: number, pal: Palette = BUILTIN_PALETTE): SlideFrame {
   const fade = Math.max(0, Math.min(sl.fadeMs, sl.durationMs / 2));
-  const op = fade > 0 ? Math.min(easeOutCubic(tInSlide / fade), easeOutCubic((sl.durationMs - tInSlide) / fade)) : 1;
+  let op = fade > 0 ? Math.min(easeOutCubic(tInSlide / fade), easeOutCubic((sl.durationMs - tInSlide) / fade)) : 1;
+  let fx: [number, number, number, number] | undefined;
+  if (sl.enter || sl.exit) {
+    const f = slideFx(sl, tInSlide, W, H);
+    op = f.opacity;
+    if (Math.abs(f.dx) > 0.004 || Math.abs(f.dy) > 0.004 || Math.abs(f.scale - 1) > 0.00004 || f.blur > 0.004) fx = [r2(f.dx), r2(f.dy), r4(f.scale), r2(f.blur)];
+  }
   const ts = sl.titleSize * resScale;
   const ss = sl.subtitleSize * resScale;
   const F = fontField(resolveFont(sl.font, pal));
@@ -645,7 +665,7 @@ export function slideFrame(sl: TextSlide, tInSlide: number, W: number, H: number
     ops.push({ op: "fill", pts: flat(roundRectPoints({ x: W / 2 - bw / 2, y: by, w: bw, h: bh }, bh / 2)), color: resolveColor(sl.accent, pal), alpha: 1 });
   }
   if (hasSub) ops.push({ op: "text", text: sl.subtitle, x: r2(W * 0.12), y: r2(titleY + ts * 0.7 + Math.max(3, ts * 0.09) + ss * 1.05), w: r2(W * 0.76), h: 0, size: r2(ss), bold: false, color: textColor, align: "center", valign: "middle", chars: -1, bg: null, ...F });
-  return { id: sl.id, opacity: r4(op), ops };
+  return { id: sl.id, opacity: r4(op), ops, ...(fx ? { fx } : {}) };
 }
 
 // ------------------------------------------------------------------------------ defaults + presets
@@ -758,6 +778,7 @@ export function validateAnnotations(items: Annotation[], slides: TextSlide[], st
     if (a.anchor !== "screen" && a.anchor !== "frame") errs.push(`${n} anchor must be screen or frame`);
     if (!IN_KINDS.includes(a.in?.kind) || !(a.in.ms >= 0)) errs.push(`${n} has an invalid in-animation`);
     if (!OUT_KINDS.includes(a.out?.kind) || !(a.out.ms >= 0)) errs.push(`${n} has an invalid out-animation`);
+    for (const side of [a.in, a.out]) if (side?.easing !== undefined && !EASINGS.includes(side.easing)) errs.push(`${n} easing must be one of ${EASINGS.join(", ")}`);
     const s = a.style;
     if (!s || !isColorValue(s.color) || !isColorValue(s.textColor) || (s.fill !== null && !isColorValue(s.fill))) errs.push(`${n} colours must be #rrggbb or @primary / @accent / @highlight`);
     else if (s.font !== undefined && (typeof s.font !== "string" || !s.font)) errs.push(`${n} font must be a family name or ${FONT_TOKEN}`);
@@ -782,6 +803,7 @@ export function validateAnnotations(items: Annotation[], slides: TextSlide[], st
       if (!isColorValue(sl.background) || !isColorValue(sl.textColor) || (sl.accent !== null && !isColorValue(sl.accent))) errs.push(`slide ${sl.id} colours must be #rrggbb or a theme slot`);
       if (sl.fill !== undefined && sl.fill !== "solid" && sl.fill !== "theme") errs.push(`slide ${sl.id} fill must be solid or theme`);
       if (!(sl.fadeMs >= 0)) errs.push(`slide ${sl.id} fadeMs must be >= 0`);
+      errs.push(...validateElementAnim(sl.enter, SLIDE_ANIM_KINDS, `slide ${sl.id} enter`), ...validateElementAnim(sl.exit, SLIDE_ANIM_KINDS, `slide ${sl.id} exit`));
     }
   if (!steps || !Array.isArray(steps.drafts)) errs.push("stepLabels.drafts must be a list");
   else

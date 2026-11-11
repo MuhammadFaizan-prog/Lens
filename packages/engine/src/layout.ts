@@ -1,5 +1,6 @@
 import type { CameraLayoutKind, CameraLayoutSegment, Rect } from "./types.js";
 import type { ProjectConfig } from "./project.js";
+import { ease, type CameraAnimKind, type ElementAnim } from "./transitions.js";
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
@@ -211,6 +212,15 @@ export function layoutAt(
     for (const b of [s.startMs, s.endMs]) if (b <= tMs && b > boundary) boundary = b;
   }
   const to = layoutFor(cur, out, sourceAspect, cfg);
+  if (Number.isFinite(boundary) && (cfg.camera.enter || cfg.camera.exit)) {
+    // webcam enter / exit animations (demand #14): only where the camera appears or leaves
+    const pk = kindAt(boundary - 1);
+    if (pk !== cur) {
+      const fr = layoutFor(pk, out, sourceAspect, cfg);
+      const anim = !fr.camera && to.camera ? cfg.camera.enter : fr.camera && !to.camera ? cfg.camera.exit : null;
+      if (anim) return cameraEnterExit(fr, to, anim, tMs - boundary, out);
+    }
+  }
   if (!Number.isFinite(boundary) || tMs - boundary >= cfg.camera.transitionMs) return to;
   const prevKind = kindAt(boundary - 1);
   if (prevKind === cur) return to;
@@ -225,6 +235,54 @@ export function layoutAt(
     cameraOpacity: from.cameraOpacity + (to.cameraOpacity - from.cameraOpacity) * u,
     cameraCutout: u < 0.5 ? from.cameraCutout : to.cameraCutout,
     kind: cur,
+  };
+}
+
+/**
+ * The layout `local` ms after the webcam appears (from has no camera) or leaves (to has none), animated
+ * by the project's camera.enter / camera.exit: fade (opacity), pop (spring scale from 40% about the
+ * centre), slide (in from / out to the nearest side edge), scale (grow from the centre with a fade, the
+ * legacy look), none (instant). Exits run the same curve on the reversed clock.
+ */
+export function cameraEnterExit(from: FrameLayout, to: FrameLayout, anim: ElementAnim<CameraAnimKind>, local: number, out: { width: number; height: number }): FrameLayout {
+  const ms = anim.kind === "none" ? 0 : Math.max(0, anim.ms);
+  if (local >= ms) return to;
+  const entering = !from.camera;
+  const raw = Math.min(1, Math.max(0, local / ms));
+  const u = ease("ease-in-out", raw);
+  const cam = (entering ? to.camera : from.camera)!;
+  const vis = ease(anim.easing ?? (anim.kind === "pop" ? "spring" : "ease-out"), entering ? raw : 1 - raw);
+  const lin = entering ? raw : 1 - raw;
+  let rect: Rect = { ...cam };
+  let opacity = (entering ? to.cameraOpacity : from.cameraOpacity) || 1;
+  switch (anim.kind) {
+    case "fade":
+      opacity *= vis;
+      break;
+    case "pop": {
+      const k = 0.4 + 0.6 * vis;
+      rect = { x: cam.x + (cam.w * (1 - k)) / 2, y: cam.y + (cam.h * (1 - k)) / 2, w: cam.w * k, h: cam.h * k };
+      opacity *= Math.min(1, lin / 0.3);
+      break;
+    }
+    case "slide": {
+      const right = cam.x + cam.w / 2 >= out.width / 2;
+      const off = right ? out.width - cam.x : -(cam.x + cam.w);
+      rect = { ...cam, x: cam.x + off * (1 - vis) };
+      break;
+    }
+    case "scale":
+      rect = { x: cam.x + (cam.w * (1 - vis)) / 2, y: cam.y + (cam.h * (1 - vis)) / 2, w: cam.w * vis, h: cam.h * vis };
+      opacity *= Math.min(1, Math.max(0, vis));
+      break;
+  }
+  return {
+    screen: lerpRect(from.screen, to.screen, u),
+    screenOpacity: from.screenOpacity + (to.screenOpacity - from.screenOpacity) * u,
+    camera: rect.w > 0.5 && rect.h > 0.5 ? rect : null,
+    cameraOpacity: Math.max(0, Math.min(1, opacity)),
+    cameraCutout: entering ? to.cameraCutout : from.cameraCutout,
+    kind: to.kind,
   };
 }
 

@@ -7,6 +7,7 @@
  * brand's value, so changing the brand primary recolours annotations, step badges, caption
  * highlights, slide accents and the derived backdrop at once. Literal values on an item still win.
  */
+import { SLIDE_ANIM_KINDS, validateElementAnim, type ElementAnim, type SlideAnimKind } from "./transitions.js";
 import { BUILTIN_FONTS, DEFAULT_FONT, HEX, luminance, mixHex, type FontFiles, type Palette, type PaletteBackground } from "./palette.js";
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -39,6 +40,9 @@ export interface BrandCard {
   durationMs: number;
   /** Show the logo on the card (when there is one). */
   logo: boolean;
+  /** Enter / exit animation of the card (demand #14); absent = the 300 ms cross-fade. */
+  enter?: ElementAnim<SlideAnimKind> | null;
+  exit?: ElementAnim<SlideAnimKind> | null;
 }
 
 export interface BrandKit {
@@ -160,6 +164,7 @@ export function validateBrand(b: BrandKit): string[] {
     const c = b[k];
     if (!c || typeof c.enabled !== "boolean" || typeof c.title !== "string" || typeof c.subtitle !== "string" || !(c.durationMs > 0 && c.durationMs <= 20000))
       errs.push(`brand.${k} must be {enabled, title, subtitle, durationMs within (0, 20000]}`);
+    else errs.push(...validateElementAnim(c.enter, SLIDE_ANIM_KINDS, `brand.${k}.enter`), ...validateElementAnim(c.exit, SLIDE_ANIM_KINDS, `brand.${k}.exit`));
   }
   return errs;
 }
