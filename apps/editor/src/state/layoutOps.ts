@@ -3,7 +3,7 @@
  * (move / resize / Fit / Fill / Center / Reset) and the source crop insets. Pure, unit-tested in
  * test/layoutOps.test.ts. Every edit is applied through store.edit / gestures by the components.
  */
-import { cardFromRect, centerCard, customWindow, fillCard, fillWindow, framingMode, normalizeCrop, validCard } from "@lens/engine";
+import { cardFromRect, centerCard, customWindow, fillCard, fillWindow, framingMode, framingWindowAt, hasFramingKeys, normalizeCrop, setFramingKey, validCard } from "@lens/engine";
 import type { CardTransform, FramingMode, ProjectConfig, Rect } from "@lens/engine";
 
 export const ASPECTS = ["auto", "16:9", "9:16", "1:1", "4:5", "4:3", "21:9"] as const;
@@ -66,14 +66,20 @@ export function setFraming(p: ProjectConfig, mode: FramingMode, meta: { width: n
 }
 
 /** The custom window as the engine will use it (source px, aspect locked, inside the crop). */
-export function framingWindowOf(p: ProjectConfig, meta: { width: number; height: number }, out: { width: number; height: number }): Rect {
+/**
+ * With crop keys (demand #15) the window is the one at source time `atMs` (the playhead) and every
+ * window edit below sets (adds or replaces) the key there; without keys `atMs` changes nothing.
+ */
+export function framingWindowOf(p: ProjectConfig, meta: { width: number; height: number }, out: { width: number; height: number }, atMs?: number): Rect {
   const crop = normalizeCrop(p.crop, meta);
+  if (atMs !== undefined && hasFramingKeys(p.output)) return framingWindowAt(crop, out.width / out.height, p.output, atMs);
   return framingMode(p.output) === "custom" ? customWindow(crop, out.width / out.height, p.output.framingRect) : fillWindow(crop, out.width / out.height);
 }
 
 /** Set the custom window (source px): Custom mode, clamped and aspect-locked like the engine does. */
-export function setFramingRect(p: ProjectConfig, r: Rect, meta: { width: number; height: number }, out: { width: number; height: number }): ProjectConfig {
+export function setFramingRect(p: ProjectConfig, r: Rect, meta: { width: number; height: number }, out: { width: number; height: number }, atMs?: number): ProjectConfig {
   const win = customWindow(normalizeCrop(p.crop, meta), out.width / out.height, r);
+  if (atMs !== undefined && hasFramingKeys(p.output)) return setFramingKey(p, atMs, win);
   return { ...p, output: { ...p.output, framing: "custom", fit: "fit", framingRect: win }, card: null };
 }
 
@@ -81,8 +87,8 @@ export function setFramingRect(p: ProjectConfig, r: Rect, meta: { width: number;
  * Window edit from a numeric field: x / y move it (size kept), w or h resize it about its centre with
  * the other side following the locked aspect.
  */
-export function editFramingField(p: ProjectConfig, field: "x" | "y" | "w" | "h", v: number, meta: { width: number; height: number }, out: { width: number; height: number }): ProjectConfig {
-  const cur = framingWindowOf(p, meta, out);
+export function editFramingField(p: ProjectConfig, field: "x" | "y" | "w" | "h", v: number, meta: { width: number; height: number }, out: { width: number; height: number }, atMs?: number): ProjectConfig {
+  const cur = framingWindowOf(p, meta, out, atMs);
   const a = out.width / out.height;
   let r: Rect = cur;
   if (field === "x") r = { ...cur, x: v };
@@ -96,13 +102,15 @@ export function editFramingField(p: ProjectConfig, field: "x" | "y" | "w" | "h",
     // a pure move: clamp inside the crop without customWindow's area-keeping resize nudging the size
     const crop = normalizeCrop(p.crop, meta);
     r = { ...r, x: Math.min(crop.x + crop.w - r.w, Math.max(crop.x, Math.round(r.x))), y: Math.min(crop.y + crop.h - r.h, Math.max(crop.y, Math.round(r.y))) };
+    if (atMs !== undefined && hasFramingKeys(p.output)) return setFramingKey(p, atMs, r);
     return { ...p, output: { ...p.output, framing: "custom", fit: "fit", framingRect: r }, card: null };
   }
-  return setFramingRect(p, r, meta, out);
+  return setFramingRect(p, r, meta, out, atMs);
 }
 
 /** Reset the custom window: the centred Fill window, still Custom. */
-export function resetFramingRect(p: ProjectConfig, meta: { width: number; height: number }, out: { width: number; height: number }): ProjectConfig {
+export function resetFramingRect(p: ProjectConfig, meta: { width: number; height: number }, out: { width: number; height: number }, atMs?: number): ProjectConfig {
+  if (atMs !== undefined && hasFramingKeys(p.output)) return setFramingKey(p, atMs, fillWindow(normalizeCrop(p.crop, meta), out.width / out.height));
   return { ...p, output: { ...p.output, framing: "custom", fit: "fit", framingRect: fillWindow(normalizeCrop(p.crop, meta), out.width / out.height) }, card: null };
 }
 

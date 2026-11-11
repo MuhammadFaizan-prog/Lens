@@ -19,7 +19,7 @@ import { cardRect, framingMode, normalizeCrop, validCard } from "@lens/engine";
 import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
 import { captionBox } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
-import { selectedZoomDocIndex, store, useEditor } from "../state/store";
+import { playheadSrc, selectedZoomDocIndex, store, useEditor } from "../state/store";
 import { updateBlock } from "../state/timelineOps";
 import { centre, clampedNormCentre, moveBox, resizeBoxFrom, snapBox, snapLines, snapPoint, zoomRect, zoomTarget, type Box, type Corner } from "../state/overlayGeom";
 import { cardFit, framingWindowOf, setCardRect, setFramingRect } from "../state/layoutOps";
@@ -63,14 +63,15 @@ function framingObject(plan: RenderPlan, project: ProjectConfig): CanvasObj | nu
   const out = { width: plan.output.width, height: plan.output.height };
   const uc = normalizeCrop(project.crop, meta);
   const view = editViewRect(project, meta, out);
-  const win = framingWindowOf(project, meta, out);
+  const at = playheadSrc();
+  const win = framingWindowOf(project, meta, out, at);
   return {
     kind: "framing",
     index: 0,
     box: windowToBox(win, uc, view),
     keepAspect: true,
     label: `shown part · ${win.w}×${win.h}`,
-    apply: (b) => (p) => setFramingRect(p, boxToWindow(b, uc, view), meta, out),
+    apply: (b) => (p) => setFramingRect(p, boxToWindow(b, uc, view), meta, out, at),
   };
 }
 
@@ -100,8 +101,8 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
     const meta = store.get().bundle?.meta;
     if (meta && !validCard(project.card) && (mode === "fill" || mode === "custom")) {
       // Fill / Custom: dragging the picture pans (corners zoom) the shown part: it becomes Custom
-      const win = framingWindowOf(project, meta, { width: W, height: H });
-      out.push({ kind: "screen", index: 0, box: sb, keepAspect: true, label: "screen · drag to pan", apply: (b) => (p) => setFramingRect(p, windowFromDraggedScreen(win, b, { width: W, height: H }), meta, { width: W, height: H }) });
+      const win = framingWindowOf(project, meta, { width: W, height: H }, f0.src);
+      out.push({ kind: "screen", index: 0, box: sb, keepAspect: true, label: "screen · drag to pan", apply: (b) => (p) => setFramingRect(p, windowFromDraggedScreen(win, b, { width: W, height: H }), meta, { width: W, height: H }, f0.src) });
     } else out.push({ kind: "screen", index: 0, box: sb, keepAspect: false, label: "screen", apply: (b) => (p) => setCardRect(p, b, { width: W, height: H }) });
   }
   const toBox = (r: { x: number; y: number; w: number; h: number }): Box => {

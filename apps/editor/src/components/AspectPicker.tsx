@@ -73,6 +73,19 @@ function FramingSelect() {
 /** Compact toolbar picker. */
 export function AspectSelect() {
   const choice = useEditor((s) => aspectChoiceOf(s.project));
+  const targets = useEditor((s) => s.project.exportTargets);
+  // several sizes (demand #15): the toolbar picks which size is shown and edited
+  if (targets?.items.length)
+    return (
+      <span className="aspect-select" data-testid="tb-aspect-wrap">
+        <select className="tb-select" value={targets.active} aria-label="Size shown" title="Several sizes: pick the one to preview and frame" data-testid="tb-target" onChange={(e) => store.showExportTarget(e.target.value)}>
+          {targets.items.map((t) => (
+            <option key={t.id} value={t.id}>{aspectLabel(t.aspect as AspectChoice)}{t.enabled ? "" : " (off)"}</option>
+          ))}
+        </select>
+        <FramingSelect />
+      </span>
+    );
   return (
     <span className="aspect-select" data-testid="tb-aspect-wrap">
       <select className="tb-select" value={choice} aria-label="Canvas aspect" title="Canvas aspect: the screen re-fits, centred; pick the framing next to it" data-testid="tb-aspect" onChange={(e) => pick(e.target.value as AspectChoice)}>

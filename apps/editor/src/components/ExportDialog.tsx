@@ -6,7 +6,8 @@
  * rebuild (the preview says so).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { demoSteps, type DemoStep } from "@lens/engine";
+import { buildRenderPlan, demoSteps, FRAMING_MODES, projectForTarget, type DemoStep, type FramingMode } from "@lens/engine";
+import { FRAMING_LABELS } from "../state/layoutOps";
 import { store, useEditor } from "../state/store";
 import { Icon } from "./Icon";
 
@@ -51,16 +52,86 @@ export function ExportDialog() {
 function VideoTab() {
   const frames = useEditor((s) => s.plan?.frames.length ?? 0);
   const out = useEditor((s) => s.plan?.output);
+  const targets = useEditor((s) => s.project.exportTargets);
+  const enabled = targets?.items.filter((t) => t.enabled).length ?? 0;
   return (
     <div className="ex-body">
       <p className="note">
         MP4 (H.264) with every edit, zoom, caption and mask{out ? `: ${out.width}×${out.height}, ${out.fps} fps, ${frames} frames` : ""}.
       </p>
+      <SizesSection />
       <div className="sheet-actions">
-        <button className="btn primary" data-testid="export-video-go" onClick={() => { store.closeExportDialog(); void store.exportVideo(); }}>
-          <Icon name="export" /> Export MP4
+        <button className={`btn ${targets ? "" : "primary"}`} data-testid="export-video-go" onClick={() => { store.closeExportDialog(); void store.exportVideo(); }}>
+          <Icon name="export" /> Export MP4{targets ? ` (${targets.items.find((t) => t.id === targets.active)?.aspect ?? "shown"} only)` : ""}
         </button>
+        {targets && (
+          <button className="btn primary" data-testid="export-batch-go" disabled={!enabled} onClick={() => { store.closeExportDialog(); void store.exportAllTargets(); }}>
+            <Icon name="export" /> Export {enabled} {enabled === 1 ? "size" : "sizes"}
+          </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Several sizes from one recording (demand #15, docs/MultiAspect.md): one row per shape with its own
+ * framing; Show makes it the size the preview, the toolbar and Look > Output edit (its Custom window
+ * and crop keyframes too); every ticked size is exported in one batch.
+ */
+function SizesSection() {
+  const targets = useEditor((s) => s.project.exportTargets);
+  const bundle = useEditor((s) => s.bundle);
+  const project = useEditor((s) => s.project);
+  const sizes = useMemo(() => {
+    if (!bundle || !targets) return {} as Record<string, string>;
+    const r: Record<string, string> = {};
+    for (const t of targets.items) {
+      const o = buildRenderPlan({ meta: bundle.meta, events: bundle.events, project: projectForTarget(project, t.id), onlyFrames: [0] }).output;
+      r[t.id] = `${o.width}×${o.height}`;
+    }
+    return r;
+  }, [bundle, targets, project]);
+  if (!targets?.items.length)
+    return (
+      <div className="ex-sizes" data-testid="export-sizes">
+        <p className="note">Need a vertical or square cut too? Lens can export 16:9, 9:16, 1:1 and 4:5 from this project in one go, each framed on its own.</p>
+        <button className="btn ghost" data-testid="sizes-enable" onClick={() => store.enableExportTargets()}>Several sizes…</button>
+      </div>
+    );
+  return (
+    <div className="ex-sizes" data-testid="export-sizes">
+      <div className="ex-sizes-head">
+        <span className="ctl-label">Sizes</span>
+        <button className="btn ghost small" data-testid="sizes-disable" title="Back to one size (the one shown)" onClick={() => store.disableExportTargets()}>One size</button>
+      </div>
+      <ul className="ex-size-list">
+        {targets.items.map((t) => {
+          const shown = t.id === targets.active;
+          const framing = shown ? (project.output.framing ?? (project.output.fit === "fill" ? "follow" : "fit")) : t.framing;
+          const keys = shown ? project.output.framingKeys?.length ?? 0 : t.framingKeys?.length ?? 0;
+          const tid = t.aspect.replace(":", "x");
+          return (
+            <li key={t.id} className={shown ? "on" : ""} data-testid={`size-${tid}`}>
+              <label className="ex-size-on">
+                <input type="checkbox" checked={t.enabled} data-testid={`size-enabled-${tid}`} onChange={(e) => store.setExportTargetEnabled(t.id, e.target.checked)} />
+                <b>{t.aspect}</b>
+                <span className="stat">{sizes[t.id] ?? ""}</span>
+              </label>
+              <select className="tb-select" value={framing} aria-label={`${t.aspect} framing`} data-testid={`size-framing-${tid}`} onChange={(e) => store.setExportTargetFraming(t.id, e.target.value as FramingMode)}>
+                {FRAMING_MODES.map((m) => <option key={m} value={m}>{FRAMING_LABELS[m]}</option>)}
+              </select>
+              {keys > 0 && <span className="stat" data-testid={`size-keys-${tid}`}>{keys} keys</span>}
+              {shown ? (
+                <span className="chip-btn on" data-testid={`size-shown-${tid}`}>Shown</span>
+              ) : (
+                <button className="chip-btn" data-testid={`size-show-${tid}`} title="Preview and frame this size (Look > Output edits it)" onClick={() => { store.showExportTarget(t.id); store.closeExportDialog(); }}>Show</button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="note">Follow keeps the cursor and zoom target in the frame; Custom shows a window you place (Look &gt; Output), with keyframes to move it over time.</p>
     </div>
   );
 }
