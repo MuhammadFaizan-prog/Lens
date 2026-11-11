@@ -287,12 +287,17 @@ SWS_FLAGS = "accurate_rnd+full_chroma_int"
 COLOR_TAGS = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"]
 
 
-def encoder_args(preset: str, crf: int) -> list[str]:
-    """ffmpeg output args for the x264 export: explicit bt709 conversion plus matching stream tags."""
+def encoder_args(preset: str, crf: int, bitrate: Optional[float] = None, maxrate: Optional[float] = None) -> list[str]:
+    """ffmpeg output args for the x264 export: explicit bt709 conversion plus matching stream tags.
+    A platform export preset (demand #24) sets an average bitrate (Mbps) and its peak instead of crf."""
+    rate = ["-crf", str(crf)]
+    if bitrate:
+        peak = maxrate if maxrate and maxrate >= bitrate else bitrate * 1.5
+        rate = ["-b:v", f"{bitrate:g}M", "-maxrate", f"{peak:g}M", "-bufsize", f"{bitrate * 2:g}M"]
     return [
         "-vf", f"scale=out_color_matrix=bt709:out_range=tv:flags={SWS_FLAGS},"
         "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", preset, *rate, "-pix_fmt", "yuv420p",
         *COLOR_TAGS,
     ]
 
@@ -303,6 +308,9 @@ def encoder_args(preset: str, crf: int) -> list[str]:
 class RenderOptions:
     crf: int = 18
     preset: str = "medium"
+    #: platform export preset (demand #24): average video bitrate and peak in Mbps (None = crf)
+    bitrate: Optional[float] = None
+    maxrate: Optional[float] = None
     max_frames: Optional[int] = None
     #: mux the plan's audio block (tracks, cleanup, click sounds) when present
     audio: bool = True
@@ -805,7 +813,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     sink = opts.frame_sink
     enc = None if sink else subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-         *encoder_args(opts.preset, crf), "-movflags", "+faststart", video_path],
+         *encoder_args(opts.preset, crf, None if is_gif else opts.bitrate, opts.maxrate), "-movflags", "+faststart", video_path],
         stdin=subprocess.PIPE,
     )
     assert sink or (enc and enc.stdin)

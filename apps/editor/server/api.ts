@@ -49,8 +49,9 @@ import { transcribe } from "./stt";
 import { detectSilences, type Range } from "./silence";
 import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { importMusic, writeBuiltinBed } from "./music";
-import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
-import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
+import { cancelBrowserExport, exportBitrateMbps, finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
+import { CancelledError, finishExport, type FinishResult } from "./exportFinish";
+import { buildRenderPlan, encodeSettings, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -79,6 +80,12 @@ interface ExportJob {
   out: string;
   startedAt: number;
   finishedAt?: number;
+  /** Platform preset output (demand #24). */
+  stage?: string;
+  format?: "mp4" | "gif";
+  cap?: FinishResult["cap"];
+  /** render.py, then the GIF / size-cap ffmpeg: killed by Cancel. */
+  child?: import("node:child_process").ChildProcess | null;
 }
 
 const jobs = new Map<string, ExportJob | BrowserExportJob>();
@@ -609,8 +616,12 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
   jobs.set(id, job);
   const args = [path.join(ROOT, "compositor", "render.py"), "--plan", path.join(dir, "plan.json"), "--screen", path.join(bundle, "screen.mp4"),
     "--out", out, "--preset", "veryfast", "--progress", "--assets", bundle];
+  // platform preset (demand #24): its bitrate; GIF and the size cap run after render.py (exportFinish.ts)
+  const enc = project.export.video ? encodeSettings(project, exportBitrateMbps()) : null;
+  if (enc?.bitrateMbps) args.push("--bitrate", String(enc.bitrateMbps), "--maxrate", String(enc.maxrateMbps));
   if (project.camera.enabled && fs.existsSync(path.join(bundle, "cam.mp4"))) args.push("--camera", path.join(bundle, "cam.mp4"));
   const py = spawn("python3", args, { cwd: ROOT });
+  job.child = py;
   let err = "";
   py.stderr.on("data", (d: Buffer) => {
     const s = d.toString();
@@ -623,12 +634,34 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
     }
   });
   py.on("close", (code) => {
-    job.finishedAt = Date.now();
-    if (code === 0 && fs.existsSync(out)) job.state = "done";
-    else {
+    job.child = null;
+    if (job.state !== "running") return; // cancelled
+    if (!(code === 0 && fs.existsSync(out))) {
+      job.finishedAt = Date.now();
       job.state = "error";
       job.error = err.trim().split("\n").slice(-4).join("\n") || `render.py exited ${code}`;
+      return;
     }
+    if (!enc || !(enc.format === "gif" || enc.maxBytes)) {
+      job.finishedAt = Date.now();
+      job.state = "done";
+      return;
+    }
+    const cancelled = () => job.state !== "running";
+    finishExport(FFMPEG, out, enc, plan.output.durationMs, !!plan.audio, { child: (c) => (job.child = c), cancelled, stage: (s) => (job.stage = s) })
+      .then((r) => {
+        if (cancelled()) return;
+        job.out = r.out;
+        job.format = r.format;
+        job.cap = r.cap;
+        job.state = "done";
+      })
+      .catch((e) => {
+        if (cancelled() || e instanceof CancelledError) return;
+        job.state = "error";
+        job.error = `${job.stage === "gif" ? "gif" : "size cap"}: ${e instanceof Error ? e.message : String(e)}`;
+      })
+      .finally(() => (job.finishedAt = Date.now()));
   });
   return job;
 }
@@ -642,7 +675,9 @@ async function startExportBrowser(bundle: string, rawProject: unknown): Promise<
   const tr = tj ? parseTranscript(tj) : null;
   const project = exportProject(bundle, rawProject);
   const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)) });
-  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT);
+  // platform preset (demand #24); without one the export is the old one (Settings bitrate or crf 18)
+  const enc = project.export.video ? encodeSettings(project, exportBitrateMbps()) : undefined;
+  const job = startBrowserExport(FFMPEG, plan, path.join(bundle, ".lens-export", id), id, ROOT, enc);
   jobs.set(id, job);
   return job;
 }
@@ -806,16 +841,9 @@ export function apiMiddleware() {
         const job = jobs.get(m[1]!);
         if (!job || !("ff" in job)) return sendJson(res, { error: "no such export" }, 404);
         if (m[2] === "cancel") {
-          // Windows bug #11: long jobs can be cancelled; ffmpeg is stopped and the partial file left behind
-          if (job.state === "running") {
-            job.state = "error";
-            job.error = "cancelled";
-            try {
-              job.ff.kill("SIGKILL");
-            } catch {
-              // already gone
-            }
-          }
+          // Windows bug #11: long jobs can be cancelled; ffmpeg (and a mux / GIF / size-cap step) is
+          // stopped and the partial file left behind
+          cancelBrowserExport(job);
           return sendJson(res, { ok: true });
         }
         if (m[2] === "finish") {
@@ -827,6 +855,22 @@ export function apiMiddleware() {
         await writeFrame(job, Number(url.searchParams.get("i")), Buffer.concat(chunks));
         return sendJson(res, { ok: true, done: job.done });
       }
+      if ((m = /^\/api\/export\/([a-z0-9]+)\/cancel$/.exec(url.pathname)) && req.method === "POST") {
+        const job = jobs.get(m[1]!);
+        if (!job) return sendJson(res, { error: "no such export" }, 404);
+        if ("ff" in job) cancelBrowserExport(job);
+        else if (job.state === "running") {
+          job.state = "error";
+          job.error = "cancelled";
+          job.finishedAt = Date.now();
+          try {
+            job.child?.kill("SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+        return sendJson(res, { ok: true });
+      }
       if (url.pathname === "/api/export" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));
         const job = await startExport(bundle, body.project);
@@ -837,11 +881,14 @@ export function apiMiddleware() {
         if (!job) return sendJson(res, { error: "no such export" }, 404);
         if (m[2]) {
           if (job.state !== "done") return sendJson(res, { error: "not finished" }, 409);
-          res.setHeader("content-type", "video/mp4");
-          res.setHeader("content-disposition", `attachment; filename="lens-export.mp4"`);
+          const gif = job.out.toLowerCase().endsWith(".gif");
+          res.setHeader("content-type", gif ? "image/gif" : "video/mp4");
+          res.setHeader("content-disposition", `attachment; filename="lens-export.${gif ? "gif" : "mp4"}"`);
           return fs.createReadStream(job.out).pipe(res);
         }
         return sendJson(res, { id: job.id, state: job.state, done: job.done, total: job.total, error: job.error, out: job.out,
+          stage: job.stage, format: job.format ?? (job.out.toLowerCase().endsWith(".gif") ? "gif" : "mp4"), cap: job.cap,
+          bytes: job.state === "done" && fs.existsSync(job.out) ? fs.statSync(job.out).size : undefined,
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       if (url.pathname === "/api/transcribe" && req.method === "POST") {
