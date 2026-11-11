@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("lensDesktop", {
   chunk: (kind: "video" | "audio", data: ArrayBuffer) => ipcRenderer.send("lens:chunk", kind, data),
   stop: (opts?: { stopAt?: number }) => ipcRenderer.invoke("lens:stop", opts),
   abort: () => ipcRenderer.invoke("lens:abort"),
+  marker: () => ipcRenderer.invoke("lens:marker"),
+  onMarker: (fn: (m: unknown) => void) => ipcRenderer.on("lens:marker", (_e, m) => fn(m)),
   openEditor: (dir: string) => ipcRenderer.invoke("lens:open-editor", dir),
   onToggle: (fn: () => void) => ipcRenderer.on("lens:toggle", () => fn()),
   onLive: (fn: (b: unknown) => void) => ipcRenderer.on("lens:live", (_e, b) => fn(b)),

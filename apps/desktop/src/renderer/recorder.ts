@@ -31,12 +31,14 @@ interface Bridge {
   settingsOpen(): Promise<void>;
   onSettings(fn: (s: AppSettings) => void): void;
   onMode(fn: (m: string) => void): void;
-  status(): Promise<{ hotkey: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
+  status(): Promise<{ hotkey: string; zoomMarker?: string; hook: boolean; hookError: string | null; recording: boolean; recordingsDir: string; platform: string }>;
   begin(): Promise<{ dir: string }>;
-  started(info: unknown): Promise<unknown>;
+  started(info: unknown): Promise<{ ok: boolean; zoomMarker?: string | null; markerError?: string | null }>;
   chunk(kind: "video" | "audio" | "camera" | "system", data: ArrayBuffer): void;
   stop(opts?: { stopAt?: number }): Promise<{ dir: string; durationMs: number; warnings: string[]; clickSources: Record<string, number> }>;
   abort(): Promise<void>;
+  marker(): Promise<{ t: number; count: number } | null>;
+  onMarker(fn: (m: { t: number; count: number }) => void): void;
   onToggle(fn: () => void): void;
   onLive(fn: (b: { t: number; cursor: { x: number; y: number } | null; events: InputEvent[] }) => void): void;
   onFinalizing(fn: (stage: string) => void): void;
@@ -338,7 +340,8 @@ async function start(sourceId?: string): Promise<void> {
     const clock = { startCall, startEvent, firstCapture: first?.capture ?? null, firstPresented: first?.presented ?? null, chosen: first?.capture ? "firstCapture" : first ? "firstPresented" : "startCall" };
     camera = new LiveCamera(capture);
     ripples = [];
-    await lens.started({
+    markers = [];
+    const startedRes = await lens.started({
       sourceId: src.id, sourceName: src.name, kind: src.kind, displayId: src.displayId, capture, fps: FPS, videoMime: vMime, videoStart, clock,
       mic: audioRec ? { mime: audioRec.mimeType, start: micStart } : null, cursor: cursorInfo,
       webcam: webcamRec ? { mime: webcamRec.mimeType, start: webcamStart } : null,
@@ -346,6 +349,8 @@ async function start(sourceId?: string): Promise<void> {
       system: systemRec ? { mime: systemRec.mimeType, start: systemStart } : null,
       crop: mode === "region" && region ? { x: Math.round(region.x * capture.width), y: Math.round(region.y * capture.height), w: Math.round(region.w * capture.width), h: Math.round(region.h * capture.height) } : null,
     });
+    markerKey = startedRes?.zoomMarker ?? null;
+    renderMarkers(startedRes?.markerError ?? null);
     state = "recording";
     setStatus("Recording", true);
     $("pick").hidden = true;
@@ -468,6 +473,24 @@ lens.onLive((b) => {
   liveT = b.t;
   if (camera && liveCursor) camera.step(b.t, liveCursor);
 });
+
+// ---- hotkey zoom markers (demand #19): the global hotkey (main process) or the button drop a marker
+let markers: Array<{ t: number; count: number }> = [];
+let markerKey: string | null = null;
+function renderMarkers(error: string | null = null): void {
+  const n = markers.length;
+  const how = markerKey ? `${markerKey.replace("CommandOrControl", "Ctrl")} adds a zoom here` : error ?? "Zoom marker hotkey off (Settings > Shortcut Keys)";
+  $("marker-info").textContent = `${how} · ${n} marker${n === 1 ? "" : "s"}`;
+}
+lens.onMarker((m) => {
+  markers.push(m);
+  renderMarkers();
+  const b = $("marker-btn");
+  b.classList.remove("flash");
+  void b.offsetWidth;
+  b.classList.add("flash");
+});
+$("marker-btn").onclick = () => void lens.marker();
 
 lens.onFinalizing((stage) => setStatus(stage.startsWith("Preparing") ? stage : `Saving ${stage}…`));
 lens.onToggle(() => void (state === "idle" ? start().catch(() => undefined) : stop()));
@@ -807,5 +830,6 @@ void lens.updateState().then((u) => {
   devices: () => ({ mode, region, cams: [...$<HTMLSelectElement>("cam-device").options].map((o) => o.value), mics: [...$<HTMLSelectElement>("mic-device").options].map((o) => o.value), micPeak: meter.peak, webcamOpen: !!webcamStream, micOpen: !!micStream, cam: $<HTMLSelectElement>("cam-device").value, mic: $<HTMLSelectElement>("mic-device").value }),
   settings: () => ({ FPS, BPP, COUNTDOWN }),
   state: () => ({ state, capture, selected: selected?.id ?? null, sources: sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })), camera: camera?.state ?? null,
-    zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update }),
+    zooms: camera?.zoomSegments(liveT) ?? [], liveT, liveLog, lastResult, lastError, update, markers: [...markers], markerInfo: $("marker-info").textContent }),
+  marker: () => lens.marker(),
 };

@@ -199,6 +199,7 @@ function updateTray(): void {
     tray.setToolTip(recording ? `Lens: recording (${keyLabel(hotkey)} to stop)` : `Lens: ready (${keyLabel(hotkey)} to record)`);
   const trayItems: Electron.MenuItemConstructorOptions[] = [
       { label: recording ? "Stop recording" : "Start recording", accelerator: hotkey, click: () => toggle() },
+      ...(recording ? [{ label: "Add zoom marker", ...(markerBound ? { accelerator: markerBound } : {}), click: () => void dropMarker() } as Electron.MenuItemConstructorOptions] : []),
       { label: "Show recorder", click: () => showRecorder() },
       { label: "Settings…", click: () => openSettings() },
       { label: "About Lens", click: () => void showAbout() },
@@ -419,6 +420,41 @@ function registerShortcuts(s: Settings["shortcuts"]): { error: string | null } {
   return { error: null };
 }
 
+/**
+ * Zoom-marker hotkey (demand #19): bound only while a recording runs, so the keys stay free for other
+ * apps the rest of the time. Each press drops a "zoom here" marker (recording.ts marker()).
+ */
+let markerBound: string | null = null;
+function bindMarker(on: boolean): string | null {
+  if (markerBound) {
+    try {
+      globalShortcut.unregister(markerBound);
+    } catch {
+      // already gone (unregisterAll)
+    }
+    markerBound = null;
+  }
+  const acc = settings.shortcuts.zoomMarker;
+  if (!on || !acc) return null;
+  let ok = false;
+  try {
+    ok = globalShortcut.register(acc, () => dropMarker());
+  } catch (e) {
+    return `zoom marker: "${acc}" is not a valid shortcut (${e instanceof Error ? e.message : String(e)})`;
+  }
+  if (!ok) return `zoom marker: ${keyLabel(acc)} is already used by another app; use the recorder's Zoom marker button`;
+  markerBound = acc;
+  return null;
+}
+
+function dropMarker(): { t: number; count: number } | null {
+  const t = rec?.marker() ?? null;
+  if (t === null || !rec) return null;
+  const r = { t, count: rec.markerCount };
+  recorderWin?.webContents.send("lens:marker", r);
+  return r;
+}
+
 function applyLoginItem(): void {
   // Windows / macOS only (Electron has no login items on Linux); started hidden in the tray
   if (process.platform === "win32" || process.platform === "darwin") app.setLoginItemSettings({ openAtLogin: settings.general.autoStart, args: ["--hidden"] });
@@ -446,12 +482,15 @@ function setSettings(next: unknown): { ok: boolean; error?: string; settings: Se
     const r = registerShortcuts(n.shortcuts);
     if (r.error) {
       registerShortcuts(settings.shortcuts);
+      if (rec) bindMarker(true);
       return { ok: false, error: r.error, settings };
     }
   }
   const restartNeeded = n.general.hardwareAcceleration !== settings.general.hardwareAcceleration;
   settings = n;
   hotkey = n.shortcuts.startStop;
+  // registerShortcuts dropped every binding: a running recording gets its marker key back (the new one)
+  if (rec) bindMarker(true);
   applySettingsEnv();
   applyLoginItem();
   saveSettings(settingsFile(), settings);
@@ -495,7 +534,7 @@ function registerIpc(): void {
       return { id: s.id, name: s.name, kind, displayId: d ? String(d.id) : s.display_id || undefined, thumbnail: s.thumbnail.toDataURL(), size: phys ? { width: phys.width, height: phys.height } : null };
     });
   });
-  ipcMain.handle("lens:status", () => ({ hotkey, hook: !!hook, hookError, recording: !!rec, recordingsDir: recordingsDir(), platform: process.platform }));
+  ipcMain.handle("lens:status", () => ({ hotkey, zoomMarker: settings.shortcuts.zoomMarker, hook: !!hook, hookError, recording: !!rec, recordingsDir: recordingsDir(), platform: process.platform }));
   ipcMain.handle("lens:begin", () => {
     if (rec) throw new Error("already recording");
     rec = new Recording(recordingsDir(), hook, (batch) => recorderWin?.webContents.send("lens:live", batch));
@@ -510,8 +549,14 @@ function registerIpc(): void {
     // the H.264 encoder probe (test encodes, cached per process) runs now, not after Stop
     void pickH264(ffmpegPath()).catch(() => undefined);
     logLine(info.webcamError ? "WARN" : "INFO", `recording started: camera ${info.webcamDevice ? JSON.stringify(info.webcamDevice) : "none"}${info.webcam ? ` (${info.webcam.mime})` : ""}${info.webcamError ? ` — ${info.webcamError}` : ""}`);
+    const markerError = bindMarker(true);
+    if (markerError) {
+      rec.warnings.push(markerError);
+      logLine("WARN", markerError);
+    }
+    updateTray();
     if (settings.record.hideWhileRecording) recorderWin?.hide();
-    return { ok: true };
+    return { ok: true, zoomMarker: markerError ? null : keyLabel(settings.shortcuts.zoomMarker), markerError };
   });
   ipcMain.handle("lens:settings-get", async () => ({ settings, defaults: settingsDefaults(), platform: process.platform, gpu: await gpuSummary() }));
   ipcMain.handle("lens:settings-set", (_e, next: unknown) => setSettings(next));
@@ -573,6 +618,7 @@ function registerIpc(): void {
   ipcMain.handle("lens:stop", async (_e, opts?: { stopAt?: number }) => {
     const r = rec;
     if (!r) throw new Error("not recording");
+    bindMarker(false);
     r.stopInput(opts?.stopAt);
     rec = null;
     updateTray();
@@ -593,7 +639,9 @@ function registerIpc(): void {
     setTimeout(() => recycleRecorder(), 1500);
     return result;
   });
+  ipcMain.handle("lens:marker", () => dropMarker());
   ipcMain.handle("lens:abort", () => {
+    bindMarker(false);
     rec?.stopInput();
     rec = null;
     updateTray();

@@ -60,6 +60,7 @@
         <span class="row"><span></span><small>Click a box and press the keys. Backspace clears. Shortcuts work from any app.</small></span>
         <label class="row">Start / stop recording<input class="key" type="text" readonly id="sc-startStop" data-testid="sc-startStop" /></label>
         <label class="row">Record a custom area<input class="key" type="text" readonly id="sc-region" data-testid="sc-region" /></label>
+        <label class="row" title="While recording: press to drop a zoom block at this moment, aimed at the cursor. It opens in the editor as a normal zoom block.">Zoom marker (while recording)<input class="key" type="text" readonly id="sc-zoomMarker" data-testid="sc-zoomMarker" /></label>
         <label class="row">Pause / resume<input class="key" type="text" readonly id="sc-pause" data-testid="sc-pause" disabled placeholder="Not available yet" /></label>
       </section>
       <section id="export">
@@ -90,7 +91,7 @@
         $("countdown").value = String(s.record.countdown);
         $("hideWhileRecording").checked = s.record.hideWhileRecording;
         $("showSystemCursor").checked = s.record.showSystemCursor;
-        for (const k of ["startStop", "region", "pause"]) { $("sc-" + k).value = label(s.shortcuts[k]); $("sc-" + k).dataset.acc = s.shortcuts[k] || ""; }
+        for (const k of ["startStop", "region", "pause", "zoomMarker"]) { $("sc-" + k).value = label(s.shortcuts[k]); $("sc-" + k).dataset.acc = s.shortcuts[k] || ""; }
         $("resolution").value = String(s.export.resolution);
         $("exfps").value = String(s.export.fps);
         $("bitrateMbps").value = String(s.export.bitrateMbps);
@@ -99,7 +100,7 @@
         return {
           general: { saveDir: $("saveDir").value, exportDir: $("exportDir").value, autoStart: $("autoStart").checked, autoPlay: $("autoPlay").checked, hardwareAcceleration: $("hardwareAcceleration").checked },
           record: { fps: Number($("fps").value), quality: $("quality").value, countdown: Number($("countdown").value), hideWhileRecording: $("hideWhileRecording").checked, showSystemCursor: $("showSystemCursor").checked },
-          shortcuts: { startStop: $("sc-startStop").dataset.acc, region: $("sc-region").dataset.acc, pause: $("sc-pause").dataset.acc },
+          shortcuts: { startStop: $("sc-startStop").dataset.acc, region: $("sc-region").dataset.acc, pause: $("sc-pause").dataset.acc, zoomMarker: $("sc-zoomMarker").dataset.acc },
           export: { format: "mp4", resolution: Number($("resolution").value), fps: Number($("exfps").value), bitrateMbps: Number($("bitrateMbps").value) || 0 },
         };
       }

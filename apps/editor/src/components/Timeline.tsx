@@ -665,7 +665,7 @@ export function Timeline() {
               <div key={`cut-shade-${i}`} className="cut-shade" style={{ left: xOf(c.startMs), width: xOf(c.endMs) - xOf(c.startMs) }} />
             ))}
             <div className="lane" data-testid="lane-zoom" onPointerDown={laneDown} onDoubleClick={(e) => create("zoom", msOf(laneX(e.clientX)))}>
-              {plan?.zoomSegments.map((z, i) => block("zoom", i, z, `${z.scale.toFixed(1)}×${z.auto ? " auto" : ""}`, z.auto && project.zoom.auto ? "auto" : ""))}
+              {plan?.zoomSegments.map((z, i) => block("zoom", i, z, `${z.scale.toFixed(1)}×${z.auto ? " auto" : z.id.startsWith("marker-") ? " ⚑" : ""}`, z.auto && project.zoom.auto ? "auto" : z.id.startsWith("marker-") ? "marker" : ""))}
             </div>
             <div className="lane" data-testid="lane-cut" onPointerDown={laneDown} onDoubleClick={(e) => create("cut", msOf(laneX(e.clientX)))}>
               {(plan?.cleanupCuts ?? []).map((c, i) => (

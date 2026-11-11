@@ -47,7 +47,7 @@ import { transcribe } from "./stt";
 import { detectSilences, type Range } from "./silence";
 import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
-import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
+import { buildRenderPlan, DemoExportError, markerZoomSegments, parseEventLog, parseMarkerLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -535,11 +535,27 @@ function readJson(file: string): unknown {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
 }
 
+/**
+ * A bundle with no project.json yet whose recording has hotkey zoom markers (markers.jsonl, demand #19):
+ * the new project starts with one manual zoom block per marker. The desktop app writes the same blocks
+ * into project.json at Stop; this covers bundles made without that step (a salvaged or copied recording).
+ */
+function markerProject(dir: string, meta: unknown): Record<string, unknown> {
+  const f = path.join(dir, "markers.jsonl");
+  const m = meta as { width?: number; height?: number; durationMs?: number } | null;
+  if (!fs.existsSync(f) || !m?.width || !m.height || !m.durationMs) return {};
+  const markers = parseMarkerLog(fs.readFileSync(f, "utf8"));
+  if (!markers.length) return {};
+  const scale = resolveProject({}).zoom.defaultScale;
+  const segments = markerZoomSegments(markers, { width: m.width, height: m.height, durationMs: m.durationMs }, { scale });
+  return segments.length ? { zoom: { segments } } : {};
+}
+
 async function loadBundle(dir: string) {
   ensureSample(dir);
   const meta = readJson(path.join(dir, "meta.json"));
   const events = fs.readFileSync(path.join(dir, "events.jsonl"), "utf8");
-  const project = readJson(path.join(dir, "project.json")) ?? {};
+  const project = (readJson(path.join(dir, "project.json")) ?? markerProject(dir, meta)) as Record<string, unknown>;
   const transcript = readJson(path.join(dir, "transcript.json"));
   const hasCam = fs.existsSync(path.join(dir, "cam.mp4"));
   // one probe per track (size, fps, frame count; both tracks at once, off the event loop); the JPEG pass

@@ -62,3 +62,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 #mic-level { height: 100%; width: 0; background: linear-gradient(90deg, #3ecf8e, #f5c542 75%, #e5323c); transition: width 60ms linear; }
 .tab.wide { width: 100%; padding: 7px; }
 [hidden] { display: none !important; }
+
+.live-meta.markers { align-items: center; gap: 8px; }
+#marker-btn.flash { animation: marker-flash 0.6s ease-out; }
+@keyframes marker-flash { from { background: #ffb020; color: #000; } to { background: transparent; } }

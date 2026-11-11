@@ -15,6 +15,7 @@ import { logLine } from "./log";
 import { dipToCapture, physicalToCapture, resolveClickPoint, type CaptureSize, type DisplayGeom, type Point } from "../shared/coords";
 import { EventLogWriter, headerLine, keyEvent, mouseButton } from "../shared/eventlog";
 import type { InputEvent } from "../../../../packages/engine/src/types";
+import { MARKER_LOG_VERSION, formatMarker, markerZoomSegments, parseMarkerLog } from "../../../../packages/engine/src/markers";
 import { h264Args, markBroken, pickH264, type Quality } from "../../../editor/server/h264";
 
 export const nowEpoch = (): number => performance.timeOrigin + performance.now();
@@ -82,6 +83,9 @@ export class Recording {
   private camFd: number | null = null;
   private sysFd: number | null = null;
   private eventsFd: number | null = null;
+  private markersFd: number | null = null;
+  /** Hotkey zoom markers dropped so far (demand #19). */
+  markerCount = 0;
   private log: EventLogWriter | null = null;
   private timer: NodeJS.Timeout | null = null;
   private info: StartInfo | null = null;
@@ -179,6 +183,25 @@ export class Recording {
     });
   }
 
+  /**
+   * The zoom-marker hotkey (demand #19): a "zoom here" marker at this moment, aimed at the cursor, appended
+   * to markers.jsonl (created on the first marker, so a recording without markers has no such file).
+   * Returns the marker's video-clock time, or null when the recording is not running.
+   */
+  marker(): number | null {
+    if (!this.info || !this.log || this.timer === null) return null;
+    const t = nowEpoch() - this.info.videoStart;
+    if (t < 0) return null;
+    if (this.markersFd === null) {
+      this.markersFd = fs.openSync(path.join(this.dir, "markers.jsonl"), "w");
+      fs.writeSync(this.markersFd, `# lens-markers v${MARKER_LOG_VERSION}\n`);
+    }
+    const p = this.lastCursor;
+    fs.writeSync(this.markersFd, formatMarker({ t, kind: "zoom", ...(p ? { x: p.x, y: p.y } : {}) }) + "\n");
+    this.markerCount++;
+    return t;
+  }
+
   private writeChunk(kind: "video" | "audio" | "camera" | "system", buf: Buffer): void {
     const fd = kind === "video" ? this.videoFd : kind === "audio" ? this.audioFd : kind === "camera" ? this.camFd : this.sysFd;
     if (fd !== null) fs.writeSync(fd, buf);
@@ -197,7 +220,7 @@ export class Recording {
     for (const [ev, fn] of this.listeners) this.hook?.removeListener(ev, fn);
     this.listeners = [];
     if (this.info) this.log?.end(this.stopEpoch - this.info.videoStart);
-    for (const k of ["videoFd", "audioFd", "camFd", "sysFd", "eventsFd"] as const) {
+    for (const k of ["videoFd", "audioFd", "camFd", "sysFd", "eventsFd", "markersFd"] as const) {
       const fd = this[k];
       if (fd !== null) fs.closeSync(fd);
       this[k] = null;
@@ -296,11 +319,12 @@ export class Recording {
     // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
     // and export never show two cursors; it turns on by itself once the capture really excludes it.
     const baked = cursorBaked(info.cursor);
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
+    const markerZooms = markerSegmentsOf(dir, { width: info.capture.width, height: info.capture.height, durationMs });
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(markerZooms.length ? { zoom: { segments: markerZooms } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
-      displays: this.displays, captured: this.captured, counts: this.log?.counts, clickSources: this.clickSources, warnings: this.warnings,
+      displays: this.displays, captured: this.captured, counts: this.log?.counts, markers: this.markerCount, clickSources: this.clickSources, warnings: this.warnings,
       // the editor transcribes the mic on-device the first time it opens this recording (Windows #5)
       autoTranscribe: tracks.length > 0,
       finalize: this.finalizeInfo,
@@ -308,6 +332,15 @@ export class Recording {
     return { dir, durationMs };
   }
 }
+
+/** The bundle's hotkey zoom markers (markers.jsonl) as manual zoom blocks at the default zoom (demand #19). */
+export function markerSegmentsOf(dir: string, meta: { width: number; height: number; durationMs: number }) {
+  const f = path.join(dir, "markers.jsonl");
+  if (!fs.existsSync(f)) return [];
+  return markerZoomSegments(parseMarkerLog(fs.readFileSync(f, "utf8")), meta, { scale: DEFAULT_ZOOM_SCALE });
+}
+/** = defaultProject().zoom.defaultScale (packages/engine/src/project.ts); not imported to keep the main bundle small. */
+export const DEFAULT_ZOOM_SCALE = 2;
 
 let KEY_NAMES: Map<number, string> | null = null;
 export function setKeyTable(table: Record<string, number>): void {
