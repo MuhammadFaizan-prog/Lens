@@ -16,6 +16,8 @@ export interface StartMsg {
   query: string;
   screen: { count: number; fps: number };
   cam: { count: number; fps: number } | null;
+  /** NLE hand-off (demand #11): draw only the overlay layer on transparent and post PNGs (no source frames needed). */
+  overlay?: boolean;
 }
 export type FromWorker =
   | { type: "progress"; done: number; total: number }
@@ -58,28 +60,32 @@ async function run(m: StartMsg): Promise<void> {
     for (i = 0; i < total; i++) {
       if (cancelled) return post({ type: "cancelled", done: i });
       const f = plan.frames[i]!;
-      const si = scr.indexAt(videoTime(f));
-      const ci = cam ? cam.indexAt(f.src) : 0;
-      // the next frames' bytes download while this one draws
-      scr.prefetch([si + 1, si + 2, si + 3], 1);
-      const [s, c] = await Promise.all([scr.load(si), cam ? cam.load(ci) : Promise.resolve(null)]);
-      // cut transition (demand #14): the other side of the join, held still, composited with this frame
-      const of = f.tr ? plan.frames[f.tr.other] : undefined;
-      let other: { screen: CanvasImageSource | null; cam: CanvasImageSource | null } | null = null;
-      let low = si;
-      let lowCam = ci;
-      if (of) {
-        const osi = scr.indexAt(of.src);
-        const oci = cam ? cam.indexAt(of.src) : 0;
-        const [os, oc] = await Promise.all([scr.load(osi), cam ? cam.load(oci) : Promise.resolve(null)]);
-        other = { screen: os, cam: oc };
-        low = Math.min(si, osi);
-        lowCam = Math.min(ci, oci);
+      if (m.overlay) {
+        renderer.draw(g, plan, i, { screen: null, cam: null }, null, { overlay: true });
+      } else {
+        const si = scr.indexAt(videoTime(f));
+        const ci = cam ? cam.indexAt(f.src) : 0;
+        // the next frames' bytes download while this one draws
+        scr.prefetch([si + 1, si + 2, si + 3], 1);
+        const [s, c] = await Promise.all([scr.load(si), cam ? cam.load(ci) : Promise.resolve(null)]);
+        // cut transition (demand #14): the other side of the join, held still, composited with this frame
+        const of = f.tr ? plan.frames[f.tr.other] : undefined;
+        let other: { screen: CanvasImageSource | null; cam: CanvasImageSource | null } | null = null;
+        let low = si;
+        let lowCam = ci;
+        if (of) {
+          const osi = scr.indexAt(videoTime(of));
+          const oci = cam ? cam.indexAt(of.src) : 0;
+          const [os, oc] = await Promise.all([scr.load(osi), cam ? cam.load(oci) : Promise.resolve(null)]);
+          other = { screen: os, cam: oc };
+          low = Math.min(si, osi);
+          lowCam = Math.min(ci, oci);
+        }
+        renderer.draw(g, plan, i, { screen: s, cam: c }, other);
+        scr.releaseBelow(low);
+        cam?.releaseBelow(lowCam);
       }
-      renderer.draw(g, plan, i, { screen: s, cam: c }, other);
-      scr.releaseBelow(low);
-      cam?.releaseBelow(lowCam);
-      const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
+      const blob = m.overlay ? await canvas.convertToBlob({ type: "image/png" }) : await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
       if (cancelled) return post({ type: "cancelled", done: i });
       const r = await fetch(`/api/export-browser/${id}/frame${query}${sep}i=${i}`, { method: "POST", body: blob });
       if (!r.ok) {

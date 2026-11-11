@@ -19,7 +19,9 @@
  *   POST /api/project                save project.json into the bundle
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
- *   GET  /api/export/:id/file        the exported MP4
+ *   GET  /api/export/:id/file        the exported MP4 (?name=overlay.mov | overlay.webm | cuts.fcpxml | cuts.edl for an NLE hand-off)
+ *   POST /api/export-overlay         { project } -> { id, total }: NLE hand-off (demand #11): writes cuts.fcpxml / cuts.edl, then the
+ *                                    editor posts transparent overlay PNGs to /api/export-browser/:id/frame (ffmpeg -> ProRes 4444 + VP9 alpha)
  *   POST /api/privacy/scan[?force=1] start redact/lens-redact on screen.mp4 -> { id } (cached per screen.mp4)
  *   GET  /api/privacy/scan/:id       { state, stage, done, total, error, result }
  *   GET  /api/privacy/thumb/:name    a review thumbnail (.lens-cache/privacy/)
@@ -53,6 +55,7 @@ import { importMusic, writeBuiltinBed } from "./music";
 import { cancelBrowserExport, exportBitrateMbps, finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { CancelledError, finishExport, type FinishResult } from "./exportFinish";
 import { embedChapters, wantsChapters } from "./chapterMeta";
+import { startNleExport } from "./nleExport";
 import { buildRenderPlan, encodeSettings, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
@@ -711,6 +714,20 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
   return job;
 }
 
+/** NLE hand-off (demand #11): plan with its edit pieces, project files, ffmpeg waiting for overlay PNGs. */
+async function startExportOverlay(bundle: string, rawProject: unknown): Promise<BrowserExportJob> {
+  const id = "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const meta = JSON.parse(fs.readFileSync(path.join(bundle, "meta.json"), "utf8"));
+  const events = parseEventLog(fs.readFileSync(path.join(bundle, "events.jsonl"), "utf8"));
+  const tj = readJson(path.join(bundle, "transcript.json"));
+  const tr = tj ? parseTranscript(tj) : null;
+  const project = exportProject(bundle, rawProject);
+  const plan = buildRenderPlan({ meta, events, project, words: tr?.words ?? [], pauses: tr?.pauses ?? (await micSilences(bundle)), editPieces: true });
+  const job = startNleExport(FFMPEG, plan, bundle, path.join(bundle, ".lens-export", id), id, path.basename(bundle));
+  jobs.set(id, job);
+  return job;
+}
+
 /** In-browser export (LENS_EXPORT=browser): the plan is built here, the editor posts the frames. */
 async function startExportBrowser(bundle: string, rawProject: unknown): Promise<BrowserExportJob> {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -893,6 +910,11 @@ export function apiMiddleware() {
         return sendJson(res, { ok: true, path: path.join(bundle, "project.json") });
       }
       if (url.pathname === "/api/capabilities" && req.method === "GET") return sendJson(res, { export: EXPORT_PATH });
+      if (url.pathname === "/api/export-overlay" && req.method === "POST") {
+        const body = JSON.parse(await readBody(req));
+        const job = await startExportOverlay(bundle, body.project);
+        return sendJson(res, { id: job.id, total: job.total });
+      }
       if (url.pathname === "/api/export-browser" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));
         const job = await startExportBrowser(bundle, body.project);
@@ -940,6 +962,17 @@ export function apiMiddleware() {
       if ((m = /^\/api\/export\/([a-z0-9]+)(\/file)?$/.exec(url.pathname))) {
         const job = jobs.get(m[1]!);
         if (!job) return sendJson(res, { error: "no such export" }, 404);
+        const files = "files" in job ? (job.files as Record<string, string>) : null;
+        if (m[2] && files) {
+          if (job.state !== "done") return sendJson(res, { error: "not finished" }, 409);
+          const want = url.searchParams.get("name") ?? "overlay.mov";
+          const file = Object.values(files).find((f) => path.basename(f) === want);
+          if (!file) return sendJson(res, { error: "no such file" }, 404);
+          const types: Record<string, string> = { ".mov": "video/quicktime", ".webm": "video/webm", ".fcpxml": "application/xml", ".edl": "text/plain" };
+          res.setHeader("content-type", types[path.extname(file)] ?? "application/octet-stream");
+          res.setHeader("content-disposition", `attachment; filename="${path.basename(file)}"`);
+          return fs.createReadStream(file).pipe(res);
+        }
         if (m[2]) {
           if (job.state !== "done") return sendJson(res, { error: "not finished" }, 409);
           const gif = job.out.toLowerCase().endsWith(".gif");
@@ -950,6 +983,7 @@ export function apiMiddleware() {
         return sendJson(res, { id: job.id, state: job.state, done: job.done, total: job.total, error: job.error, out: job.out,
           stage: job.stage, format: job.format ?? (job.out.toLowerCase().endsWith(".gif") ? "gif" : "mp4"), cap: job.cap,
           bytes: job.state === "done" && fs.existsSync(job.out) ? fs.statSync(job.out).size : undefined,
+          ...(files ? { files: Object.fromEntries(Object.entries(files).map(([k, f]) => [k, path.basename(f)])) } : {}),
           seconds: ((job.finishedAt ?? Date.now()) - job.startedAt) / 1000 });
       }
       if (url.pathname === "/api/transcribe" && req.method === "POST") {

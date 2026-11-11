@@ -41,7 +41,7 @@ export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingCo
   const of = f.tr ? plan.frames[f.tr.other] : undefined;
   let other: { screen: CanvasImageSource | null; cam: CanvasImageSource | null } | null = null;
   if (of) {
-    const osi = store.screen.indexAt(of.src);
+    const osi = store.screen.indexAt(videoTime(of));
     const oWantCam = !!(store.cam && of.layout.camera && of.layout.cameraOpacity > 0);
     const oci = oWantCam ? store.cam!.indexAt(of.src) : -1;
     let os = store.screen.peek(osi);

@@ -329,6 +329,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Import into Resolve, FCP and Premiere and check the frame-exact alignment of the stems (difference against the flattened render equals 0). 3 agency users try it for one paid project.
 
+**Status (2026-11-11): built, first version (branch `feat/nle-export-015`, not merged).** Export dialog **Editor hand-off**: the overlay layer (cursor, click effects, annotations, following zooms) on transparent as ProRes 4444 `.mov` and VP9-alpha `.webm`, plus `cuts.fcpxml` (cuts as clips, slides as gaps, speed as time maps, zooms as markers, overlay on lane 1) and a CMX3600 `cuts.edl` (zoom locators); drawn by the editor's renderer and encoded by ffmpeg alone, so the desktop app (no Python) has it (see `docs/NLEExport.md`). Measured (web build, synthetic 640x360 fixture, bounds set before the first run): ProRes 4444 yuva444p12le and VP9 alpha_mode 1, 150/150 frames; alpha 255 at the plan's cursor position, 0 (.mov) / ≤ 4 (.webm) more than 80 px from it; FCPXML and EDL cut times within 0.0 ms of the plan (bound 1 frame). Not done: import tests in Resolve / FCP / Premiere, the screen / webcam / caption stems, zooms as keyframes, a no-background video export, agency users.
+
 ---
 
 ## 12. A cursor that matches the UI — 144 · M

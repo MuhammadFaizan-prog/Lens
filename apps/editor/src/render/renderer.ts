@@ -125,8 +125,14 @@ export class PlanRenderer {
    * Draw output frame `index` of `plan` into g (sized plan.output.width x height). A frame near a cut
    * join (plan frame `tr`, demand #14) is two frames composited: this one and the other side of the
    * join (frame tr.other, held still), whose source images are `other`.
+   * `overlay` (demand #11, NLE hand-off): only the layer an editor puts over the plain recording, on a
+   * transparent frame: click effects, screen-anchored annotations and the cursor (through the camera,
+   * clipped to the rounded screen card) and frame-anchored annotations. No backdrop, shadow, screen,
+   * masks, webcam, captions, shortcut pill, watermark or slides.
    */
-  draw(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages, other?: FrameImages | null): void {
+  draw(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages, other?: FrameImages | null, opts: { overlay?: boolean } = {}): void {
+    // the NLE overlay (demand #11) carries no cut transitions: the editor's own cut joins the clips
+    if (opts.overlay) return this.drawOne(g, plan, index, imgs, opts);
     const f = plan.frames[Math.max(0, Math.min(plan.frames.length - 1, index))];
     const tr = f?.tr;
     if (!f || !tr || !plan.frames[tr.other]) return this.drawOne(g, plan, index, imgs);
@@ -182,7 +188,8 @@ export class PlanRenderer {
     g.restore();
   }
 
-  private drawOne(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages): void {
+  private drawOne(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages, opts: { overlay?: boolean } = {}): void {
+    const overlay = !!opts.overlay;
     const f = plan.frames[Math.max(0, Math.min(plan.frames.length - 1, index))];
     if (!f) return;
     const prev = index > 0 ? plan.frames[index - 1] ?? null : null;
@@ -196,12 +203,15 @@ export class PlanRenderer {
     g.imageSmoothingQuality = "high";
 
     // 1. background
-    g.drawImage(this.background(plan) as CanvasImageSource, 0, 0);
+    if (overlay) g.clearRect(0, 0, W, H);
+    else g.drawImage(this.background(plan) as CanvasImageSource, 0, 0);
 
     // 2. shadow (cached per rect, like render.py shadow_layer)
     const [sx, sy, sw, sh] = cardRect(f);
     const shadow = style.shadow;
-    if (f.m3d && f.layout.screenOpacity > 0 && shadow.opacity > 0) {
+    if (overlay) {
+      // no shadow on the overlay layer
+    } else if (f.m3d && f.layout.screenOpacity > 0 && shadow.opacity > 0) {
       g.drawImage(this.shadowLayer3d(W, H, f.m3d, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
     } else if (f.layout.screenOpacity > 0 && shadow.opacity > 0) {
       g.drawImage(this.shadowLayer(W, H, sx, sy, sw, sh, style.radius, shadow, shadow.opacity * f.layout.screenOpacity) as CanvasImageSource, 0, 0);
@@ -216,10 +226,10 @@ export class PlanRenderer {
     vg.clearRect(0, 0, sw, sh);
     vg.imageSmoothingEnabled = true;
     vg.imageSmoothingQuality = "high";
-    const map = this.drawScreen(vg, plan, f, imgs.screen, sw, sh);
+    const map = this.drawScreen(vg, plan, f, overlay ? null : imgs.screen, sw, sh);
 
     // 4. masks
-    if (f.masks.length) this.drawMasks(vg, view, f, map, sw, sh);
+    if (f.masks.length && !overlay) this.drawMasks(vg, view, f, map, sw, sh);
 
     // 5. click effects
     if (style.clickEffect !== "none") {
@@ -273,11 +283,16 @@ export class PlanRenderer {
     }
 
     // 8. webcam
-    if (imgs.cam && f.layout.camera && f.layout.cameraOpacity > 0) this.drawWebcam(g, plan, f, imgs.cam);
+    if (!overlay && imgs.cam && f.layout.camera && f.layout.cameraOpacity > 0) this.drawWebcam(g, plan, f, imgs.cam);
 
     // 8b. frame-anchored annotations
     const frm = annotations.filter((a) => a.space === "frame");
     if (frm.length) drawItems(g, W, H, frm, (x, y) => [x, y], 1);
+
+    if (overlay) {
+      g.restore();
+      return;
+    }
 
     // 9. shortcut pill + caption
     if (f.shortcut) this.drawShortcut(g, f.shortcut, W, H);

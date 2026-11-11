@@ -35,7 +35,7 @@ export interface Selection {
   index: number;
 }
 
-export type ExportTab = "video" | "demo" | "guide" | "chapters";
+export type ExportTab = "video" | "demo" | "guide" | "chapters" | "nle";
 
 export interface ExportState {
   id: string;
@@ -104,6 +104,8 @@ export interface EditorState {
   selectedWords: number[];
   toast: { text: string; id: number } | null;
   exporting: ExportState | null;
+  /** NLE hand-off export (demand #11): overlay .mov / .webm + cuts.fcpxml / cuts.edl. */
+  nleExport: (ExportState & { files?: Record<string, string> }) | null;
   canUndo: boolean;
   canRedo: boolean;
   undoLabel: string | null;
@@ -206,6 +208,7 @@ export class EditorStore {
     selectedWords: [],
     toast: null,
     exporting: null,
+    nleExport: null,
     canUndo: false,
     canRedo: false,
     undoLabel: null,
@@ -2179,6 +2182,83 @@ export class EditorStore {
       const cam = this.cam && this.s.project.camera.enabled ? this.cam : null;
       w.postMessage({ type: "start", id, plan, query: q, screen: { count: scr.count, fps: scr.fps }, cam: cam ? { count: cam.count, fps: cam.fps } : null });
     });
+  }
+
+  /**
+   * NLE hand-off (demand #11): the server writes cuts.fcpxml / cuts.edl from the plan, the overlay layer
+   * (cursor, clicks, annotations on transparent) is drawn here frame by frame with the preview's renderer
+   * and encoded by ffmpeg into ProRes 4444 (.mov) and VP9 alpha (.webm). No Python on this path.
+   */
+  async exportNle(): Promise<void> {
+    const b = this.s.bundle;
+    if (!b) return;
+    const plan = withFontFallback(buildPlan(b, this.s.project), this.s.missingFonts);
+    const total = plan.frames.length;
+    const t0 = performance.now();
+    const st = (x: Partial<NonNullable<EditorState["nleExport"]>>) => this.set({ nleExport: { id: "", state: "running", done: 0, total, path: "browser", ...this.s.nleExport, ...x } });
+    this.set({ nleExport: { id: "", state: "starting", done: 0, total, path: "browser" } });
+    const q = this.dirQuery();
+    const r = await fetch(`/api/export-overlay${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
+    const j = await r.json();
+    if (!r.ok) return st({ state: "error", error: j.error });
+    const id = j.id as string;
+    if (j.total !== total) return st({ id, state: "error", error: `plan mismatch: server ${j.total} frames, editor ${total}` });
+    st({ id, state: "running", done: 0 });
+    const ok = await new Promise<boolean>((resolve) => {
+      const sep = q ? "&" : "?";
+      if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined" || (globalThis as { __lensNoExportWorker?: boolean }).__lensNoExportWorker) {
+        void (async () => {
+          await ensurePlanAssets(plan);
+          const renderer = new PlanRenderer();
+          const canvas = makeCanvas(plan.output.width, plan.output.height);
+          const g = canvas.getContext("2d") as CanvasRenderingContext2D;
+          for (let i = 0; i < total; i++) {
+            renderer.draw(g, plan, i, { screen: null, cam: null }, null, { overlay: true });
+            const blob = "convertToBlob" in canvas ? await canvas.convertToBlob({ type: "image/png" }) : await new Promise<Blob>((res) => (canvas as HTMLCanvasElement).toBlob((x) => res(x!), "image/png"));
+            const fr = await fetch(`/api/export-browser/${id}/frame${q}${sep}i=${i}`, { method: "POST", body: blob });
+            if (!fr.ok) {
+              st({ state: "error", done: i, error: (await fr.json()).error ?? `frame ${i} failed` });
+              return resolve(false);
+            }
+            if (i % 5 === 0 || i === total - 1) st({ done: i + 1, seconds: (performance.now() - t0) / 1000 });
+            await new Promise((res) => setTimeout(res, 0));
+          }
+          await fetch(`/api/export-browser/${id}/finish${q}`, { method: "POST" });
+          resolve(true);
+        })();
+        return;
+      }
+      const w = new Worker(new URL("../export/exportWorker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (e: MessageEvent) => {
+        const m = e.data as { type: string; done?: number; error?: string };
+        if (m.type === "progress") return st({ done: m.done ?? 0, seconds: (performance.now() - t0) / 1000 });
+        w.terminate();
+        if (m.type === "error") st({ state: "error", done: m.done ?? 0, error: m.error });
+        resolve(m.type === "rendered");
+      };
+      w.onerror = (e) => {
+        st({ state: "error", error: `export worker: ${e.message}` });
+        resolve(false);
+      };
+      const scr = this.screen ?? { count: 1, fps: plan.output.fps };
+      w.postMessage({ type: "start", id, plan, query: q, screen: { count: scr.count, fps: scr.fps }, cam: null, overlay: true });
+    });
+    if (!ok) return;
+    const poll = async () => {
+      const s = await (await fetch(`/api/export/${id}${q}`)).json();
+      if (s.state === "running") return void setTimeout(poll, 300);
+      st({ state: s.state, done: s.done, error: s.error, files: s.files, seconds: (performance.now() - t0) / 1000 });
+      if (s.state === "done") this.notify("Overlay and project files exported");
+    };
+    setTimeout(poll, 200);
+  }
+
+  /** Download URL of one file of the last NLE hand-off export. */
+  nleFileUrl(name: string): string | null {
+    const ex = this.s.nleExport;
+    if (!ex || ex.state !== "done" || !ex.id) return null;
+    const q = this.dirQuery();
+    return `/api/export/${ex.id}/file${q}${q ? "&" : "?"}name=${encodeURIComponent(name)}`;
   }
 
   /** Fallback without workers / OffscreenCanvas: the same loop on the page, yielding between frames. */
