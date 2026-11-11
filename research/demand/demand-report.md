@@ -501,6 +501,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Proposed Lens feature:** Presets for App Store previews (every required size), YouTube, LinkedIn, X and Slack-under-a-size-limit, with a size estimate. **Size:** S. **Test:** App Store Connect accepts the output on the first upload.
 
+**Status (2026-11-11): built, first version.** Export… > Video picks a platform preset: YouTube 1080p 30 / 60 fps (8 / 12 Mbps), YouTube Shorts and TikTok / Reels (1080×1920), X (≤ 140 s, ≤ 512 MB), LinkedIn (≤ 30 Mbps, 256×144–4096×2304), App Store previews 886×1920 / 1920×886 / 1080×1920 / 1200×1600 (≤ 30 fps, 11 Mbps avg / 12 peak, 15–30 s, 500 MB), GIF and Custom (own bitrate and size cap); a size estimate and warnings against each platform's limits; `export.video` in the project (absent = the old export); size-cap re-encode and GIF with ffmpeg in the desktop (no-Python) path and the reference path (see `docs/ExportPresets.md`). Measured on exports (both paths): exact 1080×1920 / 886×1920 canvases at 30 fps with every plan frame, average bitrate under the preset's peak, a 0.4 MB cap met from 1.03 MB in one pass with the duration kept, GIF at the set width / frame count with the loop block; on busy content an 8 Mbps preset averages 8.64 Mbps. Not done: the demand's test (an App Store Connect upload), a Slack preset (Custom + cap covers it), two-pass encodes, Windows / macOS runs.
+
 ---
 
 ## 25. Pre-flight check — 54 · S
