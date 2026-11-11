@@ -13,6 +13,7 @@
  *   POST /api/fonts/import           { kind: file | path | url | google | library, ... } -> { font, format, weights }:
  *                                    validates the font and copies it into <bundle>/fonts/ and the library (server/fonts.ts)
  *   DELETE /api/fonts/library?family= removes a family from the library
+ *   POST /api/voiceover?name=        raw audio bytes -> saves <bundle>/voiceover/<name>, returns { path, durationMs } (demand #17)
  *   POST /api/project                save project.json into the bundle
  *   POST /api/export                 { project } -> { id }: engine plan + compositor/render.py
  *   GET  /api/export/:id             { state, done, total, error }
@@ -377,6 +378,36 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(JSON.stringify(body));
 }
 
+const VOICE_EXT = new Set([".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".webm", ".flac"]);
+
+/** The request body as bytes (uploads), at most `max` bytes. */
+function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let n = 0;
+    req.on("data", (c: Buffer) => {
+      n += c.length;
+      if (n > max) {
+        reject(new Error("file too large"));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/** Length of an audio file in ms, by decoding it (MediaRecorder webm carries no duration). */
+function audioDurationMs(file: string): Promise<number> {
+  return new Promise((resolve) => {
+    const p = spawn(FFMPEG, ["-v", "error", "-nostdin", "-i", file, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"], { windowsHide: true });
+    let bytes = 0;
+    p.stdout.on("data", (d: Buffer) => (bytes += d.length));
+    p.on("error", () => resolve(0));
+    p.on("close", (code) => resolve(code === 0 ? Math.round((bytes / 2 / 8000) * 1000) : 0));
+  });
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let s = "";
@@ -581,6 +612,8 @@ export { parseFfmpegVideoInfo } from "./probe";
 function exportProject(bundle: string, raw: unknown) {
   const p = resolveProject(raw);
   p.audio.tracks = p.audio.tracks.map((t) => ({ ...t, path: path.isAbsolute(t.path) ? t.path : path.join(bundle, t.path) }));
+  // voiceover clips (demand #17) live in <bundle>/voiceover/
+  if (p.voiceover) p.voiceover = { clips: p.voiceover.clips.map((c) => ({ ...c, path: path.isAbsolute(c.path) ? c.path : path.join(bundle, c.path) })) };
   // an uploaded backdrop lives in the bundle (Windows bug #20); built-in art ("builtin:<id>") is drawn
   const ip = p.background.imagePath;
   if (ip && !ip.startsWith("builtin:") && !path.isAbsolute(ip)) p.background.imagePath = path.join(bundle, ip);
@@ -765,6 +798,22 @@ export function apiMiddleware() {
         fs.mkdirSync(path.join(bundle, "brand"), { recursive: true });
         fs.writeFileSync(path.join(bundle, "brand", name), Buffer.from(body.data, "base64"));
         return sendJson(res, { path: `brand/${name}` });
+      }
+      if (url.pathname === "/api/voiceover" && req.method === "POST") {
+        // demand #17: an imported audio file or a take recorded in the app -> <bundle>/voiceover/<name>
+        const name = path.basename(url.searchParams.get("name") ?? "").replace(/[^A-Za-z0-9._-]/g, "_");
+        if (!name || !VOICE_EXT.has(path.extname(name).toLowerCase())) return sendJson(res, { error: "unsupported audio file (wav, mp3, m4a, aac, ogg, opus, webm, flac)" }, 400);
+        const data = await readRaw(req, 200 * 1024 * 1024);
+        fs.mkdirSync(path.join(bundle, "voiceover"), { recursive: true });
+        let file = path.join(bundle, "voiceover", name);
+        for (let i = 2; fs.existsSync(file); i++) file = path.join(bundle, "voiceover", `${path.basename(name, path.extname(name))}-${i}${path.extname(name)}`);
+        fs.writeFileSync(file, data);
+        const durationMs = await audioDurationMs(file);
+        if (!(durationMs > 0)) {
+          fs.rmSync(file, { force: true });
+          return sendJson(res, { error: "no audio in that file" }, 400);
+        }
+        return sendJson(res, { path: `voiceover/${path.basename(file)}`, durationMs });
       }
       if (url.pathname === "/api/project" && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

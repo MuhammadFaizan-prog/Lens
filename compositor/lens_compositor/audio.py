@@ -201,6 +201,18 @@ def build_audio(plan: dict, plan_dir: Optional[Path], n_out: int) -> Optional[np
             L = a["loudness"]
             voice = loudnorm_two_pass(voice, sr, L["targetLufs"], L["truePeakDb"], L["lra"])
     mix = voice
+    # voiceover clips (demand #17): after the tracks' cleanup, at their own gain, 3 ms fades at the ends
+    for v in a.get("voice") or []:
+        x = decode_pcm(_resolve(v["path"], plan_dir), sr)
+        i = int(round(v["outMs"] * sr / 1000))
+        f0 = int(round(v["fileOffsetMs"] * sr / 1000))
+        n = min(int(round(v["durMs"] * sr / 1000)), len(x) - f0, n_out - i)
+        if n <= 0:
+            continue
+        fade = max(1, min(int(round(0.003 * sr)), n // 2))
+        k = np.arange(n, dtype=np.float32)
+        env = np.minimum(1.0, np.minimum(k / fade, (n - 1 - k) / fade)).astype(np.float32) * float(v["gain"])
+        mix[i : i + n] += x[f0 : f0 + n] * env[:, None]
     cs = a.get("clickSound") or {}
     if cs.get("enabled") and cs.get("times"):
         click = synth_click(sr) * float(cs["volume"])
