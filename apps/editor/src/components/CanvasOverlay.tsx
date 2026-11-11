@@ -15,7 +15,7 @@
  * project.card (canvas fractions); a free shape trims the source, never stretches.
  */
 import { useEffect, useRef, useState } from "react";
-import { cardRect, framingMode, normalizeCrop, validCard } from "@lens/engine";
+import { cardRect, framingMode, normalizeCrop, sceneAt, validCard } from "@lens/engine";
 import type { PlanFrame, ProjectConfig, RenderPlan, Vec2 } from "@lens/engine";
 import { captionBox } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
@@ -138,7 +138,25 @@ export function canvasObjects(plan: RenderPlan, f0: PlanFrame, project: ProjectC
   });
   // webcam bubble (corner overlays only: split / fullscreen layouts own their slot)
   const cam = f.layout.camera;
-  if (cam && f.layout.cameraOpacity > 0.5 && project.camera.enabled) {
+  // inside a camera scene (demand #18): a PiP scene's bubble snaps to the corner it is dropped nearest
+  // (that scene's own corner); camera-full / side-by-side scenes own their slot and are not dragged
+  const sceneIdx = project.camera.layouts.indexOf(sceneAt(project.camera.layouts, f.src, project.camera.enabled) as never);
+  const scene = sceneIdx >= 0 ? project.camera.layouts[sceneIdx]! : null;
+  if (cam && scene && f.layout.cameraOpacity > 0.5 && (scene.kind === "camera-overlay" || scene.kind === "camera-cutout")) {
+    const [x, y, w, h] = cam;
+    out.push({
+      kind: "webcam",
+      index: 0,
+      box: { x, y, w, h },
+      keepAspect: true,
+      label: "webcam · scene",
+      apply: (b) => (p) => {
+        const c = centre(b);
+        const corner = `${c.y > H / 2 ? "bottom" : "top"}-${c.x > W / 2 ? "right" : "left"}` as const;
+        return { ...p, camera: { ...p.camera, layouts: p.camera.layouts.map((s, j) => (j === sceneIdx ? { ...s, corner } : s)) } };
+      },
+    });
+  } else if (cam && !scene && f.layout.cameraOpacity > 0.5 && project.camera.enabled) {
     const [x, y, w, h] = cam;
     const size0 = project.camera.size;
     out.push({
