@@ -13,7 +13,7 @@ import { BrandPanel } from "./components/BrandPanel";
 import { PresetsMenu } from "./components/PresetsMenu";
 import { ExportDialog } from "./components/ExportDialog";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { privacyCounts } from "@lens/engine";
+import { exportPreset, fmtBytes, privacyCounts } from "@lens/engine";
 import { Transport } from "./components/Transport";
 import { loadCaptionFont } from "./state/bundle";
 import { store, useEditor } from "./state/store";
@@ -28,6 +28,7 @@ function TopBar() {
   const canRedo = useEditor((s) => s.canRedo);
   const undoLabel = useEditor((s) => s.undoLabel);
   const redoLabel = useEditor((s) => s.redoLabel);
+  const exportVideo = useEditor((s) => s.project.export.video);
   const file = useRef<HTMLInputElement>(null);
   const onFile = async (f: File | undefined) => {
     if (!f) return;
@@ -70,8 +71,9 @@ function TopBar() {
         <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo or step guide" onClick={() => store.openExportDialog("demo")}>
           Export…
         </button>
+        <ExportPresetChip />
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
-          <Icon name="export" /> <span className="btn-label">Export</span> MP4
+          <Icon name="export" /> <span className="btn-label">Export</span> {exportPreset(exportVideo?.preset).format === "gif" ? "GIF" : "MP4"}
         </button>
         <AboutButton />
       </div>
@@ -165,12 +167,25 @@ function ExportWarning() {
   );
 }
 
+/** The platform preset in use (demand #24); opens the Export dialog's Video tab to change it. */
+function ExportPresetChip() {
+  const v = useEditor((s) => s.project.export.video);
+  const pr = exportPreset(v?.preset);
+  return (
+    <button className="btn ghost preset-chip" data-testid="export-preset-open" title="Platform preset: size, frame rate, bitrate, size cap or GIF" onClick={() => store.openExportDialog("video")}>
+      {v ? pr.label : "Preset: none"}
+    </button>
+  );
+}
+
 function ExportSheet() {
   const ex = useEditor((s) => s.exporting);
   if (!ex) return null;
   const pct = ex.total ? Math.round((ex.done / ex.total) * 100) : 0;
   const dir = new URLSearchParams(location.search).get("dir");
   const fileUrl = `/api/export/${ex.id}/file${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`;
+  const gif = ex.format === "gif";
+  const stageText = ex.stage === "gif" ? "Making the GIF…" : ex.stage === "cap" ? "Re-encoding to fit the size cap…" : null;
   return (
     <div className="sheet-backdrop" onClick={() => ex.state !== "running" && ex.state !== "starting" && store.closeExport()}>
       <div className="sheet" role="dialog" aria-label="Export" data-testid="export-sheet" onClick={(e) => e.stopPropagation()}>
@@ -194,6 +209,13 @@ function ExportSheet() {
                 {ex.seconds ? ` · ${ex.seconds.toFixed(1)} s` : ""}
               </span>
             </div>
+            {stageText && ex.state === "running" && <p className="note" data-testid="export-stage">{stageText}</p>}
+            {ex.state === "done" && ex.bytes !== undefined && (
+              <p className="note" data-testid="export-result">
+                {gif ? "GIF" : "MP4"}, {fmtBytes(ex.bytes)}
+                {ex.cap && ex.cap.passes > 0 ? ` (was ${fmtBytes(ex.cap.before)}; re-encoded at ${ex.cap.bitrateMbps.toFixed(2)} Mbps to fit the ${fmtBytes(ex.cap.maxBytes)} cap)` : ex.cap ? ` (under the ${fmtBytes(ex.cap.maxBytes)} cap)` : ""}
+              </p>
+            )}
             <p className="note">{ex.path === "browser" ? "Rendered in the app by the preview renderer from the same plan, encoded with ffmpeg, with audio mixed." : "Rendered by the reference compositor (compositor/render.py) from the same plan as the preview, with audio mixed."}</p>
           </>
         )}
@@ -205,9 +227,9 @@ function ExportSheet() {
         )}
         {ex.state === "done" && (
           <div className="export-done">
-            <video src={fileUrl} controls muted className="export-video" data-testid="export-video" />
-            <a className="btn primary" href={fileUrl} download="lens-export.mp4" data-testid="export-download">
-              <Icon name="export" /> Download MP4
+            {gif ? <img src={fileUrl} alt="Exported GIF" className="export-video" data-testid="export-gif" /> : <video src={fileUrl} controls muted className="export-video" data-testid="export-video" />}
+            <a className="btn primary" href={fileUrl} download={gif ? "lens-export.gif" : "lens-export.mp4"} data-testid="export-download">
+              <Icon name="export" /> Download {gif ? "GIF" : "MP4"}
             </a>
           </div>
         )}

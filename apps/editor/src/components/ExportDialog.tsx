@@ -3,10 +3,12 @@
  * the exported demo in an iframe, and a hotspot editor: drag a step's hotspot on its still and edit
  * its tooltip text. Hotspot and tooltip edits are project data (project.demo.hotspots, one undo step
  * each) and reach the preview at once through postMessage; call-to-action and step changes need a
- * rebuild (the preview says so).
+ * rebuild (the preview says so). The Video tab picks a platform preset (demand #24, docs/ExportPresets.md):
+ * size, frame rate, bitrate, size cap or GIF, with warnings against the platform's limits.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { demoSteps, type DemoStep } from "@lens/engine";
+import { encodeSettings, estimateBytes, EXPORT_PRESETS, exportChecks, exportPreset, fmtBytes } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { Icon } from "./Icon";
 
@@ -48,20 +50,94 @@ export function ExportDialog() {
   );
 }
 
+/** Video tab: platform preset picker (demand #24), its overrides and the checks against its limits. */
 function VideoTab() {
   const frames = useEditor((s) => s.plan?.frames.length ?? 0);
   const out = useEditor((s) => s.plan?.output);
+  const hasAudio = useEditor((s) => !!s.plan?.audio);
+  const project = useEditor((s) => s.project);
+  const v = project.export.video;
+  const pr = exportPreset(v?.preset ?? "custom");
+  const enc = encodeSettings(project);
+  const checks = out ? exportChecks(project, out, hasAudio) : [];
+  const est = out ? estimateBytes(out.durationMs, enc, hasAudio) : null;
+  const gif = pr.format === "gif";
+  const groups = [...new Set(EXPORT_PRESETS.map((p) => p.group))];
   return (
-    <div className="ex-body">
-      <p className="note">
-        MP4 (H.264) with every edit, zoom, caption and mask{out ? `: ${out.width}×${out.height}, ${out.fps} fps, ${frames} frames` : ""}.
+    <div className="ex-body ex-video">
+      <label className="field">
+        Preset
+        <select data-testid="export-preset" value={v?.preset ?? "custom"}
+          onChange={(e) => { const p = exportPreset(e.target.value); store.setExportPreset(p.id, p.label); }}>
+          {groups.map((g) => (
+            <optgroup key={g} label={g}>
+              {EXPORT_PRESETS.filter((p) => p.group === g).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <p className="note" data-testid="export-preset-note">{pr.note}</p>
+      <p className="note" data-testid="export-output">
+        {gif ? "Animated GIF" : "MP4 (H.264)"} with every edit, zoom, caption and mask
+        {out ? `: ${gif ? `${enc.gif.width} px wide, ${enc.gif.fps} fps` : `${out.width}×${out.height}, ${out.fps} fps`}, ${(out.durationMs / 1000).toFixed(1)} s, ${frames} frames` : ""}.
       </p>
+      {gif ? (
+        <div className="ex-grid">
+          <label className="field">Frame rate (fps)
+            <NumInput testId="export-gif-fps" value={enc.gif.fps} min={1} max={50} step={1} onCommit={(n) => n !== null && store.setExportGif("GIF frame rate", { fps: Math.round(n) })} />
+          </label>
+          <label className="field">Width (px)
+            <NumInput testId="export-gif-width" value={enc.gif.width} min={16} max={3840} step={2} onCommit={(n) => n !== null && store.setExportGif("GIF width", { width: Math.round(n / 2) * 2 })} />
+          </label>
+          <label className="field check">
+            <input type="checkbox" data-testid="export-gif-loop" checked={enc.gif.loop} onChange={(e) => store.setExportGif("GIF loop", { loop: e.target.checked })} /> Loop forever
+          </label>
+        </div>
+      ) : (
+        <div className="ex-grid">
+          <label className="field">Bitrate (Mbps)
+            <NumInput testId="export-bitrate" value={v?.bitrateMbps ?? null} placeholder={pr.bitrateMbps ? `${pr.bitrateMbps} (preset)` : "auto (crf 18)"} min={0.1} max={200} step={0.5}
+              onCommit={(n) => store.setExportVideo("Export bitrate", { bitrateMbps: n })} />
+          </label>
+          <label className="field">Size cap (MB)
+            <NumInput testId="export-size-cap" value={v?.maxSizeMB ?? null} placeholder={pr.maxSizeMB ? `${pr.maxSizeMB} (preset)` : "none"} min={0.1} max={100000} step={1}
+              onCommit={(n) => store.setExportVideo("Export size cap", { maxSizeMB: n })} />
+          </label>
+          <div className="field">Estimated size
+            <span className="stat" data-testid="export-estimate">{est !== null ? `≈ ${fmtBytes(est)}${enc.maxBytes ? ` (cap ${fmtBytes(enc.maxBytes)})` : ""}` : enc.maxBytes ? `depends on content (cap ${fmtBytes(enc.maxBytes)})` : "depends on content"}</span>
+          </div>
+        </div>
+      )}
+      {checks.length > 0 && (
+        <ul className="ex-checks" data-testid="export-checks">
+          {checks.map((c) => <li key={c.code} className={c.level === "warn" ? "note warn" : "note"} data-testid={`export-check-${c.code}`}>{c.text}</li>)}
+        </ul>
+      )}
       <div className="sheet-actions">
         <button className="btn primary" data-testid="export-video-go" onClick={() => { store.closeExportDialog(); void store.exportVideo(); }}>
-          <Icon name="export" /> Export MP4
+          <Icon name="export" /> Export {gif ? "GIF" : "MP4"}
         </button>
       </div>
     </div>
+  );
+}
+
+/** A number box that commits on blur / Enter; empty = null (the preset's value). */
+function NumInput({ value, onCommit, testId, placeholder, min, max, step }: { value: number | null; onCommit: (n: number | null) => void; testId: string; placeholder?: string; min: number; max: number; step: number }) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  useEffect(() => setText(value === null ? "" : String(value)), [value]);
+  const commit = () => {
+    const t = text.trim();
+    if (t === "") return value === null ? undefined : onCommit(null);
+    const n = Number(t);
+    if (!Number.isFinite(n)) return setText(value === null ? "" : String(value));
+    const c = Math.min(max, Math.max(min, n));
+    if (c !== value) onCommit(c);
+    else setText(String(c));
+  };
+  return (
+    <input type="number" inputMode="decimal" data-testid={testId} value={text} placeholder={placeholder} min={min} max={max} step={step}
+      onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
   );
 }
 

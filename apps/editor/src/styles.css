@@ -876,3 +876,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* platform export presets (demand #24) */
+.ex-video select { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 7px; color: var(--text); padding: 6px 8px; font: inherit; }
+.ex-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; }
+.ex-body .field.check { display: flex; align-items: center; gap: 6px; }
+.ex-checks { list-style: none; padding: 0; margin: 4px 0 10px; display: grid; gap: 4px; }
+.ex-checks .note { margin: 0; }
+.preset-chip { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

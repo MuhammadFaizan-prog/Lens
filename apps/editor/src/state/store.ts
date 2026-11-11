@@ -7,6 +7,7 @@ import { useSyncExternalStore } from "react";
 import { applyPreset, presetFromProject, serializePreset, themedNewStyle, PRESET_SECTIONS, SECTION_LABELS, parseTranscript } from "@lens/engine";
 import type { BrandKit, DemoSettings, Preset, PresetSection } from "@lens/engine";
 import { setDemoHotspot } from "@lens/engine";
+import { applyExportPreset, type ExportPresetId, type ExportVideoSettings } from "@lens/engine";
 import { withFontFallback, type ProjectFont } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
@@ -38,6 +39,12 @@ export interface ExportState {
   seconds?: number;
   /** "browser": frames drawn by the editor's renderer (desktop app); "compositor": compositor/render.py. */
   path?: "browser" | "compositor";
+  /** Platform preset output (demand #24): the file's format and size, and the size-cap pass. */
+  format?: "mp4" | "gif";
+  bytes?: number;
+  cap?: { maxBytes: number; before: number; after: number; passes: number; bitrateMbps: number };
+  /** Step after the frames: audio, mux, gif, cap. */
+  stage?: string;
 }
 
 export interface PrivacyScanState {
@@ -1692,6 +1699,7 @@ export class EditorStore {
       return;
     }
     this.set({ exportWarning: null });
+    this.exportCancel = false;
     if ((await this.exportPath()) === "browser") return this.exportInBrowser();
     this.set({ exporting: { id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 } });
     const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
@@ -1704,7 +1712,8 @@ export class EditorStore {
     this.set({ exporting: { id, state: "running", done: 0, total: j.total } });
     const poll = async () => {
       const s = await (await fetch(`/api/export/${id}${this.dirQuery()}`)).json();
-      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: s.seconds } });
+      if (this.exportCancel) return;
+      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: s.seconds, format: s.format, bytes: s.bytes, cap: s.cap, stage: s.stage } });
       if (s.state === "running") setTimeout(poll, 400);
       else if (s.state === "done") this.notify("Export finished");
     };
@@ -1738,9 +1747,14 @@ export class EditorStore {
     this.exportWorker?.postMessage({ type: "cancel" });
     this.exportWorker?.terminate();
     this.exportWorker = null;
-    if (ex.id) await fetch(`/api/export-browser/${ex.id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+    // the sheet says "cancelled" at once; the server stops ffmpeg (and any mux / GIF / size-cap step)
+    // in the background (before, the state waited on that request and Cancel looked ignored meanwhile)
     this.set({ exporting: { ...ex, state: "error", error: "Export cancelled" } });
     this.notify("Export cancelled");
+    if (ex.id) {
+      const url = ex.path === "browser" ? `/api/export-browser/${ex.id}/cancel` : `/api/export/${ex.id}/cancel`;
+      await fetch(`${url}${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+    }
   }
 
   private async exportInBrowser(): Promise<void> {
@@ -1767,8 +1781,11 @@ export class EditorStore {
     const poll = async () => {
       const s = await (await fetch(`/api/export/${id}${q}`)).json();
       if (this.exportCancel) return;
-      if (s.state === "running") return void setTimeout(poll, 300);
-      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser" } });
+      if (s.state === "running") {
+        if (s.stage && s.stage !== this.s.exporting?.stage) this.set({ exporting: { ...this.s.exporting!, stage: s.stage } });
+        return void setTimeout(poll, 300);
+      }
+      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser", format: s.format, bytes: s.bytes, cap: s.cap } });
       if (s.state === "done") this.notify("Export finished");
     };
     setTimeout(poll, 200);
@@ -1838,6 +1855,23 @@ export class EditorStore {
   }
 
   // ------------------------------------------------------------------ interactive demo / step guide (demand #7)
+
+  // ------------------------------------------------------------------ platform export presets (demand #24)
+
+  /** Pick a platform preset: its canvas size and frame rate go into output, the preset into export.video (one undo step). */
+  setExportPreset(id: ExportPresetId, label: string): void {
+    this.edit(`Export preset: ${label}`, (p) => applyExportPreset(p, id));
+  }
+
+  /** Change the preset's bitrate / size cap (one undo step); null clears an override. */
+  setExportVideo(label: string, patch: Partial<ExportVideoSettings>): void {
+    this.edit(label, (p) => ({ ...p, export: { ...p.export, video: { ...(p.export.video ?? { preset: "custom" }), ...patch } } }));
+  }
+
+  /** GIF frame rate / width / looping (project.export.gif). */
+  setExportGif(label: string, patch: Partial<ProjectConfig["export"]["gif"]>): void {
+    this.edit(label, (p) => ({ ...p, export: { ...p.export, gif: { ...p.export.gif, ...patch } } }));
+  }
 
   openExportDialog(tab: "video" | "demo" | "guide" = "video"): void {
     this.set({ exportDialog: { tab } });
