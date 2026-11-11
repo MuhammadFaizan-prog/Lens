@@ -23,6 +23,7 @@ import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 import type { CardTransform } from "./layout.js";
 import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
+import { validateChapters, type ChapterSettings } from "./chapters.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -260,6 +261,11 @@ export interface ProjectConfig {
   customFonts?: ProjectFont[];
   /** Interactive demo + step guide export (demand #7, docs/InteractiveDemo.md). */
   demo: DemoSettings;
+  /**
+   * Title, description and chapters drafted from the transcript (demand #27, chapters.ts); absent in
+   * older projects. Never changes the picture; exported as a YouTube list, WebVTT and MP4 chapters.
+   */
+  chapters?: ChapterSettings;
 }
 
 export type ZoomPresetName = "calm" | "default" | "punchy";
@@ -629,6 +635,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   errs.push(...validateDemo(p.demo));
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");
+  errs.push(...validateChapters(p.chapters));
   if (errs.length) throw new ProjectValidationError(errs.join("; "));
   return p;
 }
