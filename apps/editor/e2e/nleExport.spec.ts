@@ -10,7 +10,7 @@
  * Bounds, set before the first run:
  *  - overlay.mov: codec prores, profile 4444, pix_fmt yuva*, 150 frames, 640x360;
  *  - overlay.webm: codec vp9, ALPHA_MODE tag 1, 150 frames;
- *  - alpha, at output frames 10 / 40 / 60 / 100 / 140 (cursor visible, no click effect running): the max alpha
+ *  - alpha, at output frames 10 / 40 / 50 / 100 / 140 (cursor visible, no click effect running; first run had 60, which a click effect covers, fixture fix): the max alpha
  *    in a 16 x 22 px box below-right of the plan cursor position (the arrow) >= 128 in the .mov and the .webm;
  *    every pixel farther than 80 px from it: alpha <= 2 in the .mov, <= 8 in the .webm (lossy);
  *  - cuts.fcpxml is well-formed XML (python3 xml.etree), has 3 screen clips whose offset / start / duration
@@ -128,7 +128,7 @@ test("NLE hand-off: overlay ProRes 4444 + VP9 alpha, FCPXML + EDL cut times", as
     const vw = sw0 / s, vh = sh0 / s;
     return [sx + (f.cur[0] - (cx - vw / 2)) * (sw / vw), sy + (f.cur[1] - (cy - vh / 2)) * (sh / vh)];
   };
-  for (const n of [10, 40, 60, 100, 140]) {
+  for (const n of [10, 40, 50, 100, 140]) {
     const f = plan.frames[n];
     expect(f.cur, `cursor on frame ${n}`).toBeTruthy();
     expect(f.clicks.length, `no click effect on frame ${n}`).toBe(0);
