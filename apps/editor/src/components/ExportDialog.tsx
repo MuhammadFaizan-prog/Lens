@@ -15,7 +15,7 @@ interface DemoJson {
   steps: Array<{ n: number; stepId: string; image: string; width: number; height: number; map: [number, number, number, number] }>;
 }
 
-type Tab = "video" | "demo" | "guide";
+type Tab = "video" | "demo" | "guide" | "nle";
 
 export function ExportDialog() {
   const dlg = useEditor((s) => s.exportDialog);
@@ -35,6 +35,7 @@ export function ExportDialog() {
               ["video", "Video"],
               ["demo", "Interactive demo"],
               ["guide", "Step guide"],
+              ["nle", "Editor hand-off"],
             ] as Array<[Tab, string]>
           ).map(([t, label]) => (
             <button key={t} role="tab" aria-selected={dlg.tab === t} className={dlg.tab === t ? "on" : ""} data-testid={`export-tab-${t}`} onClick={() => store.setExportTab(t)}>
@@ -42,7 +43,7 @@ export function ExportDialog() {
             </button>
           ))}
         </nav>
-        {dlg.tab === "video" ? <VideoTab /> : dlg.tab === "demo" ? <DemoTab /> : <GuideTab />}
+        {dlg.tab === "video" ? <VideoTab /> : dlg.tab === "demo" ? <DemoTab /> : dlg.tab === "nle" ? <NleTab /> : <GuideTab />}
       </div>
     </div>
   );
@@ -61,6 +62,43 @@ function VideoTab() {
           <Icon name="export" /> Export MP4
         </button>
       </div>
+    </div>
+  );
+}
+
+/** NLE hand-off (demand #11): transparent overlay + the edit as FCPXML / EDL for Final Cut, Resolve, Premiere. */
+function NleTab() {
+  const ex = useEditor((s) => s.nleExport);
+  const out = useEditor((s) => s.plan?.output);
+  const busy = !!ex && (ex.state === "starting" || ex.state === "running");
+  const files: Array<[string, string]> = [
+    ["overlay.mov", "Overlay, ProRes 4444 with alpha"],
+    ["overlay.webm", "Overlay, WebM VP9 with alpha"],
+    ["cuts.fcpxml", "Final Cut Pro / Resolve project (FCPXML)"],
+    ["cuts.edl", "Edit decision list (CMX3600 EDL)"],
+  ];
+  return (
+    <div className="ex-body" data-testid="export-nle">
+      <p className="note">
+        Finish the edit in another editor. The overlay is everything Lens draws over your recording (cursor, click effects, annotations) on a
+        transparent background{out ? `, ${out.width}×${out.height} at ${out.fps} fps` : ""}; put it on the track above the plain screen recording.
+        The project files carry your cuts as clips, slides as gaps and zooms as markers, cut on the same frames as the video.
+      </p>
+      <div className="sheet-actions">
+        <button className="btn primary" disabled={busy} data-testid="export-nle-go" onClick={() => void store.exportNle()}>
+          <Icon name="export" /> {busy ? `Exporting… ${ex?.done ?? 0} / ${ex?.total ?? 0}` : ex?.state === "done" ? "Export again" : "Export overlay + project files"}
+        </button>
+      </div>
+      {ex?.state === "error" && <p className="error" data-testid="export-nle-error">{ex.error}</p>}
+      {ex?.state === "done" && (
+        <ul className="ex-files" data-testid="export-nle-files">
+          {files.map(([name, label]) => (
+            <li key={name}>
+              <a href={store.nleFileUrl(name) ?? "#"} download={name} data-testid={`export-nle-file-${name}`}>{name}</a> <span className="stat">{label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

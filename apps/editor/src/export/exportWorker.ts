@@ -16,6 +16,8 @@ export interface StartMsg {
   query: string;
   screen: { count: number; fps: number };
   cam: { count: number; fps: number } | null;
+  /** NLE hand-off (demand #11): draw only the overlay layer on transparent and post PNGs (no source frames needed). */
+  overlay?: boolean;
 }
 export type FromWorker =
   | { type: "progress"; done: number; total: number }
@@ -58,15 +60,19 @@ async function run(m: StartMsg): Promise<void> {
     for (i = 0; i < total; i++) {
       if (cancelled) return post({ type: "cancelled", done: i });
       const f = plan.frames[i]!;
-      const si = scr.indexAt(f.src);
-      const ci = cam ? cam.indexAt(f.src) : 0;
-      // the next frames' bytes download while this one draws
-      scr.prefetch([si + 1, si + 2, si + 3], 1);
-      const [s, c] = await Promise.all([scr.load(si), cam ? cam.load(ci) : Promise.resolve(null)]);
-      renderer.draw(g, plan, i, { screen: s, cam: c });
-      scr.releaseBelow(si);
-      cam?.releaseBelow(ci);
-      const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
+      if (m.overlay) {
+        renderer.draw(g, plan, i, { screen: null, cam: null }, { overlay: true });
+      } else {
+        const si = scr.indexAt(f.src);
+        const ci = cam ? cam.indexAt(f.src) : 0;
+        // the next frames' bytes download while this one draws
+        scr.prefetch([si + 1, si + 2, si + 3], 1);
+        const [s, c] = await Promise.all([scr.load(si), cam ? cam.load(ci) : Promise.resolve(null)]);
+        renderer.draw(g, plan, i, { screen: s, cam: c });
+        scr.releaseBelow(si);
+        cam?.releaseBelow(ci);
+      }
+      const blob = m.overlay ? await canvas.convertToBlob({ type: "image/png" }) : await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
       if (cancelled) return post({ type: "cancelled", done: i });
       const r = await fetch(`/api/export-browser/${id}/frame${query}${sep}i=${i}`, { method: "POST", body: blob });
       if (!r.ok) {
