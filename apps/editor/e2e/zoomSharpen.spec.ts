@@ -139,8 +139,8 @@ function ringing(f: Img, map: (x: number, y: number) => [number, number], bars: 
 
 test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview = export, off identical to main", async () => {
   test.setTimeout(900_000);
-  const T = truth();
   const dir = bundle("sharpen");
+  const T = truth();
   const lens = await openLens(dir, { w: 1600, h: 1000 });
   const page = lens.page;
   const zoomN = 60; // source 2.0 s (no cuts: output = source)
@@ -154,6 +154,7 @@ test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview =
 
   // ---- export with sharpening off (the project as loaded)
   const offFile = await exportMp4(page, dir, 600_000);
+  await page.evaluate(() => (window as any).__lens.store.closeExport());
 
   // ---- UI: turn it on
   await page.getByTestId("tab-zoom").click();
