@@ -151,14 +151,19 @@ test("several sizes: one batch, exact sizes, subject in frame, crop keys, previe
           const vw = srcW / sc, vh = srcH / sc;
           const x = lx + (f.cur[0] - (cx - vw / 2)) * (lw / vw);
           const y = ly + (f.cur[1] - (cy - vh / 2)) * (lh / vh);
-          if (x < 0 || y < 0 || x > plan.output.width || y > plan.output.height) outside++;
+          const zx = lx + (900 - (cx - vw / 2)) * (lw / vw), zy = ly + (250 - (cy - vh / 2)) * (lh / vh);
+          const zin = zx >= 0 && zy >= 0 && zx <= plan.output.width && zy <= plan.output.height;
+          if (x < 0 || y < 0 || x > plan.output.width || y > plan.output.height) { outside++; (window as any).__outLog = ((window as any).__outLog ?? "") + ` ${Math.round(f.src)}${zin ? "Z" : "-"}`; }
         }
         return outside + (plan.frames.every((f: any) => f.cur) ? 0 : 1000);
       });
     }
   }
-  console.log("plan map of (900,250)", JSON.stringify(want), "cursor frames outside", JSON.stringify(cursorOut));
-  for (const v of Object.values(cursorOut)) expect(v).toBe(0);
+  console.log("plan map of (900,250)", JSON.stringify(want), "cursor frames outside", JSON.stringify(cursorOut), "frames (src ms, Z = zoom target inside):", await page.evaluate(() => (window as any).__outLog));
+  // expect.soft (changed after the first run, bound unchanged): the first run failed here (9:16 31 / 60
+  // frames, 4:5 29 / 60 with the cursor outside) and stopped before the export; soft so the remaining
+  // bounds are still measured, and the test still fails on this bound.
+  for (const v of Object.values(cursorOut)) expect.soft(v).toBe(0);
 
   // ---- batch export from the toolbar (shown: 4:5)
   await expect(page.getByTestId("export")).toContainText("4 sizes");
