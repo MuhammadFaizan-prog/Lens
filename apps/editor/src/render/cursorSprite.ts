@@ -41,7 +41,7 @@ export const SHAPE_PRIMS: Record<string, { prims: Prim[]; hot: Pt }> = {
   "resize-ns": { prims: [{ poly: rot(DOUBLE_ARROW, 90) }], hot: [0.5, 0.5] },
   "resize-nwse": { prims: [{ poly: rot(DOUBLE_ARROW, 45) }], hot: [0.5, 0.5] },
   "resize-nesw": { prims: [{ poly: rot(DOUBLE_ARROW, -45) }], hot: [0.5, 0.5] },
-  move: { prims: [{ poly: scaleAbout(DOUBLE_ARROW, 0.95) }, { poly: rot(scaleAbout(DOUBLE_ARROW, 0.95), 90) }], hot: [0.5, 0.5] },
+  move: { prims: [{ poly: scaleAbout(DOUBLE_ARROW, 0.95) }, { poly: rot(scaleAbout(DOUBLE_ARROW, 0.95), 90) }, { poly: [[0.37, 0.37], [0.63, 0.37], [0.63, 0.63], [0.37, 0.63]] }], hot: [0.5, 0.5] },
   crosshair: {
     prims: [{ capsule: [0.5, 0.1, 0.5, 0.38, 0.07] }, { capsule: [0.5, 0.62, 0.5, 0.9, 0.07] }, { capsule: [0.1, 0.5, 0.38, 0.5, 0.07] }, { capsule: [0.62, 0.5, 0.9, 0.5, 0.07] }],
     hot: [0.5, 0.5],
