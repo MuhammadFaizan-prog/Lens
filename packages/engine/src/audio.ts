@@ -2,6 +2,7 @@ import type { ProjectConfig } from "./project.js";
 import type { TimelinePiece } from "./timeline.js";
 import { sourceToOutput } from "./timeline.js";
 import type { SegmentOverride } from "./types.js";
+import { voicePieces, type VoicePiece } from "./voiceover.js";
 
 /**
  * Audio side of the render plan (AUD-04/06, EDT-05, CUR-08). The audio follows exactly the same
@@ -26,6 +27,8 @@ export interface AudioPlan {
   clickSound: { enabled: boolean; volume: number; times: number[] };
   noiseReduction: ProjectConfig["audio"]["noiseReduction"];
   loudness: ProjectConfig["audio"]["loudness"];
+  /** Voiceover clips on the output clock (demand #17), mixed after the tracks' cleanup; absent when none. */
+  voice?: VoicePiece[];
 }
 
 /** Gain multiplier from overrides at source time t (later overrides win). */
@@ -82,7 +85,8 @@ export function buildAudioPlan(
     .filter((t) => !t.muted && t.volume > 0)
     .map((t) => ({ id: t.id, kind: t.kind, path: t.path, offsetMs: t.offsetMs, volume: t.volume }));
   const clicksOn = project.cursor.clickSound && project.cursor.clickSoundVolume > 0;
-  if (tracks.length === 0 && !clicksOn) return null;
+  const voice = voicePieces(project.voiceover, timeline, durationMs);
+  if (tracks.length === 0 && !clicksOn && !voice.length) return null;
   return {
     sampleRate: project.audio.sampleRate,
     durationMs,
@@ -91,5 +95,6 @@ export function buildAudioPlan(
     clickSound: { enabled: clicksOn, volume: project.cursor.clickSoundVolume, times: clicksOn ? clickSoundTimes(timeline, clickSrcTimes) : [] },
     noiseReduction: project.audio.noiseReduction,
     loudness: project.audio.loudness,
+    ...(voice.length ? { voice } : {}),
   };
 }

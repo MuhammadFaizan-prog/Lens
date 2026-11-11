@@ -23,6 +23,7 @@ import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 import type { CardTransform } from "./layout.js";
 import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
+import { validateVoiceover, type VoiceoverSettings } from "./voiceover.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -260,6 +261,8 @@ export interface ProjectConfig {
   customFonts?: ProjectFont[];
   /** Interactive demo + step guide export (demand #7, docs/InteractiveDemo.md). */
   demo: DemoSettings;
+  /** Voiceover clips (demand #17, docs/Voiceover.md): imported or recorded per transcript line; absent in older projects. */
+  voiceover?: VoiceoverSettings;
 }
 
 export type ZoomPresetName = "calm" | "default" | "punchy";
@@ -552,6 +555,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (ke) errs.push(`mask ${m.id} ${ke}`);
   }
   errs.push(...validateMotion3d(p.motion3d));
+  errs.push(...validateVoiceover(p.voiceover));
   errs.push(...validatePrivacy(p.privacy));
   errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
   for (const o of p.overrides) {
