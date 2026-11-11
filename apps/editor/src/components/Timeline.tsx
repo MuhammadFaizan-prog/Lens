@@ -672,6 +672,12 @@ export function Timeline() {
                   {xOf(s * 1000) < innerW - 44 && <span>{rulerLabel(s)}</span>}
                 </div>
               ))}
+              {(project.chapters?.items ?? []).map((c) => (
+                <button key={c.id} className="tl-chapter" style={{ left: xOf(c.srcMs) }} title={`Chapter: ${c.title} (Export > Title & chapters)`} data-testid="tl-chapter"
+                  onPointerDown={(e) => e.stopPropagation()} onClick={() => store.seekSource(c.srcMs)}>
+                  <span>{c.title}</span>
+                </button>
+              ))}
             </div>
             {plan?.cuts.map((c, i) => (
               <div key={`cut-shade-${i}`} className="cut-shade" style={{ left: xOf(c.startMs), width: xOf(c.endMs) - xOf(c.startMs) }} />

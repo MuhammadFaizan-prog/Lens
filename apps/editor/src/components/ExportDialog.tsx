@@ -9,7 +9,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { demoSteps, type DemoStep } from "@lens/engine";
 import { encodeSettings, estimateBytes, EXPORT_PRESETS, exportChecks, exportPreset, fmtBytes } from "@lens/engine";
-import { store, useEditor } from "../state/store";
+import { store, useEditor, type ExportTab } from "../state/store";
+import { ChaptersTab } from "./ChaptersTab";
 import { Icon } from "./Icon";
 
 interface DemoJson {
@@ -17,7 +18,7 @@ interface DemoJson {
   steps: Array<{ n: number; stepId: string; image: string; width: number; height: number; map: [number, number, number, number] }>;
 }
 
-type Tab = "video" | "demo" | "guide";
+type Tab = ExportTab;
 
 export function ExportDialog() {
   const dlg = useEditor((s) => s.exportDialog);
@@ -37,6 +38,7 @@ export function ExportDialog() {
               ["video", "Video"],
               ["demo", "Interactive demo"],
               ["guide", "Step guide"],
+              ["chapters", "Title & chapters"],
             ] as Array<[Tab, string]>
           ).map(([t, label]) => (
             <button key={t} role="tab" aria-selected={dlg.tab === t} className={dlg.tab === t ? "on" : ""} data-testid={`export-tab-${t}`} onClick={() => store.setExportTab(t)}>
@@ -44,7 +46,7 @@ export function ExportDialog() {
             </button>
           ))}
         </nav>
-        {dlg.tab === "video" ? <VideoTab /> : dlg.tab === "demo" ? <DemoTab /> : <GuideTab />}
+        {dlg.tab === "video" ? <VideoTab /> : dlg.tab === "demo" ? <DemoTab /> : dlg.tab === "guide" ? <GuideTab /> : <ChaptersTab />}
       </div>
     </div>
   );

@@ -529,6 +529,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Evidence:** FocuSee "AI summary/title/description" 16 votes (link in #25). **Proposed Lens feature:** A local LLM drafts a title, description and chapter markers from the transcript at export. **Size:** S. **Test:** Edit distance between the drafted and the final title.
 
+**Status (2026-11-11): built, first version (branch feat/ai-chapters-015, not merged).** Export > Title & chapters drafts a title, a three-sentence description and chapters from the transcript on the device. Not a local LLM as proposed: an English-only, extractive, deterministic TypeScript pipeline (TextTiling + cohesion DP for chapters, key phrases for chapter titles, TextRank for title and description), so it runs in the desktop app without Python or a model and never says anything the speaker did not say. Edit, copy, YouTube chapter list and WebVTT downloads, markers on the timeline ruler, chapters + title + description written into the MP4 in both export paths (see `docs/Chapters.md`). Measured on a held-out four-topic transcript: 4 chapters, chapter starts 0 / 0 / 0 ms from the true topic changes (bound ±5 s), drafted in 38-43 ms (bound < 1 s), the MP4 carries 4 chapter atoms and the title tag on both paths. Not done: the drafted-vs-final title edit-distance metric with users, abstractive titles, other languages.
+
 ---
 
 ## 28. Multiple audio inputs — 18 · M

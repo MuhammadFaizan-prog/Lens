@@ -17,6 +17,7 @@ import type { ChildProcess } from "node:child_process";
 import type { AudioPlan, EncodeSettings, RenderPlan } from "../../../packages/engine/src/index";
 import { mux, renderExportAudio, type RenderedAudio } from "./exportAudio";
 import { CancelledError, finishExport, type FinishResult } from "./exportFinish";
+import { embedChapters, wantsChapters } from "./chapterMeta";
 
 /** ffmpeg filter chain for a playback rate (atempo takes 0.5..100 per stage). */
 export function atempoChain(rate: number): string {
@@ -128,8 +129,8 @@ export interface BrowserExportJob {
   chain: Promise<void>;
   /** The audio, rendered while the frames stream in (null: silent export). */
   audio?: Promise<RenderedAudio | null>;
-  stage?: "frames" | "audio" | "mux" | "gif" | "cap";
-  /** The ffmpeg child of a step after the frames (mux, GIF, size cap), killed by Cancel. */
+  stage?: "frames" | "audio" | "mux" | "chapters" | "gif" | "cap";
+  /** The ffmpeg child of a step after the frames (mux, chapters, GIF, size cap), killed by Cancel. */
   child?: ChildProcess | null;
   /** Platform preset output (demand #24): GIF or MP4, and the size-cap pass. */
   format?: "mp4" | "gif";
@@ -187,6 +188,13 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
         if (a) await mux(ffmpeg, video, a, out, outputMs(plan));
         else fs.renameSync(video, out);
         if (cancelled()) throw new CancelledError();
+        // chapters, title and description into the MP4 (demand #27, stream copy) before the preset's
+        // GIF / size-cap step, which then works on the chaptered file
+        if (wantsChapters(plan)) {
+          job.stage = "chapters";
+          await embedChapters(ffmpeg, out, plan, (c) => (job.child = c));
+        }
+        if (cancelled()) throw new CancelledError();
         if (enc && (enc.format === "gif" || enc.maxBytes)) {
           const r = await finishExport(ffmpeg, out, enc, outputMs(plan), !!a, { child: (c) => (job.child = c), cancelled, stage: (s) => (job.stage = s) });
           job.out = r.out;
@@ -215,7 +223,8 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
           job.error = "cancelled";
         } else if (job.state === "running") {
           job.state = "error";
-          job.error = `${job.stage === "gif" || job.stage === "cap" ? job.stage === "gif" ? "gif" : "size cap" : "audio"}: ${e instanceof Error ? e.message : String(e)}`;
+          const step = job.stage === "chapters" ? "chapters" : job.stage === "gif" ? "gif" : job.stage === "cap" ? "size cap" : "audio";
+          job.error = `${step}: ${e instanceof Error ? e.message : String(e)}`;
         }
       } finally {
         job.finishedAt = Date.now();

@@ -51,6 +51,7 @@ import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { importMusic, writeBuiltinBed } from "./music";
 import { cancelBrowserExport, exportBitrateMbps, finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
 import { CancelledError, finishExport, type FinishResult } from "./exportFinish";
+import { embedChapters, wantsChapters } from "./chapterMeta";
 import { buildRenderPlan, encodeSettings, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
@@ -642,24 +643,35 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
       job.error = err.trim().split("\n").slice(-4).join("\n") || `render.py exited ${code}`;
       return;
     }
-    if (!enc || !(enc.format === "gif" || enc.maxBytes)) {
+    const chapters = wantsChapters(plan);
+    const finish = !!enc && (enc.format === "gif" || !!enc.maxBytes);
+    if (!chapters && !finish) {
       job.finishedAt = Date.now();
       job.state = "done";
       return;
     }
     const cancelled = () => job.state !== "running";
-    finishExport(FFMPEG, out, enc, plan.output.durationMs, !!plan.audio, { child: (c) => (job.child = c), cancelled, stage: (s) => (job.stage = s) })
-      .then((r) => {
+    (async () => {
+      // chapters, title and description into the MP4 first (demand #27, stream copy); the preset's GIF /
+      // size-cap step (demand #24) then runs on the chaptered file (ffmpeg carries chapters through a re-encode)
+      if (chapters) {
+        job.stage = "chapters";
+        await embedChapters(FFMPEG, out, plan, (c) => (job.child = c));
+      }
+      if (cancelled()) throw new CancelledError();
+      if (finish) {
+        const r = await finishExport(FFMPEG, out, enc!, plan.output.durationMs, !!plan.audio, { child: (c) => (job.child = c), cancelled, stage: (s) => (job.stage = s) });
         if (cancelled()) return;
         job.out = r.out;
         job.format = r.format;
         job.cap = r.cap;
-        job.state = "done";
-      })
+      }
+      job.state = "done";
+    })()
       .catch((e) => {
         if (cancelled() || e instanceof CancelledError) return;
         job.state = "error";
-        job.error = `${job.stage === "gif" ? "gif" : "size cap"}: ${e instanceof Error ? e.message : String(e)}`;
+        job.error = `${job.stage === "chapters" ? "chapters" : job.stage === "gif" ? "gif" : "size cap"}: ${e instanceof Error ? e.message : String(e)}`;
       })
       .finally(() => (job.finishedAt = Date.now()));
   });

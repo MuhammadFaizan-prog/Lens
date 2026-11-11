@@ -12,6 +12,7 @@ import { customWindow, fillWindow, framingMode } from "./framing.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
+import { outputChapters, type OutputChapter } from "./chapters.js";
 import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
 import { freezeAt } from "./freeze.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
@@ -82,6 +83,11 @@ export interface RenderPlan {
   subtitles: Array<{ startMs: number; endMs: number; text: string }>;
   /** Text slides on the output clock (demand #4): each holds its source time and has no audio. */
   slides: SlideSpan[];
+  /**
+   * Chapters on the output clock (demand #27): present only when the project has chapter items.
+   * Title / description ride along for the MP4 metadata; `embed` = write them into the export.
+   */
+  chapters?: { title: string; description: string; embed: boolean; items: OutputChapter[] };
   /**
    * Fonts the frames use besides the default (DejaVu Sans): family and files ("builtin:" = Lens's
    * assets/fonts, else relative to the bundle). Text ops and the caption style name the family.
@@ -335,6 +341,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     slides: slideSpans.map((sp) => ({ id: sp.id, outStart: r2(sp.outStart), outEnd: r2(sp.outEnd), srcAt: r2(sp.srcAt) })),
     ...(theme.fonts.length || capFonts.length ? { fonts: [...theme.fonts, ...capFonts] } : {}),
     ...(theme.watermark ? { watermark: theme.watermark } : {}),
+    ...(project.chapters && project.chapters.items.length
+      ? { chapters: { title: project.chapters.title, description: project.chapters.description, embed: project.chapters.embed, items: outputChapters(project.chapters.items, timeline, durationMs) } }
+      : {}),
     frames: planFrames,
   };
 }

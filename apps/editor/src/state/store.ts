@@ -10,6 +10,7 @@ import { setDemoHotspot } from "@lens/engine";
 import { defaultImageSlide, defaultSlide, videoTime, withFontFallback, type ProjectFont } from "@lens/engine";
 import { defaultMusic, type MusicSettings } from "@lens/engine";
 import { applyExportPreset, type ExportPresetId, type ExportVideoSettings } from "@lens/engine";
+import { chaptersVtt, draftContentForPlan, youtubeChapterIssues, youtubeChapterList, type ChapterSettings } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
@@ -30,6 +31,8 @@ export interface Selection {
   track: TrackKind;
   index: number;
 }
+
+export type ExportTab = "video" | "demo" | "guide" | "chapters";
 
 export interface ExportState {
   id: string;
@@ -120,7 +123,7 @@ export interface EditorState {
   /** In-app speech-to-text (Windows #5); auto: started by itself on a new recording with a mic. */
   transcribeRun: { id: string; state: "starting" | "running" | "done" | "error"; done: number; error?: string; seconds?: number; auto?: boolean } | null;
   /** Export dialog (format tabs); null = closed. */
-  exportDialog: { tab: "video" | "demo" | "guide" } | null;
+  exportDialog: { tab: ExportTab } | null;
   /** Last interactive demo / step guide build per kind (demand #7). */
   stepsExport: Partial<Record<"demo" | "guide", StepsExportRun>>;
   /** The caption translation run in progress (or its last outcome), demand #8. */
@@ -1978,11 +1981,78 @@ export class EditorStore {
     this.edit(label, (p) => ({ ...p, export: { ...p.export, gif: { ...p.export.gif, ...patch } } }));
   }
 
-  openExportDialog(tab: "video" | "demo" | "guide" = "video"): void {
+  // ------------------------------------------------------------------ title, description, chapters (demand #27)
+
+  /** Draft the title, description and chapters from the transcript, on the device (one undo step). */
+  generateChapters(): boolean {
+    const words = this.s.bundle?.transcript?.words ?? [];
+    const plan = this.s.plan;
+    if (!words.length || !plan) {
+      this.notify("No transcript yet: transcribe the recording first (Transcript tab)");
+      return false;
+    }
+    const t0 = performance.now();
+    const d = draftContentForPlan(words, plan);
+    const ms = performance.now() - t0;
+    if (!d.chapters.length) {
+      this.notify("The transcript has no sentences to draft from");
+      return false;
+    }
+    this.edit("Generate title & chapters", (p) => ({
+      ...p,
+      chapters: {
+        title: d.title,
+        description: d.description,
+        embed: p.chapters?.embed ?? true,
+        items: d.chapters.map((c, i) => ({ id: `ch${Date.now().toString(36)}${i}`, srcMs: Math.round(c.srcMs), title: c.title })),
+      },
+    }));
+    this.lastChapterDraftMs = ms;
+    this.notify(`Drafted a title, a description and ${d.chapters.length} chapters from the transcript (${ms.toFixed(0)} ms, on this device)`);
+    return true;
+  }
+  lastChapterDraftMs = 0;
+
+  /** Edit project.chapters (one undo step, or a live keystroke tweak). */
+  editChapters(label: string, fn: (c: ChapterSettings) => ChapterSettings, live = false): void {
+    const f = (p: ProjectConfig) => ({ ...p, chapters: fn(p.chapters ?? { title: "", description: "", embed: true, items: [] }) });
+    if (live) this.tweak(label, f);
+    else this.edit(label, f);
+  }
+
+  /** A chapter starting at the playhead. */
+  addChapterAtPlayhead(): void {
+    const plan = this.s.plan;
+    if (!plan) return;
+    const srcMs = Math.round(plan.frames[this.s.frame]?.src ?? 0);
+    this.editChapters("Add chapter", (c) => ({ ...c, items: [...c.items, { id: `ch${Date.now().toString(36)}`, srcMs, title: "New chapter" }].sort((a, b) => a.srcMs - b.srcMs) }));
+  }
+
+  removeChapter(id: string): void {
+    this.editChapters("Remove chapter", (c) => ({ ...c, items: c.items.filter((i) => i.id !== id) }));
+  }
+
+  /** Move a chapter's start to the playhead. */
+  setChapterStartAtPlayhead(id: string): void {
+    const plan = this.s.plan;
+    if (!plan) return;
+    const srcMs = Math.round(plan.frames[this.s.frame]?.src ?? 0);
+    this.editChapters("Move chapter", (c) => ({ ...c, items: c.items.map((i) => (i.id === id ? { ...i, srcMs } : i)).sort((a, b) => a.srcMs - b.srcMs) }));
+  }
+
+  /** The chapter list as YouTube wants it in a description, the WebVTT chapters track, and their problems. */
+  chapterTexts(): { youtube: string; vtt: string; issues: string[] } | null {
+    const pc = this.s.plan?.chapters;
+    const dur = this.s.plan?.output.durationMs ?? 0;
+    if (!pc || !pc.items.length) return null;
+    return { youtube: youtubeChapterList(pc.items, dur), vtt: chaptersVtt(pc.items, dur), issues: youtubeChapterIssues(pc.items, dur) };
+  }
+
+  openExportDialog(tab: ExportTab = "video"): void {
     this.set({ exportDialog: { tab } });
   }
 
-  setExportTab(tab: "video" | "demo" | "guide"): void {
+  setExportTab(tab: ExportTab): void {
     this.set({ exportDialog: { tab } });
   }
 

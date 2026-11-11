@@ -37,3 +37,4 @@ export * from "./motion3d.js";
 export * from "./fontCatalog.js";
 export * from "./fontFile.js";
 export * from "./exportPresets.js";
+export * from "./chapters.js";
