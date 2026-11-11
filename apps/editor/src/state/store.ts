@@ -1713,6 +1713,9 @@ export class EditorStore {
 
   /** Start one export of `project` on the server's path (the in-app renderer or the compositor). */
   private async startExport(project: ProjectConfig): Promise<void> {
+    // reset before the first await: a Cancel pressed while this export is still starting must stick
+    // (it used to be reset inside exportInBrowser, after it, so a batch's next size kept going)
+    this.exportCancel = false;
     if ((await this.exportPath()) === "browser") return this.exportInBrowser(project);
     this.setEx({ id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 });
     const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project }) });
@@ -1865,8 +1868,7 @@ export class EditorStore {
 
   private async exportInBrowser(project: ProjectConfig = this.s.project): Promise<void> {
     const b = this.s.bundle;
-    if (!b || !this.screen) return;
-    this.exportCancel = false;
+    if (!b || !this.screen || this.exportCancel) return;
     const plan = withFontFallback(buildPlan(b, project), this.s.missingFonts);
     const total = plan.frames.length;
     const t0 = performance.now();
@@ -1877,7 +1879,11 @@ export class EditorStore {
     if (!r.ok) return fail(j.error);
     const id = j.id as string;
     if (j.total !== total) return fail(`plan mismatch: server ${j.total} frames, editor ${total}`, id);
-    if (this.exportCancel) return;
+    if (this.exportCancel) {
+      // cancelled while the server job was being created: stop it too (it would wait for frames forever)
+      void fetch(`/api/export-browser/${id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+      return;
+    }
     this.setEx({ id, state: "running", done: 0, total, path: "browser", seconds: 0 });
     const q = this.dirQuery();
     const rendered = (globalThis as { __lensNoExportWorker?: boolean }).__lensNoExportWorker || typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined"

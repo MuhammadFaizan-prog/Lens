@@ -20,6 +20,9 @@
  *     absolute difference <= 12 per channel over every pixel.
  *  7. Saved project.json carries exportTargets with 4 items; the 1:1 item has framing custom and 2
  *     framingKeys after switching back to 16:9.
+ *  8. (added with the Follow fix) Batch Cancel while the first size is running: the export ends as
+ *     "Export cancelled" within 30 s, stays so 4 s later, no other size's export folder appears after
+ *     Cancel, and the cancelled size's server job is neither running nor done.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -160,10 +163,9 @@ test("several sizes: one batch, exact sizes, subject in frame, crop keys, previe
     }
   }
   console.log("plan map of (900,250)", JSON.stringify(want), "cursor frames outside", JSON.stringify(cursorOut), "frames (src ms, Z = zoom target inside):", await page.evaluate(() => (window as any).__outLog));
-  // expect.soft (changed after the first run, bound unchanged): the first run failed here (9:16 31 / 60
-  // frames, 4:5 29 / 60 with the cursor outside) and stopped before the export; soft so the remaining
-  // bounds are still measured, and the test still fails on this bound.
-  for (const v of Object.values(cursorOut)) expect.soft(v).toBe(0);
+  // hard again (the product was fixed: Follow keeps the cursor and the zoom target in frame, widening
+  // when both do not fit; engine followFrame). The first run failed here (9:16 31 / 60, 4:5 29 / 60).
+  for (const v of Object.values(cursorOut)) expect(v).toBe(0);
 
   // ---- batch export from the toolbar (shown: 4:5)
   await expect(page.getByTestId("export")).toContainText("4 sizes");
@@ -236,5 +238,32 @@ test("several sizes: one batch, exact sizes, subject in frame, crop keys, previe
   expect(sq.framing).toBe("custom");
   expect(sq.framingKeys).toHaveLength(2);
   expect(saved.output.aspect).toBe("16:9");
+
+  // ---- bound 8: batch Cancel stops the running size and starts no other
+  await page.getByTestId("export").click();
+  const warn2 = page.getByTestId("export-warning-anyway");
+  if (await warn2.isVisible().catch(() => false)) await warn2.click();
+  await page.waitForFunction(() => {
+    const e = (window as any).__lens.store.get().exporting;
+    return e && e.batch && e.state === "running" && e.done >= 5;
+  }, null, { timeout: 120_000, polling: 100 });
+  const exportDirs = () => (fs.existsSync(path.join(dir, ".lens-export")) ? fs.readdirSync(path.join(dir, ".lens-export")).length : 0);
+  const beforeCancel = await page.evaluate(() => (window as any).__lens.store.get().exporting);
+  await page.getByTestId("export-cancel").click();
+  await page.waitForFunction(() => {
+    const e = (window as any).__lens.store.get().exporting;
+    return e && e.state === "error";
+  }, null, { timeout: 30_000 });
+  const n0 = exportDirs();
+  await page.waitForTimeout(4000);
+  const afterCancel = await page.evaluate(() => (window as any).__lens.store.get().exporting);
+  const n1 = exportDirs();
+  const jobState = await page.evaluate(async (u) => (await fetch(u)).json(), `/api/export/${beforeCancel.id}?dir=${encodeURIComponent(dir)}`);
+  console.log("cancel", JSON.stringify({ at: { index: beforeCancel.batch.index, done: beforeCancel.done }, after: { state: afterCancel.state, error: afterCancel.error, items: afterCancel.batch?.items?.map((x: any) => x.state + (x.error ? ":" + x.error : "")) }, dirs: [n0, n1], job: jobState.state }));
+  expect(afterCancel.state).toBe("error");
+  expect(afterCancel.error).toBe("Export cancelled");
+  expect(n1).toBe(n0); // no other size started after Cancel
+  expect(jobState.state).not.toBe("running");
+  expect(jobState.state).not.toBe("done");
   await lens.close();
 });

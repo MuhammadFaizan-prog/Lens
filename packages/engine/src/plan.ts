@@ -8,7 +8,7 @@ import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalize
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
 import { canvasSize, cardCrop, fillCard, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
-import { customWindow, fillWindow, framingMode } from "./framing.js";
+import { customWindow, fillWindow, followFrame, followTargetAt, framingMode } from "./framing.js";
 import { framingWindowAt, hasFramingKeys, windowScreenRect } from "./exportTargets.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
@@ -236,6 +236,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     const src = span ? span.srcAt : outputToSource(timeline, t);
     const slide = span ? slideList.find((x) => x.id === span.id) : undefined;
     const c = sampleTrack(camera, src, lerpCamera);
+    let camOut: { cx: number; cy: number; scale: number } = c;
     const k = sampleTrack(cursor, src, lerpCursor);
     let layout = layoutAt(src, project.camera.layouts, out, sourceAspect, project);
     if (blend.length) {
@@ -246,7 +247,12 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       const p = sampleTrack(pan, src, (a, b, u) => ({ t: a.t + (b.t - a.t) * u, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }));
       const vw = meta.width / c.scale;
       const vh = meta.height / c.scale;
-      layout = { ...layout, screen: fillScreenRect(out, sourceAspect, { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh }, p) };
+      const view = { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh };
+      // Follow keeps the cursor (and a fixed zoom target, when both fit or by widening) in frame (demand #15)
+      const keepCursor = k.opacity > 0.001 && insideCrop(k, crop) ? k : null;
+      const f = followFrame(out, meta, view, p, keepCursor, keepCursor ? followTargetAt(zoomSegments, src, c.scale) : null, () => fillScreenRect(out, sourceAspect, view, p));
+      layout = { ...layout, screen: f.screen };
+      if (f.cam) camOut = f.cam;
     }
     if (keyed && (layout.kind === "screen-only" || layout.kind === "camera-overlay" || layout.kind === "camera-cutout")) {
       const w = framingWindowAt(baseCrop, out.width / out.height, project.output, src);
@@ -269,7 +275,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     planFrames.push({
       t: r2(t),
       src: r2(src),
-      cam: [r2(c.cx), r2(c.cy), r4(c.scale)],
+      cam: [r2(camOut.cx), r2(camOut.cy), r4(camOut.scale)],
       camVel: span ? [0, 0, 0] : [r2(c.vx), r2(c.vy), r4(c.vScale)],
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
       clicks: span ? [] : activeClicks,
