@@ -889,3 +889,6 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .link-btn { background: none; border: 0; padding: 2px 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
 .link-btn:hover { color: var(--scene); text-decoration: underline; }
 .scene-card .note.warn .chip-btn { margin-left: 4px; }
+/* scene Layout: two per row so "Screen only" / "Camera full" / "Side by side" never truncate */
+.scene-card .segmented { display: grid; grid-template-columns: 1fr 1fr; }
+.scene-card .segmented button { overflow: visible; text-overflow: clip; white-space: nowrap; }

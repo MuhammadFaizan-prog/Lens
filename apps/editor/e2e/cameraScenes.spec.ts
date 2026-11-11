@@ -9,7 +9,8 @@
  *   S4 3.5-6 s Screen only · before 0.5 s the Webcam tab's own PiP (bottom right).
  *  - UI: the Scenes lane holds 4 blocks labelled "Camera full", "Side by side", "PiP ↖", "Screen only";
  *    the Webcam tab lists 4 scenes; project.camera.layouts has those kinds, S3 corner "top-left",
- *    S3 transitionMs 250;
+ *    S3 transitionMs 250; the scene card's Layout buttons are not truncated (scrollWidth <= clientWidth;
+ *    added after the first run's screenshot, a new bound, nothing loosened);
  *  - plan per sample time (0.3, 1.25, 2.25, 3.25, 4.5 s, plus 2.625 s = S3's transition midpoint):
  *    0.3 s camera centre in the bottom-right quadrant; 1.25 s camera rect covers >= 60 % of the canvas
  *    and screenOpacity 0; 2.25 s camera centre right of the canvas centre and the screen left of it;
@@ -168,6 +169,11 @@ test("camera scenes: built in the UI, camera rect per scene matches between prev
   await addSceneAt(page, 3500); // S4: Screen only, to the end
   await page.getByTestId("scene-kind").getByRole("radio", { name: "Screen only" }).click();
 
+  // the scene card's Layout labels are not cut off (added after the first UI screenshot showed "Screen…")
+  const trunc = await page.evaluate(() => [...document.querySelectorAll('[data-testid="scene-kind"] button')].map((b) => ({ text: b.textContent ?? "", sw: (b as HTMLElement).scrollWidth, cw: (b as HTMLElement).clientWidth })));
+  console.log("scene layout buttons", JSON.stringify(trunc));
+  expect(trunc.map((t) => t.text)).toEqual(["Screen only", "Camera full", "Side by side", "PiP"]);
+  for (const t of trunc) expect(t.sw, `"${t.text}" truncated`).toBeLessThanOrEqual(t.cw);
   const p = await proj(page);
   const L = p.camera.layouts as Array<{ startMs: number; endMs: number; kind: string; corner?: string; transitionMs?: number }>;
   console.log("scenes", JSON.stringify(L));
