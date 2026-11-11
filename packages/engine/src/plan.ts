@@ -8,7 +8,8 @@ import { cropEvents, cropMeta, cropRect, cropZoomSegments, insideCrop, normalize
 import { buildCursorTrack, clickEffects, cursorOverrideAt, lerpCursor, sampleTrack, type CursorSample } from "./cursor.js";
 import { clicks, detectTyping, shortcutOverlays, DEFAULT_TYPING } from "./events.js";
 import { canvasSize, cardCrop, fillCard, fillScreenRect, layoutAt, layoutFor, overlayAvoidRect, scaleCameraRect, validCard } from "./layout.js";
-import { customWindow, fillWindow, framingMode } from "./framing.js";
+import { customWindow, fillWindow, followFrame, followTargetAt, framingMode } from "./framing.js";
+import { framingWindowAt, hasFramingKeys, windowScreenRect } from "./exportTargets.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
@@ -169,7 +170,10 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   // Framing (fix/aspect-framing-014): Fill / Custom show a window of the source, cropped to the canvas
   // shape, on a card covering the whole canvas. A free card (project.card) owns the placement instead.
   const mode = framingMode(theme.project.output);
-  const framed = !validCard(theme.project.card) && (mode === "fill" || mode === "custom");
+  // Custom framing with crop keys (demand #15): the window moves, so the crop stays the whole (user-
+  // cropped) source and each frame's window becomes a screen rect covering the canvas (like Follow).
+  const keyed = !validCard(theme.project.card) && mode === "custom" && hasFramingKeys(theme.project.output);
+  const framed = !validCard(theme.project.card) && (mode === "fill" || mode === "custom") && !keyed;
   const project: ProjectConfig = framed ? { ...theme.project, card: fillCard() } : theme.project;
   const resScale = Math.min(out.width, out.height) / 1080;
 
@@ -195,7 +199,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const camera: CameraSample[] = buildCameraTrack(cursor, zoomSegments, meta, {
     spring: project.zoom.spring,
     followDeadzone: project.zoom.followDeadzone,
-    avoid: fill ? null : overlayAvoidRect(staticLayout),
+    avoid: fill || keyed ? null : overlayAvoidRect(staticLayout),
   });
   const pan = fill ? buildPanTrack(cursor, camera, zoomSegments, meta, out, sourceAspect, project.zoom.spring) : [];
 
@@ -245,6 +249,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     const src = span ? span.srcAt : outputToSource(timeline, t);
     const slide = span ? slideList.find((x) => x.id === span.id) : undefined;
     const c = sampleTrack(camera, src, lerpCamera);
+    let camOut: { cx: number; cy: number; scale: number } = c;
     const k = sampleTrack(cursor, src, lerpCursor);
     let layout = layoutAt(src, project.camera.layouts, out, sourceAspect, project);
     if (blend.length) {
@@ -255,7 +260,19 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       const p = sampleTrack(pan, src, (a, b, u) => ({ t: a.t + (b.t - a.t) * u, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }));
       const vw = meta.width / c.scale;
       const vh = meta.height / c.scale;
-      layout = { ...layout, screen: fillScreenRect(out, sourceAspect, { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh }, p) };
+      const view = { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh };
+      // Follow keeps the cursor (and a fixed zoom target, when both fit or by widening) in frame (demand #15)
+      const keepCursor = k.opacity > 0.001 && insideCrop(k, crop) ? k : null;
+      const f = followFrame(out, meta, view, p, keepCursor, keepCursor ? followTargetAt(zoomSegments, src, c.scale) : null, () => fillScreenRect(out, sourceAspect, view, p));
+      layout = { ...layout, screen: f.screen };
+      if (f.cam) camOut = f.cam;
+    }
+    if (keyed && (layout.kind === "screen-only" || layout.kind === "camera-overlay" || layout.kind === "camera-cutout")) {
+      const w = framingWindowAt(baseCrop, out.width / out.height, project.output, src);
+      const vw = meta.width / c.scale;
+      const vh = meta.height / c.scale;
+      const win = { x: w.x - crop.x, y: w.y - crop.y, w: w.w, h: w.h };
+      layout = { ...layout, screen: windowScreenRect(out, meta, win, { x0: c.cx - vw / 2, vw, y0: c.cy - vh / 2, vh }) };
     }
     // freeze frame (demand #20): the screen holds on the frame at its start; the cursor stays live or hides
     const fz = freezeAt(project.freezes, src);
@@ -276,7 +293,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       t: r2(t),
       src: r2(src),
       ...(vid !== undefined ? { vid: r2(vid) } : {}),
-      cam: [r2(c.cx), r2(c.cy), r4(c.scale)],
+      cam: [r2(camOut.cx), r2(camOut.cy), r4(camOut.scale)],
       camVel: span ? [0, 0, 0] : [r2(c.vx), r2(c.vy), r4(c.vScale)],
       cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
       clicks: span ? [] : activeClicks,
@@ -311,8 +328,8 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       background: project.background,
       ...(project.background.kind === "image" && project.background.imagePath && backdropById(project.background.imagePath) ? { backdropArt: backdropById(project.background.imagePath)! } : {}),
       // Fill / Custom framing covers the canvas edge to edge: no rounded corners or shadow to show
-      radius: project.background.kind === "hidden" || framed ? 0 : project.frame.radius * resScale,
-      shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" || framed ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
+      radius: project.background.kind === "hidden" || framed || keyed ? 0 : project.frame.radius * resScale,
+      shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" || framed || keyed ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
       cursorSize: project.cursor.size,
       cursorShape: project.cursor.shape,
       clickEffect: project.cursor.clickEffect,

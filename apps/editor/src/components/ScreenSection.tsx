@@ -4,7 +4,7 @@
  * (source px) that set project.crop. Every change is one store.edit, so undo works.
  */
 import { useEffect, useState } from "react";
-import { cardRect, fittedCardRect, FRAMING_MODES, normalizeCrop, validCard } from "@lens/engine";
+import { cardRect, fittedCardRect, FRAMING_MODES, normalizeCrop, removeFramingKey, setFramingKey, validCard } from "@lens/engine";
 import type { FramingMode, Rect } from "@lens/engine";
 import { store, useEditor } from "../state/store";
 import { cardCenter, cardFill, cardFit, cardReset, editFramingField, FRAMING_HINTS, FRAMING_LABELS, framingChoiceOf, framingWindowOf, insetsOf, resetFramingRect, scaledRect, setCardRect, setCropInsets, setFraming, type Insets } from "../state/layoutOps";
@@ -49,6 +49,7 @@ export function FramingTiles({ idPrefix, tilesOnly }: { idPrefix: string; tilesO
   const plan = useEditor((s) => s.plan);
   const meta = useEditor((s) => s.bundle?.meta);
   const editing = useEditor((s) => s.framingEdit);
+  const frame = useEditor((s) => s.frame);
   if (!plan || !meta) return null;
   const out = { width: plan.output.width, height: plan.output.height };
   const choice = framingChoiceOf(project);
@@ -56,11 +57,16 @@ export function FramingTiles({ idPrefix, tilesOnly }: { idPrefix: string; tilesO
     store.edit(`Framing: ${FRAMING_LABELS[m]}`, (p) => setFraming(p, m, meta, out));
     store.setFramingEdit(m === "custom");
   };
-  const win = choice === "custom" ? framingWindowOf(project, meta, out) : null;
+  // crop keyframes (demand #15): with keys the window shown and edited is the one at the playhead
+  const at = plan.frames[frame]?.src ?? 0;
+  const keys = choice === "custom" ? project.output.framingKeys ?? [] : [];
+  const onKey = keys.some((k) => Math.abs(k.srcMs - at) <= 17);
+  const win = choice === "custom" ? framingWindowOf(project, meta, out, at) : null;
   const field = (f: "x" | "y" | "w" | "h", label: string) => (
     <NumField label={label} value={win ? win[f] : 0} min={f === "w" || f === "h" ? 16 : 0} testId={`${idPrefix}-${f}`}
-      onCommit={(v) => store.edit("Move framing", (p) => editFramingField(p, f, v, meta, out))} />
+      onCommit={(v) => store.edit(keys.length ? "Framing key" : "Move framing", (p) => editFramingField(p, f, v, meta, out, at))} />
   );
+  const fmt = (ms: number) => `${Math.floor(ms / 60000)}:${((ms % 60000) / 1000).toFixed(1).padStart(4, "0")}`;
   return (
     <div className="framing" data-testid={`${idPrefix}`} data-mode={choice}>
       <span className="ctl-label">Framing</span>
@@ -85,9 +91,27 @@ export function FramingTiles({ idPrefix, tilesOnly }: { idPrefix: string; tilesO
           <div className="screen-actions">
             <button className={`chip-btn ${editing ? "on" : ""}`} data-testid={`${idPrefix}-adjust`} title="Show the whole recording and drag / resize the part shown"
               onClick={() => store.setFramingEdit(!editing)}>{editing ? "Done" : "Adjust on preview"}</button>
-            <button className="chip-btn" data-testid={`${idPrefix}-reset`} title="Back to the centred fill" onClick={() => store.edit("Reset framing", (p) => resetFramingRect(p, meta, out))}>Reset</button>
+            <button className="chip-btn" data-testid={`${idPrefix}-reset`} title="Back to the centred fill" onClick={() => store.edit("Reset framing", (p) => resetFramingRect(p, meta, out, at))}>Reset</button>
           </div>
-          <p className="note">Source px; the shape follows the canvas. {editing ? "Drag the box on the preview, corners resize." : ""}</p>
+          <div className="framing-keys" data-testid={`${idPrefix}-keys`}>
+            <div className="screen-actions">
+              <span className="ctl-label">Keyframes</span>
+              <button className={`chip-btn ${onKey ? "on" : ""}`} data-testid={`${idPrefix}-key-add`} title="Keep the part shown now at this moment; the window moves smoothly between keys"
+                onClick={() => store.edit("Framing key", (p) => setFramingKey(p, at, framingWindowOf(p, meta, out, at)))}>{onKey ? "Key here" : "+ Key at playhead"}</button>
+            </div>
+            {keys.length > 0 && (
+              <ul className="framing-key-list">
+                {keys.map((k) => (
+                  <li key={k.srcMs} data-testid={`${idPrefix}-key`} data-ms={k.srcMs} className={Math.abs(k.srcMs - at) <= 17 ? "on" : ""}>
+                    <button className="chip-btn" title="Go to this key" data-testid={`${idPrefix}-key-seek`} onClick={() => store.seekSource(k.srcMs)}>{fmt(k.srcMs)}</button>
+                    <span className="stat">{Math.round(k.rect.w)}×{Math.round(k.rect.h)} at {Math.round(k.rect.x)}, {Math.round(k.rect.y)}</span>
+                    <button className="icon-btn" aria-label="Remove key" data-testid={`${idPrefix}-key-remove`} onClick={() => store.edit("Remove framing key", (p) => removeFramingKey(p, k.srcMs))}>×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <p className="note">Source px; the shape follows the canvas. {keys.length ? "Edits set the key at the playhead. " : ""}{editing ? "Drag the box on the preview, corners resize." : ""}</p>
         </div>
       )}
     </div>

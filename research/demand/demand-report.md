@@ -401,6 +401,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Build size:** S–M. **How to test:** For each aspect, measure the share of frames where the cursor and click target stay in frame (target 100%).
 
+**Status (2026-11-11): built, first version (branch feat/multi-aspect-015, not merged).** Export… > Video > Several sizes: one project exports 16:9, 9:16, 1:1 and 4:5 in one batch, each with its own framing (Fit / Fill / Follow cursor / Custom), and Custom windows can be keyframed over time; Show / the toolbar size picker previews and frames each size (see `docs/MultiAspect.md`). Follow keeps the cursor and a zoom's fixed target in frame together, widening the window (background above and below) when a narrow size cannot hold both. Measured on a 2 s test clip with a zoom on a fixed target 600 px from the cursor: every file exactly its size and frame count; the cursor in frame on **100 %** of Follow frames (9:16 and 4:5; 48 % / 52 % before the fix) and the zoom target in frame in every size during the zoom (within 0.12 % of where the plan puts it); preview vs export mean difference 2.3–4.5 levels (bound 12); batch Cancel stops the running size and starts no other. Not done: caption layout per size, per-size zoom plans, a cursor-only follow option, real recordings.
+
 ---
 
 ## 16. Windows as a first-class platform — 120 · L (gate)

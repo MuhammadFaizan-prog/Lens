@@ -11,6 +11,7 @@ import { defaultImageSlide, defaultSlide, videoTime, withFontFallback, type Proj
 import { defaultMusic, type MusicSettings } from "@lens/engine";
 import { applyExportPreset, type ExportPresetId, type ExportVideoSettings } from "@lens/engine";
 import { chaptersVtt, draftContentForPlan, youtubeChapterIssues, youtubeChapterList, type ChapterSettings } from "@lens/engine";
+import { disableTargets, enabledTargets, enableTargets, projectForTarget, switchTarget, updateTarget, type FramingMode } from "@lens/engine";
 import { ensurePlanAssets, forgetFont, missingPlanFonts, setAssetBundle } from "../render/assets";
 import * as lib from "./presetLibrary";
 import { mergeCues, parseSubtitles, splitCue, type CaptionCue } from "@lens/engine";
@@ -21,6 +22,7 @@ import { AudioEngine } from "../media/audio";
 import { FrameStore } from "../media/frames";
 import { makeCanvas, PlanRenderer } from "../render/renderer";
 import { History } from "./history";
+import { setFraming } from "./layoutOps";
 import { buildPlan, fetchBundle, fetchSilences, planPauses, type Bundle } from "./bundle";
 import { addBlock, blocksOf, createRange, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
 import * as m3dLib from "./motion3dLib";
@@ -49,6 +51,19 @@ export interface ExportState {
   cap?: { maxBytes: number; before: number; after: number; passes: number; bitrateMbps: number };
   /** Step after the frames: audio, mux, gif, cap. */
   stage?: string;
+  /** Several sizes in one batch (demand #15): the target being exported and every target's result. */
+  batch?: { index: number; items: BatchItem[] };
+}
+
+export interface BatchItem {
+  targetId: string;
+  aspect: string;
+  width: number;
+  height: number;
+  /** Export job id once started (its file is /api/export/<id>/file). */
+  id?: string;
+  state: "pending" | "running" | "done" | "error";
+  error?: string;
 }
 
 export interface PrivacyScanState {
@@ -100,7 +115,7 @@ export interface EditorState {
   /** The on-device privacy scan in progress (or its last outcome). */
   privacyScan: PrivacyScanState | null;
   /** Export asked while privacy detections are unreviewed: the sheet asks first. */
-  exportWarning: { pending: number } | null;
+  exportWarning: { pending: number; batch?: boolean } | null;
   /** Font families the plan names that did not load: drawn in the default font, shown as a warning (Windows v0.1.3). */
   missingFonts: string[];
   /** The user's imported-font library ("My fonts" in every project), from /api/fonts/library. */
@@ -1807,26 +1822,130 @@ export class EditorStore {
       return;
     }
     this.set({ exportWarning: null });
+    this.batch = null;
+    return this.startExport(this.s.project);
+  }
+
+  /** Start one export of `project` on the server's path (the in-app renderer or the compositor). */
+  private async startExport(project: ProjectConfig): Promise<void> {
+    // reset before the first await: a Cancel pressed while this export is still starting must stick
+    // (it used to be reset inside exportInBrowser, after it, so a batch's next size kept going)
     this.exportCancel = false;
-    if ((await this.exportPath()) === "browser") return this.exportInBrowser();
-    this.set({ exporting: { id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 } });
-    const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
+    if ((await this.exportPath()) === "browser") return this.exportInBrowser(project);
+    this.setEx({ id: "", state: "starting", done: 0, total: this.s.plan?.frames.length ?? 0 });
+    const r = await fetch(`/api/export${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project }) });
     const j = await r.json();
     if (!r.ok) {
-      this.set({ exporting: { id: "", state: "error", done: 0, total: 0, error: j.error } });
+      this.setEx({ id: "", state: "error", done: 0, total: 0, error: j.error });
       return;
     }
     const id = j.id as string;
-    this.set({ exporting: { id, state: "running", done: 0, total: j.total } });
+    if (this.exportCancel) return;
+    this.setEx({ id, state: "running", done: 0, total: j.total });
     const poll = async () => {
       const s = await (await fetch(`/api/export/${id}${this.dirQuery()}`)).json();
       if (this.exportCancel) return;
-      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: s.seconds, format: s.format, bytes: s.bytes, cap: s.cap, stage: s.stage } });
+      this.setEx({ id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: s.seconds, format: s.format, bytes: s.bytes, cap: s.cap, stage: s.stage });
       if (s.state === "running") setTimeout(poll, 400);
-      else if (s.state === "done") this.notify("Export finished");
+      else if (s.state === "done" && !this.batch) this.notify("Export finished");
     };
     setTimeout(poll, 300);
   }
+
+  /** The export state with the running batch (if any) attached. */
+  private batch: { index: number; items: BatchItem[] } | null = null;
+  private setEx(e: ExportState): void {
+    this.set({ exporting: this.batch ? { ...e, batch: { index: this.batch.index, items: this.batch.items.map((x) => ({ ...x })) } } : e });
+  }
+
+  /** Resolves when the export in progress ends (done, error or cancelled). */
+  private exportEnded(): Promise<ExportState> {
+    return new Promise((res) => {
+      const check = () => {
+        const e = this.s.exporting;
+        if (e && (e.state === "done" || e.state === "error")) {
+          unsub();
+          res(e);
+        }
+      };
+      const unsub = this.subscribe(check);
+    });
+  }
+
+  // ------------------------------------------------------------------ several sizes (demand #15)
+
+  /** Turn on several sizes (16:9, 9:16, 1:1, 4:5); one undo step. */
+  enableExportTargets(): void {
+    this.edit("Several sizes", (p) => enableTargets(p));
+  }
+
+  disableExportTargets(): void {
+    this.edit("One size", (p) => disableTargets(p));
+  }
+
+  /** Show (preview and edit) another target; its framing goes into Look > Output. */
+  showExportTarget(id: string): void {
+    const t = this.s.project.exportTargets?.items.find((x) => x.id === id);
+    if (!t || this.s.project.exportTargets?.active === id) return;
+    this.set({ framingEdit: false });
+    this.edit(`Show ${t.aspect}`, (p) => switchTarget(p, id));
+  }
+
+  setExportTargetFraming(id: string, mode: FramingMode): void {
+    const et = this.s.project.exportTargets;
+    const t = et?.items.find((x) => x.id === id);
+    if (!t) return;
+    if (et!.active === id) {
+      const meta = this.s.bundle?.meta;
+      const out = this.s.plan?.output;
+      if (meta && out) return this.edit(`Framing: ${mode}`, (p) => setFraming(p, mode, meta, out));
+    }
+    this.edit(`${t.aspect} framing: ${mode}`, (p) => updateTarget(p, id, { framing: mode }));
+  }
+
+  setExportTargetEnabled(id: string, enabled: boolean): void {
+    this.edit(enabled ? "Export size on" : "Export size off", (p) => updateTarget(p, id, { enabled }));
+  }
+
+  /** Export every enabled target, one after another; the sheet lists each file. */
+  async exportAllTargets(force = false): Promise<void> {
+    const pending = privacyCounts(this.s.project).pending;
+    if (pending && !force) {
+      this.set({ exportWarning: { pending, batch: true } });
+      return;
+    }
+    this.set({ exportWarning: null });
+    const b = this.s.bundle;
+    const project = this.s.project;
+    const targets = enabledTargets(project);
+    if (!b || !targets.length) return;
+    const projects = targets.map((t) => projectForTarget(project, t.id));
+    const items: BatchItem[] = targets.map((t, i) => {
+      const o = buildRenderPlan({ meta: b.meta, events: b.events, project: projects[i]!, words: b.transcript?.words ?? [], pauses: planPauses(b), onlyFrames: [0] }).output;
+      return { targetId: t.id, aspect: t.aspect, width: o.width, height: o.height, state: "pending" };
+    });
+    this.batch = { index: 0, items };
+    this.batchCancel = false;
+    for (let i = 0; i < targets.length; i++) {
+      if (this.batchCancel) break;
+      this.batch = { index: i, items };
+      items[i]!.state = "running";
+      this.setEx({ id: "", state: "starting", done: 0, total: 0 });
+      const ended = this.exportEnded();
+      void this.startExport(projects[i]!);
+      const e = await ended;
+      items[i] = { ...items[i]!, id: e.id, state: e.state === "done" ? "done" : "error", ...(e.error ? { error: e.error } : {}) };
+    }
+    const cancelled = this.batchCancel;
+    for (const it of items) if (it.state === "pending" || it.state === "running") Object.assign(it, { state: "error", error: "cancelled" });
+    const ok = items.every((x) => x.state === "done");
+    const last = this.s.exporting;
+    this.batch = { index: items.length - 1, items };
+    this.setEx({ id: last?.id ?? "", state: ok ? "done" : "error", done: last?.done ?? 0, total: last?.total ?? 0, path: last?.path, ...(ok ? {} : { error: cancelled ? "Export cancelled" : `${items.filter((x) => x.state !== "done").length} of ${items.length} sizes failed` }) });
+    this.batch = null;
+    this.notify(ok ? `Exported ${items.length} sizes` : cancelled ? "Export cancelled" : "Some sizes failed");
+  }
+  private batchCancel = false;
 
   private exportPathP: Promise<"browser" | "compositor"> | null = null;
   /** Which export path the server offers (/api/capabilities; older servers: the compositor). */
@@ -1852,6 +1971,7 @@ export class EditorStore {
     const ex = this.s.exporting;
     if (!ex || (ex.state !== "running" && ex.state !== "starting")) return;
     this.exportCancel = true;
+    this.batchCancel = true;
     this.exportWorker?.postMessage({ type: "cancel" });
     this.exportWorker?.terminate();
     this.exportWorker = null;
@@ -1865,22 +1985,25 @@ export class EditorStore {
     }
   }
 
-  private async exportInBrowser(): Promise<void> {
+  private async exportInBrowser(project: ProjectConfig = this.s.project): Promise<void> {
     const b = this.s.bundle;
-    if (!b || !this.screen) return;
-    this.exportCancel = false;
-    const plan = withFontFallback(buildPlan(b, this.s.project), this.s.missingFonts);
+    if (!b || !this.screen || this.exportCancel) return;
+    const plan = withFontFallback(buildPlan(b, project), this.s.missingFonts);
     const total = plan.frames.length;
     const t0 = performance.now();
-    const fail = (error: string, id = "", done = 0) => this.set({ exporting: { id, state: "error", done, total, error, path: "browser" } });
-    this.set({ exporting: { id: "", state: "starting", done: 0, total, path: "browser" } });
-    const r = await fetch(`/api/export-browser${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: this.s.project }) });
+    const fail = (error: string, id = "", done = 0) => this.setEx({ id, state: "error", done, total, error, path: "browser" });
+    this.setEx({ id: "", state: "starting", done: 0, total, path: "browser" });
+    const r = await fetch(`/api/export-browser${this.dirQuery()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project }) });
     const j = await r.json();
     if (!r.ok) return fail(j.error);
     const id = j.id as string;
     if (j.total !== total) return fail(`plan mismatch: server ${j.total} frames, editor ${total}`, id);
-    if (this.exportCancel) return;
-    this.set({ exporting: { id, state: "running", done: 0, total, path: "browser", seconds: 0 } });
+    if (this.exportCancel) {
+      // cancelled while the server job was being created: stop it too (it would wait for frames forever)
+      void fetch(`/api/export-browser/${id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+      return;
+    }
+    this.setEx({ id, state: "running", done: 0, total, path: "browser", seconds: 0 });
     const q = this.dirQuery();
     const rendered = (globalThis as { __lensNoExportWorker?: boolean }).__lensNoExportWorker || typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined"
       ? await this.renderOnPage(plan, id, q, t0)
@@ -1893,8 +2016,8 @@ export class EditorStore {
         if (s.stage && s.stage !== this.s.exporting?.stage) this.set({ exporting: { ...this.s.exporting!, stage: s.stage } });
         return void setTimeout(poll, 300);
       }
-      this.set({ exporting: { id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser", format: s.format, bytes: s.bytes, cap: s.cap } });
-      if (s.state === "done") this.notify("Export finished");
+      this.setEx({ id, state: s.state, done: s.done, total: s.total, error: s.error, seconds: (performance.now() - t0) / 1000, path: "browser", format: s.format, bytes: s.bytes, cap: s.cap });
+      if (s.state === "done" && !this.batch) this.notify("Export finished");
     };
     setTimeout(poll, 200);
   }
@@ -1908,20 +2031,20 @@ export class EditorStore {
       w.onmessage = (e: MessageEvent) => {
         const m = e.data as { type: string; done?: number; error?: string };
         if (this.exportCancel) return;
-        if (m.type === "progress") this.set({ exporting: { id, state: "running", done: m.done ?? 0, total, path: "browser", seconds: (performance.now() - t0) / 1000 } });
+        if (m.type === "progress") this.setEx({ id, state: "running", done: m.done ?? 0, total, path: "browser", seconds: (performance.now() - t0) / 1000 });
         else {
           w.terminate();
           this.exportWorker = null;
           if (m.type === "rendered") resolve(true);
           else {
-            if (m.type === "error") this.set({ exporting: { id, state: "error", done: m.done ?? 0, total, error: m.error, path: "browser" } });
+            if (m.type === "error") this.setEx({ id, state: "error", done: m.done ?? 0, total, error: m.error, path: "browser" });
             resolve(false);
           }
         }
       };
       w.onerror = (e) => {
         this.exportWorker = null;
-        this.set({ exporting: { id, state: "error", done: 0, total, error: `export worker: ${e.message}`, path: "browser" } });
+        this.setEx({ id, state: "error", done: 0, total, error: `export worker: ${e.message}`, path: "browser" });
         resolve(false);
       };
       const scr = this.screen!;
@@ -1952,10 +2075,10 @@ export class EditorStore {
       const blob = "convertToBlob" in canvas ? await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 }) : await new Promise<Blob>((res) => (canvas as HTMLCanvasElement).toBlob((x) => res(x!), "image/jpeg", 0.95));
       const fr = await fetch(`/api/export-browser/${id}/frame${q}${sep}i=${i}`, { method: "POST", body: blob });
       if (!fr.ok) {
-        this.set({ exporting: { id, state: "error", done: i, total, error: (await fr.json()).error ?? `frame ${i} failed`, path: "browser" } });
+        this.setEx({ id, state: "error", done: i, total, error: (await fr.json()).error ?? `frame ${i} failed`, path: "browser" });
         return false;
       }
-      if (i % 5 === 0 || i === total - 1) this.set({ exporting: { id, state: "running", done: i + 1, total, path: "browser", seconds: (performance.now() - t0) / 1000 } });
+      if (i % 5 === 0 || i === total - 1) this.setEx({ id, state: "running", done: i + 1, total, path: "browser", seconds: (performance.now() - t0) / 1000 });
       await new Promise((res) => setTimeout(res, 0)); // let input and paint through
     }
     await fetch(`/api/export-browser/${id}/finish${q}`, { method: "POST" });
@@ -2140,6 +2263,12 @@ export function selectedZoomDocIndex(s: EditorState): number {
   const sel = s.selection;
   if (sel?.track !== "zoom") return -1;
   return zoomDocIndex(s.project, s.plan?.zoomSegments ?? s.project.zoom.segments, sel.index);
+}
+
+/** Source time (ms) of the frame under the playhead (0 before a plan exists). */
+export function playheadSrc(): number {
+  const s = store.get();
+  return s.plan?.frames[s.frame]?.src ?? 0;
 }
 
 export function useEditor<T>(sel: (s: EditorState) => T): T {

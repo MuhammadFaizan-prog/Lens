@@ -28,7 +28,6 @@ function TopBar() {
   const canRedo = useEditor((s) => s.canRedo);
   const undoLabel = useEditor((s) => s.undoLabel);
   const redoLabel = useEditor((s) => s.redoLabel);
-  const exportVideo = useEditor((s) => s.project.export.video);
   const file = useRef<HTMLInputElement>(null);
   const onFile = async (f: File | undefined) => {
     if (!f) return;
@@ -72,9 +71,7 @@ function TopBar() {
           Export…
         </button>
         <ExportPresetChip />
-        <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
-          <Icon name="export" /> <span className="btn-label">Export</span> {exportPreset(exportVideo?.preset).format === "gif" ? "GIF" : "MP4"}
-        </button>
+        <ExportButton />
         <AboutButton />
       </div>
     </header>
@@ -158,7 +155,7 @@ function ExportWarning() {
           <button className="btn" data-testid="export-warning-review" onClick={() => store.closeExportWarning(true)}>
             <Icon name="shield" /> Review
           </button>
-          <button className="btn primary" data-testid="export-warning-anyway" onClick={() => void store.exportVideo(true)}>
+          <button className="btn primary" data-testid="export-warning-anyway" onClick={() => void (store.get().exportWarning?.batch ? store.exportAllTargets(true) : store.exportVideo(true))}>
             <Icon name="export" /> Export anyway
           </button>
         </div>
@@ -178,6 +175,21 @@ function ExportPresetChip() {
   );
 }
 
+/** Toolbar Export: one file (MP4, or GIF with a GIF preset), or every ticked size when the project has several (demand #15). */
+function ExportButton() {
+  const sizes = useEditor((s) => s.project.exportTargets?.items.filter((t) => t.enabled).length ?? 0);
+  const preset = useEditor((s) => s.project.export.video?.preset);
+  return sizes ? (
+    <button className="btn primary" data-testid="export" title="Export every ticked size (Export… > Video lists them)" onClick={() => void store.exportAllTargets()}>
+      <Icon name="export" /> <span className="btn-label">Export</span> {sizes} {sizes === 1 ? "size" : "sizes"}
+    </button>
+  ) : (
+    <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>
+      <Icon name="export" /> <span className="btn-label">Export</span> {exportPreset(preset).format === "gif" ? "GIF" : "MP4"}
+    </button>
+  );
+}
+
 function ExportSheet() {
   const ex = useEditor((s) => s.exporting);
   if (!ex) return null;
@@ -190,7 +202,7 @@ function ExportSheet() {
     <div className="sheet-backdrop" onClick={() => ex.state !== "running" && ex.state !== "starting" && store.closeExport()}>
       <div className="sheet" role="dialog" aria-label="Export" data-testid="export-sheet" onClick={(e) => e.stopPropagation()}>
         <header>
-          <h2>{ex.state === "done" ? "Export ready" : ex.state === "error" ? (ex.error === "Export cancelled" ? "Export cancelled" : "Export failed") : "Exporting"}</h2>
+          <h2>{ex.batch && ex.state !== "done" && ex.state !== "error" ? `Exporting ${ex.batch.items[ex.batch.index]?.aspect ?? ""} (${ex.batch.index + 1} of ${ex.batch.items.length})` : ex.state === "done" ? (ex.batch ? `${ex.batch.items.length} sizes ready` : "Export ready") : ex.state === "error" ? (ex.error === "Export cancelled" ? "Export cancelled" : "Export failed") : "Exporting"}</h2>
           {ex.state !== "running" && (
             <button className="icon-btn" aria-label="Close" onClick={() => store.closeExport()}>
               <Icon name="close" />
@@ -219,13 +231,30 @@ function ExportSheet() {
             <p className="note">{ex.path === "browser" ? "Rendered in the app by the preview renderer from the same plan, encoded with ffmpeg, with audio mixed." : "Rendered by the reference compositor (compositor/render.py) from the same plan as the preview, with audio mixed."}</p>
           </>
         )}
+        {ex.batch && (
+          <ul className="ex-batch" data-testid="export-batch">
+            {ex.batch.items.map((it, i) => {
+              const tid = it.aspect.replace(":", "x");
+              const url = it.id ? `/api/export/${it.id}/file${dir ? `?dir=${encodeURIComponent(dir)}` : ""}` : "";
+              return (
+                <li key={it.targetId} data-testid={`export-batch-${tid}`} data-state={it.state} data-id={it.id ?? ""} className={i === ex.batch!.index && it.state === "running" ? "on" : ""}>
+                  <b>{it.aspect}</b> <span className="stat">{it.width}×{it.height}</span>{" "}
+                  <span className="stat">{it.state === "done" ? "ready" : it.state === "running" ? "exporting…" : it.state === "pending" ? "waiting" : it.error ?? "failed"}</span>
+                  {it.state === "done" && url && (
+                    <a className="btn ghost small" href={url} download={`lens-export-${tid}.mp4`} data-testid={`export-batch-download-${tid}`}>Download</a>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
         {ex.state === "error" && <pre className="error" data-testid="export-error">{ex.error}</pre>}
         {(ex.state === "running" || ex.state === "starting") && (
           <div className="sheet-actions">
             <button className="btn" data-testid="export-cancel" onClick={() => void store.cancelExport()}>Cancel export</button>
           </div>
         )}
-        {ex.state === "done" && (
+        {ex.state === "done" && !ex.batch && (
           <div className="export-done">
             {gif ? <img src={fileUrl} alt="Exported GIF" className="export-video" data-testid="export-gif" /> : <video src={fileUrl} controls muted className="export-video" data-testid="export-video" />}
             <a className="btn primary" href={fileUrl} download={gif ? "lens-export.gif" : "lens-export.mp4"} data-testid="export-download">

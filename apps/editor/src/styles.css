@@ -913,3 +913,17 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .ch-time { font-variant-numeric: tabular-nums; background: none; border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 5px 4px; cursor: pointer; font: inherit; font-size: 12px; }
 .tl-chapter { position: absolute; top: 0; height: 100%; border: 0; padding: 0 0 0 4px; margin: 0; background: none; border-left: 2px solid #f5b14c; color: #f5b14c; font-size: 10px; cursor: pointer; max-width: 140px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; z-index: 2; }
 .tl-chapter span { pointer-events: none; }
+/* several sizes (demand #15) */
+.ex-sizes { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.ex-sizes-head { display: flex; align-items: center; justify-content: space-between; }
+.ex-size-list, .ex-batch, .framing-key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ex-size-list li, .ex-batch li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.ex-size-list li.on, .ex-batch li.on { border-color: var(--line-2); background: var(--panel-2); }
+.ex-size-on { display: flex; align-items: center; gap: 6px; min-width: 150px; }
+.ex-size-list .tb-select { margin-left: auto; }
+.ex-batch { margin: 8px 0; }
+.ex-batch li .btn { margin-left: auto; }
+.framing-keys { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.framing-key-list li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.framing-key-list li.on .chip-btn { color: var(--text); border-color: #3a4452; }
+.framing-key-list .icon-btn { margin-left: auto; }

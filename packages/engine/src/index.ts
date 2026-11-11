@@ -10,6 +10,7 @@ export * from "./timeline.js";
 export * from "./transcript.js";
 export * from "./layout.js";
 export * from "./framing.js";
+export * from "./exportTargets.js";
 export * from "./plan.js";
 export * from "./crop.js";
 export * from "./masks.js";
