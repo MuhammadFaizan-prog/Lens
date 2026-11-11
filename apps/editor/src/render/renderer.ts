@@ -19,6 +19,7 @@
  */
 import { boxHighlightText, captionEffects, captionLook, captionMotion, captionStrokePx, cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
 import { CARD_PAD, Gl3dPass } from "./gl3d";
+import { SharpenPass, sharpenAmountAt } from "./sharpen";
 import { makeCanvas, type AnyCanvas } from "./canvas";
 import { cursorSprite } from "./cursorSprite";
 import { drawItems } from "./annotations";
@@ -106,6 +107,10 @@ export function cardRect(f: PlanFrame): [number, number, number, number] {
 
 export class PlanRenderer {
   private gl3d: Gl3dPass | null = null;
+  /** demand #22 zoom sharpening (WebGL2); null until first needed, false when WebGL2 is missing. */
+  private sharpen: SharpenPass | null | false = null;
+  /** Set when sharpening was asked for but WebGL2 is not available (the frame is drawn unsharpened). */
+  sharpenUnavailable = false;
   private card: AnyCanvas | null = null;
   /** Wall-clock ms of the last 3D pass (card texture + GL draw + readback), for perf logging. */
   last3dMs = 0;
@@ -373,6 +378,19 @@ export class PlanRenderer {
     return c;
   }
 
+  private sharpenPass(): SharpenPass | null {
+    if (this.sharpen === null) {
+      try {
+        this.sharpen = new SharpenPass();
+      } catch (e) {
+        console.warn("[lens] zoom sharpening needs WebGL2:", e);
+        this.sharpen = false;
+      }
+    }
+    if (this.sharpen === false) this.sharpenUnavailable = true;
+    return this.sharpen || null;
+  }
+
   private viewCanvas(w: number, h: number): AnyCanvas {
     if (!this.view || this.view.width !== w || this.view.height !== h) this.view = makeCanvas(w, h);
     return this.view;
@@ -409,6 +427,10 @@ export class PlanRenderer {
       vg.globalAlpha = alpha;
       vg.drawImage(img, ax, ay, w, h, 0, 0, sw, sh);
     };
+    // demand #22: sharper text above 1.5x (only when the project turned it on)
+    const zs = plan.style.zoomSharpen;
+    const amt = zs && img ? sharpenAmountAt(zs.amount, s) : 0;
+    const pass = amt > 0 ? this.sharpenPass() : null;
     if (mb.enabled && speedOut > 1.5) {
       const n = Math.max(2, Math.trunc(mb.samples));
       const shutter = (mb.strength * (1000 / fps)) / 1000;
@@ -418,6 +440,18 @@ export class PlanRenderer {
         blit([cx + vx * dt, cy + vy * dt, Math.max(1, s + vs * dt)], 1 / (j + 1));
       }
       vg.globalAlpha = 1;
+      if (pass) {
+        const out = pass.unsharp(vg.canvas as AnyCanvas, sw, sh, amt);
+        vg.drawImage(out as CanvasImageSource, 0, 0);
+      }
+    } else if (pass && img) {
+      const w = srcW / s;
+      const h = srcH / s;
+      const ax = cx - w / 2 + 0.5 - 0.5 / (sw / w) + cropX;
+      const ay = cy - h / 2 + 0.5 - 0.5 / (sh / h) + cropY;
+      const out = pass.resample(img as TexImageSource, ax, ay, w, h, sw, sh, amt);
+      vg.globalAlpha = 1;
+      vg.drawImage(out as CanvasImageSource, 0, 0);
     } else {
       blit([cx, cy, s], 1);
     }

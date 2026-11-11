@@ -1,0 +1,35 @@
+{
+ "version": 1,
+ "output": {
+  "aspect": "16:9",
+  "resolution": 540,
+  "fps": 30
+ },
+ "zoom": {
+  "auto": false
+ },
+ "cursor": {
+  "visible": true,
+  "size": 2.5,
+  "clickEffect": "none",
+  "hideWhenIdle": false
+ },
+ "motionBlur": {
+  "enabled": false
+ },
+ "frame": {
+  "shadow": {
+   "opacity": 0
+  }
+ },
+ "background": {
+  "kind": "solid",
+  "colors": [
+   "#203040"
+  ],
+  "inherit": false
+ },
+ "audio": {
+  "tracks": []
+ }
+}

@@ -13,6 +13,12 @@ import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
+import { hasWebGL2 } from "../render/gl3d";
+
+/** Default zoom sharpening amount (demand #22). */
+const SHARPEN_DEFAULT = 0.6;
+let webgl2Ok: boolean | null = null;
+const sharpenUnavailable = () => !(webgl2Ok ??= hasWebGL2());
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
@@ -257,6 +263,28 @@ function ZoomTab({ p }: { p: ProjectConfig }) {
         <Toggle label="Limit how often it zooms" value={p.zoom.budget.enabled} testId="budget" onChange={(v) => store.edit(v ? "Zoom budget on" : "Zoom budget off", (q) => ({ ...q, zoom: { ...q.zoom, budget: { ...q.zoom.budget, enabled: v }, preset: "custom" } }))} />
         <Slider defaultValue={D.zoom.budget.maxPerMinute} label="Max / minute" value={p.zoom.budget.maxPerMinute} min={1} max={12} step={1} testId="budget-max" onChange={(v) => t("Zoom budget", (z) => ({ budget: { ...z.budget, maxPerMinute: v } }))} />
         <Slider defaultValue={D.zoom.budget.minHoldMs} label="Min hold" value={p.zoom.budget.minHoldMs} min={500} max={6000} step={100} format={sec} testId="budget-hold" onChange={(v) => t("Zoom min hold", (z) => ({ budget: { ...z.budget, minHoldMs: v } }))} />
+      </Section>
+      <Section title="Sharpen zoomed text" aside={<span className="stat">above 1.5×</span>}>
+        <Toggle
+          label="Sharpen text in zooms"
+          hint="Above 1.5× the screen is upscaled with a Lanczos filter and edge-sharpened (no halos), so small text stays crisp. Preview and export."
+          value={!!p.zoom.sharpen?.enabled}
+          testId="zoom-sharpen"
+          onChange={(v) => store.edit(v ? "Sharpen zooms on" : "Sharpen zooms off", (q) => ({ ...q, zoom: { ...q.zoom, sharpen: { enabled: v, amount: q.zoom.sharpen?.amount ?? SHARPEN_DEFAULT } } }))}
+        />
+        <Slider
+          defaultValue={SHARPEN_DEFAULT}
+          label="Amount"
+          value={p.zoom.sharpen?.amount ?? SHARPEN_DEFAULT}
+          min={0}
+          max={1.5}
+          step={0.05}
+          format={pct}
+          disabled={!p.zoom.sharpen?.enabled}
+          testId="zoom-sharpen-amount"
+          onChange={(v) => store.tweak("Sharpen amount", (q) => ({ ...q, zoom: { ...q.zoom, sharpen: { enabled: q.zoom.sharpen?.enabled ?? true, amount: v } } }))}
+        />
+        {sharpenUnavailable() && <p className="note warn">This browser has no WebGL2: zooms are drawn without sharpening.</p>}
       </Section>
     </>
   );

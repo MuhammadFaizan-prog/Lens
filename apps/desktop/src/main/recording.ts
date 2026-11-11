@@ -296,7 +296,7 @@ export class Recording {
     // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
     // and export never show two cursors; it turns on by itself once the capture really excludes it.
     const baked = cursorBaked(info.cursor);
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, zoom: { sharpen: { enabled: true, amount: 0.6 } }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
