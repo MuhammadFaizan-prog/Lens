@@ -447,6 +447,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Size:** S–M. **Test:** Rate the naturalness of auto camera hides on 10 talking sessions.
 
+**Status (2026-11-11): camera scenes built, first version (branch feat/camera-scenes-015, not merged).** A Scenes lane on the timeline switches the webcam layout for a range (Screen only / Camera full / Side by side / PiP), with a PiP corner and a transition per scene, edited in the selected-scene card and listed on the Webcam tab (see `docs/CameraScenes.md`). Old projects plan byte-identically. Measured on a synthetic 6 s recording with a camera: camera position per scene in the export matches the preview at IoU 0.991–0.997 (bound 0.95), mean pixel difference 2.9–3.3 levels (bound 12), on the in-app export path. Not done: hide-when-silent (still unwired), per-scene camera size / crop, a camera-only recording mode, real recordings, Windows.
+
 ---
 
 ## 19. Hotkey zoom markers and a "don't zoom" modifier while recording — 108 · M

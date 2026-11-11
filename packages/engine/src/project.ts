@@ -581,6 +581,17 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (!validRect(p.crop)) errs.push("crop must have positive w and h");
   if (!validRect(p.camera.crop)) errs.push("camera.crop must have positive w and h");
   if (!(p.camera.zoomedSize > 0 && p.camera.zoomedSize <= 2)) errs.push("camera.zoomedSize must be within (0, 2]");
+  // camera scenes (demand #18)
+  const KINDS = ["screen-only", "camera-overlay", "split", "fullscreen-camera", "camera-cutout"];
+  const CORNERS = ["bottom-right", "bottom-left", "top-right", "top-left"];
+  for (const s of p.camera.layouts ?? []) {
+    if (!s || !Number.isFinite(s.startMs) || !Number.isFinite(s.endMs) || s.endMs <= s.startMs || !KINDS.includes(s.kind)) {
+      errs.push("camera.layouts[] must be {startMs, endMs > startMs, kind: screen-only | camera-overlay | split | fullscreen-camera | camera-cutout}");
+      break;
+    }
+    if (s.corner !== undefined && !CORNERS.includes(s.corner)) errs.push("camera.layouts[].corner must be a corner");
+    if (s.transitionMs !== undefined && !(Number.isFinite(s.transitionMs) && s.transitionMs >= 0 && s.transitionMs <= 5000)) errs.push("camera.layouts[].transitionMs must be within 0..5000");
+  }
   if (p.cursor.clickSoundVolume < 0 || p.cursor.clickSoundVolume > 2) errs.push("cursor.clickSoundVolume must be within 0..2");
   for (const m of p.masks) {
     if (!["spotlight", "blur", "pixelate"].includes(m.kind)) errs.push(`mask ${m.id} has unknown kind ${String(m.kind)}`);

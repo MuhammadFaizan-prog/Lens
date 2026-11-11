@@ -115,6 +115,8 @@ export interface FrameLayout {
   /** Camera drawn without frame and with its background removed (D01 cutout). */
   cameraCutout: boolean;
   kind: CameraLayoutKind;
+  /** Camera scenes (demand #18): the corner the active scene puts its picture-in-picture in (absent = the project's). */
+  corner?: NonNullable<CameraLayoutSegment["corner"]>;
 }
 
 /**
@@ -199,23 +201,34 @@ export function layoutAt(
   // "Show webcam" off hides the camera everywhere: layout segments (split, fullscreen camera, ...) only
   // apply while it is on, so the toggle works for projects that carry them too
   const sorted = cfg.camera.enabled ? [...segments].sort((a, b) => a.startMs - b.startMs) : [];
-  const kindAt = (t: number): CameraLayoutKind => {
-    let k: CameraLayoutKind = defaultKind;
-    for (const s of sorted) if (t >= s.startMs && t < s.endMs) k = s.kind;
-    return k;
+  const segAt = (t: number): CameraLayoutSegment | null => {
+    let found: CameraLayoutSegment | null = null;
+    for (const s of sorted) if (t >= s.startMs && t < s.endMs) found = s;
+    return found;
   };
-  const cur = kindAt(tMs);
+  // a scene's own corner (camera scenes, demand #18) replaces the project corner and free position
+  const cfgFor = (s: CameraLayoutSegment | null): ProjectConfig => (s?.corner ? { ...cfg, camera: { ...cfg.camera, corner: s.corner, position: null } } : cfg);
+  const sceneKey = (s: CameraLayoutSegment | null) => (s ? `${s.kind}|${s.corner ?? ""}` : defaultKind);
+  const curSeg = segAt(tMs);
+  const cur = curSeg ? curSeg.kind : defaultKind;
   // Find the most recent boundary to animate from.
   let boundary = -Infinity;
   for (const s of sorted) {
     for (const b of [s.startMs, s.endMs]) if (b <= tMs && b > boundary) boundary = b;
   }
-  const to = layoutFor(cur, out, sourceAspect, cfg);
-  if (!Number.isFinite(boundary) || tMs - boundary >= cfg.camera.transitionMs) return to;
-  const prevKind = kindAt(boundary - 1);
-  if (prevKind === cur) return to;
-  const from = layoutFor(prevKind, out, sourceAspect, cfg);
-  const u = easeInOutCubic((tMs - boundary) / cfg.camera.transitionMs);
+  const to0 = layoutFor(cur, out, sourceAspect, cfgFor(curSeg));
+  const to = curSeg?.corner ? { ...to0, corner: curSeg.corner } : to0;
+  if (!Number.isFinite(boundary)) return to;
+  const prevSeg = segAt(boundary - 1);
+  // the transition belongs to the scene being entered, else to the one being left
+  const enter = sorted.filter((s) => s.startMs === boundary).pop();
+  const leave = sorted.filter((s) => s.endMs === boundary).pop();
+  const tr = enter?.transitionMs ?? leave?.transitionMs ?? cfg.camera.transitionMs;
+  if (!(tr > 0) || tMs - boundary >= tr) return to;
+  if (sceneKey(prevSeg) === sceneKey(curSeg) && (prevSeg?.kind ?? defaultKind) === cur) return to;
+  const prevKind = prevSeg ? prevSeg.kind : defaultKind;
+  const from = layoutFor(prevKind, out, sourceAspect, cfgFor(prevSeg));
+  const u = easeInOutCubic((tMs - boundary) / tr);
   const camFrom = from.camera ?? (to.camera ? { x: to.camera.x + to.camera.w / 2, y: to.camera.y + to.camera.h / 2, w: 0, h: 0 } : null);
   const camTo = to.camera ?? (from.camera ? { x: from.camera.x + from.camera.w / 2, y: from.camera.y + from.camera.h / 2, w: 0, h: 0 } : null);
   return {
@@ -225,7 +238,16 @@ export function layoutAt(
     cameraOpacity: from.cameraOpacity + (to.cameraOpacity - from.cameraOpacity) * u,
     cameraCutout: u < 0.5 ? from.cameraCutout : to.cameraCutout,
     kind: cur,
+    ...(to.corner ? { corner: to.corner } : {}),
   };
+}
+
+/** The camera scene (layout segment) at source time t, the last one wins on overlap; null outside scenes or with the webcam off. */
+export function sceneAt(segments: readonly CameraLayoutSegment[], tMs: number, cameraEnabled = true): CameraLayoutSegment | null {
+  if (!cameraEnabled) return null;
+  let found: CameraLayoutSegment | null = null;
+  for (const s of [...segments].sort((a, b) => a.startMs - b.startMs)) if (tMs >= s.startMs && tMs < s.endMs) found = s;
+  return found;
 }
 
 /** Overlay region in normalized viewport coords for smart framing (B05). */
