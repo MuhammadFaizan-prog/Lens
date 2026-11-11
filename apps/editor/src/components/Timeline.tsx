@@ -214,7 +214,7 @@ export function Timeline() {
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null, group?: Set<string>): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "volume", "scene"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         if (group?.has(`${k}:${i}`)) return;
