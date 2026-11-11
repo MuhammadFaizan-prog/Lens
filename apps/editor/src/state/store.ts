@@ -1738,9 +1738,11 @@ export class EditorStore {
     this.exportWorker?.postMessage({ type: "cancel" });
     this.exportWorker?.terminate();
     this.exportWorker = null;
-    if (ex.id) await fetch(`/api/export-browser/${ex.id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
+    // the sheet says "cancelled" at once; the server stops ffmpeg in the background (before, the state
+    // waited on that request, so Cancel looked ignored meanwhile and a read right after the click raced it)
     this.set({ exporting: { ...ex, state: "error", error: "Export cancelled" } });
     this.notify("Export cancelled");
+    if (ex.id) await fetch(`/api/export-browser/${ex.id}/cancel${this.dirQuery()}`, { method: "POST" }).catch(() => undefined);
   }
 
   private async exportInBrowser(): Promise<void> {
