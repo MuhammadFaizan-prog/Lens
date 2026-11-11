@@ -329,7 +329,7 @@ function CursorTypeSection({ p }: { p: ProjectConfig }) {
             {!match ? "The arrow throughout, except segments you set below." : recorded ? "Types logged while recording." : "No types were logged (Linux, imports): the I-beam is guessed where you clicked and typed; set the rest below."}
           </p>
           <Select<CursorShape | "auto">
-            label="From playhead"
+            label="At playhead"
             value={"auto"}
             testId="cursor-type-at-playhead"
             options={[{ value: "auto", label: "Set type…" }, ...SHAPE_OPTIONS]}
@@ -351,7 +351,7 @@ function CursorTypeSection({ p }: { p: ProjectConfig }) {
                   value={r.source === "override" ? r.shape : "auto"}
                   onChange={(e) => store.edit("Cursor type", (q) => setShapeOverride(q, r.startMs, r.endMs, e.target.value as CursorShape | "auto"))}
                 >
-                  <option value="auto">Auto ({CURSOR_SHAPE_LABELS[r.source === "override" ? autoShapeUnder(events, dur, p, r.startMs) : r.shape]})</option>
+                  <option value="auto">Auto · {CURSOR_SHAPE_LABELS[r.source === "override" ? autoShapeUnder(events, dur, p, r.startMs) : r.shape]}</option>
                   {SHAPE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
@@ -360,7 +360,7 @@ function CursorTypeSection({ p }: { p: ProjectConfig }) {
               </li>
             ))}
           </ol>
-          {runs.length > MAX && <p className="note">{runs.length - MAX} more segments; move the playhead and use From playhead.</p>}
+          {runs.length > MAX && <p className="note">{runs.length - MAX} more segments; move the playhead and use At playhead.</p>}
         </>
       )}
     </Section>

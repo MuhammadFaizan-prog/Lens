@@ -22,9 +22,9 @@ export const CURSOR_SHAPES: CursorShape[] = [
 
 export const CURSOR_SHAPE_LABELS: Record<CursorShape, string> = {
   arrow: "Arrow",
-  pointer: "Hand (link / button)",
-  text: "Text I-beam",
-  grab: "Grab (open hand)",
+  pointer: "Hand",
+  text: "I-beam",
+  grab: "Grab",
   grabbing: "Grabbing",
   crosshair: "Crosshair",
   "resize-ew": "Resize ↔",
