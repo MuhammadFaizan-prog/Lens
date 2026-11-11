@@ -104,7 +104,7 @@ function VideoTab() {
               onCommit={(n) => store.setExportVideo("Export size cap", { maxSizeMB: n })} />
           </label>
           <div className="field">Estimated size
-            <span className="stat" data-testid="export-estimate">{est !== null ? `≈ ${fmtBytes(est)}${enc.maxBytes ? ` (cap ${fmtBytes(enc.maxBytes)})` : ""}` : enc.maxBytes ? `depends on content (cap ${fmtBytes(enc.maxBytes)})` : "depends on content"}</span>
+            <span className="stat" data-testid="export-estimate">{est !== null ? `up to ≈ ${fmtBytes(est)}${enc.maxBytes ? ` (cap ${fmtBytes(enc.maxBytes)})` : ""}` : enc.maxBytes ? `depends on content (cap ${fmtBytes(enc.maxBytes)})` : "depends on content"}</span>
           </div>
         </div>
       )}

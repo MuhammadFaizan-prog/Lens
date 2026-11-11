@@ -31,6 +31,25 @@ describe("platform export presets: encode arguments and the last steps (demand #
     expect(c.slice(c.indexOf("-b:v"), c.indexOf("-threads"))).toEqual(["-b:v", "11M", "-maxrate", "12M", "-bufsize", "22M"]);
   });
 
+  // bound (set before the first run): on content that needs the bits, the preset bitrate is what the
+  // encode averages, within 0.80..1.10 x (x264 ABR; easy screen content comes out under it)
+  it.skipIf(!hasFfmpeg)("a preset bitrate is what the encoder averages on busy content (0.80..1.10 x)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lens-rate-"));
+    const out = path.join(dir, "v.mp4");
+    const p = { output: { width: 1280, height: 720, fps: 30, frames: 150, durationMs: 5000 }, frames: new Array(150) } as unknown as RenderPlan;
+    const a = browserExportArgs(p, out, { bitrateMbps: 8, maxrateMbps: 12 });
+    // the same encoder arguments, fed busy synthetic frames instead of the JPEG pipe
+    const i = a.indexOf("-i");
+    const args = ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=5,noise=alls=40:allf=t", ...a.slice(i + 2)];
+    expect(spawnSync("ffmpeg", args).status).toBe(0);
+    const r = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=bit_rate", "-of", "csv=p=0", out], { encoding: "utf8" });
+    const mbps = Number(r.stdout.trim()) / 1e6;
+    console.log("preset 8 Mbps -> measured", mbps.toFixed(2), "Mbps");
+    expect(mbps).toBeGreaterThanOrEqual(8 * 0.8);
+    expect(mbps).toBeLessThanOrEqual(8 * 1.1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 90_000);
+
   it("GIF / cap argument shapes", () => {
     expect(gifArgs("a.mp4", "a.gif", { fps: 12, width: 480, loop: false }).join(" ")).toContain("fps=12,scale=480:-1:flags=lanczos");
     expect(gifArgs("a.mp4", "a.gif", { fps: 12, width: 480, loop: true })).toContain("0");
