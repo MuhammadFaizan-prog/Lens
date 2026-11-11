@@ -13,11 +13,12 @@ import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
+import { ShareTab } from "./SharePanel";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
 
-type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio";
+type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio" | "share";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "look", label: "Look" },
   { id: "zoom", label: "Zoom" },
@@ -26,6 +27,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "camera", label: "Webcam" },
   { id: "captions", label: "Captions" },
   { id: "audio", label: "Audio" },
+  { id: "share", label: "Share" },
 ];
 
 /** Original Lens backdrops. */
@@ -581,6 +583,7 @@ export function Inspector() {
           </>
         )}
         {tab === "audio" && <AudioTab p={p} />}
+        {tab === "share" && <ShareTab />}
       </div>
       <footer className="insp-foot">plan rebuilt in {planMs.toFixed(1)} ms</footer>
     </aside>

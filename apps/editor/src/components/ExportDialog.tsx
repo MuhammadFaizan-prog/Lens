@@ -54,7 +54,7 @@ function VideoTab() {
   return (
     <div className="ex-body">
       <p className="note">
-        MP4 (H.264) with every edit, zoom, caption and mask{out ? `: ${out.width}×${out.height}, ${out.fps} fps, ${frames} frames` : ""}.
+        MP4 (H.264) with every edit, zoom, caption and mask{out ? `: ${out.width}×${out.height}, ${out.fps} fps, ${frames} frames` : ""}. To send a link instead, use the <b>Share</b> tab in the inspector (your own S3 / R2 / Supabase bucket).
       </p>
       <div className="sheet-actions">
         <button className="btn primary" data-testid="export-video-go" onClick={() => { store.closeExportDialog(); void store.exportVideo(); }}>
