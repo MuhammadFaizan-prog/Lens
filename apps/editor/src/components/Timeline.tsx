@@ -676,7 +676,10 @@ export function Timeline() {
               {project.edits.cuts.map((c, i) => {
                 // transition at this cut (demand #14): the chip opens the picker
                 const tr = effectiveCutTransition(project, i);
-                return block("cut", i, c, "cut", "", undefined, {}, (
+                // the chip sits inside the block, clear of the trim handles; blocks under 32 px hide it
+                // (the right-click menu's "Transition…" item reaches the picker there)
+                const chip = xOf(c.endMs) - xOf(c.startMs) >= 32;
+                return block("cut", i, c, "cut", "", undefined, {}, chip && (
                   <button
                     className={`tr-chip ${tr.kind === "none" ? "off" : ""} ${tr.own ? "own" : ""}`}
                     data-testid={`cut-tr-${i}`}
@@ -851,6 +854,11 @@ export function Timeline() {
             </>
           ) : menu.kind === "block" ? (
             <>
+              {multi.length <= 1 && selection?.track === "cut" && project.edits.cuts[selection.index] && (
+                <button role="menuitem" data-testid="block-menu-transition" onClick={() => setMenu({ x: menu.x, y: menu.y, kind: "transition", index: selection.index })}>
+                  Transition…
+                </button>
+              )}
               <button role="menuitem" data-testid="block-menu-duplicate" onClick={() => { setMenu(null); store.duplicateSelected(); }}>
                 Duplicate{multi.length > 1 ? ` ${multi.length}` : ""}
               </button>
