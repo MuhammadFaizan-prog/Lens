@@ -12,7 +12,7 @@ import { customWindow, fillWindow, framingMode } from "./framing.js";
 import { masksAt, type MaskFrame } from "./masks.js";
 import { motion3dAt, motion3dFrame, type Motion3DFrame } from "./motion3d.js";
 import type { CaptionStyle, ProjectConfig } from "./project.js";
-import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan } from "./timeline.js";
+import { buildTimeline, insertSlides, mergeRanges, outputDuration, outputToSource, sourceToOutput, type SlideSpan, type TimelinePiece } from "./timeline.js";
 import { annotationsAt, badgeNumbers, slideFrame, type AnnFrame, type SlideFrame } from "./annotations.js";
 import { resolveTakes, type TakeGroup } from "./takes.js";
 import { ARABIC_FONT, hasArabicScript, trackWords } from "./translation.js";
@@ -90,6 +90,11 @@ export interface RenderPlan {
   fontFallbacks?: string[];
   /** Brand logo watermark (demand #9), whole output px, drawn on every frame above the caption and under slides. */
   watermark?: WatermarkPlan | null;
+  /**
+   * Edit timeline (source ranges kept, on the output clock), only in plans built with editPieces for an
+   * NLE hand-off export (demand #11). Slides are the gaps between pieces (plan.slides).
+   */
+  pieces?: TimelinePiece[];
   frames: PlanFrame[];
 }
 
@@ -137,6 +142,11 @@ export interface PlanInputs {
   pauses?: TimeRange[];
   /** Build only these output frames (preset thumbnails); plan.frames then holds just them, in this order. */
   onlyFrames?: number[];
+  /**
+   * Add the edit timeline (plan.pieces) for an NLE hand-off export (demand #11). Off by default, so
+   * ordinary plans are unchanged.
+   */
+  editPieces?: boolean;
 }
 
 function insideRanges(ranges: TimeRange[], t: number): boolean {
@@ -146,7 +156,7 @@ function insideRanges(ranges: TimeRange[], t: number): boolean {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
-export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: rawProject, words = [], pauses, onlyFrames }: PlanInputs): RenderPlan {
+export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: rawProject, words = [], pauses, onlyFrames, editPieces }: PlanInputs): RenderPlan {
   const fps = rawProject.output.fps;
   // Canvas (feat/canvas-layout): custom W x H, aspect "auto" (the user crop's shape) or aspect x resolution.
   const userCrop: Rect = normalizeCrop(rawProject.crop, fullMeta);
@@ -323,6 +333,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     slides: slideSpans.map((sp) => ({ id: sp.id, outStart: r2(sp.outStart), outEnd: r2(sp.outEnd), srcAt: r2(sp.srcAt) })),
     ...(theme.fonts.length || capFonts.length ? { fonts: [...theme.fonts, ...capFonts] } : {}),
     ...(theme.watermark ? { watermark: theme.watermark } : {}),
+    ...(editPieces ? { pieces: timeline.map((p) => ({ srcStart: r2(p.srcStart), srcEnd: r2(p.srcEnd), rate: p.rate, outStart: r2(p.outStart), outEnd: r2(p.outEnd) })) } : {}),
     frames: planFrames,
   };
 }
