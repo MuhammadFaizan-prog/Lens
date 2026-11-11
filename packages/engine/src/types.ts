@@ -72,6 +72,15 @@ export interface CameraLayoutSegment {
   startMs: number;
   endMs: number;
   kind: CameraLayoutKind;
+  /**
+   * Camera scenes (demand #18): the corner of a picture-in-picture scene (camera-overlay / cutout);
+   * absent = the project's camera corner (or its free position).
+   */
+  corner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
+  /** Transition into this scene (and out of it, back to the default) in ms; absent = camera.transitionMs. */
+  transitionMs?: number;
+  /** Scene block id (editor); absent on old projects. */
+  id?: string;
 }
 
 export interface Word {
