@@ -3,6 +3,7 @@ import { stepSpring, type SpringState } from "./spring.js";
 import { clicks, rawCursorAt } from "./events.js";
 import type { CursorShape, InputEvent, RecordingMeta, SegmentOverride } from "./types.js";
 import type { ProjectConfig } from "./project.js";
+import { cursorShapeRuns, shapeAt, shapeSwapEnabled } from "./cursorShapes.js";
 
 /** Per-frame cursor state produced by the engine and drawn by the compositor (C01-C07). */
 export interface CursorSample {
@@ -14,6 +15,9 @@ export interface CursorSample {
   /** Multiplier on cursor size, < 1 while a button is held. */
   scale: number;
   shape: CursorShape;
+  /** While the cursor type changes (demand #12): the type fading out, and how far the swap is (0..1). */
+  fromShape?: CursorShape;
+  mix?: number;
   /** Speed in source px/s, used for motion blur (C08). */
   speed: number;
 }
@@ -70,7 +74,8 @@ export function buildCursorTrack(
   const lookaheadMs = cfg.smoothing.enabled ? Math.min(250, (2 * zeta * 1000) / omega) : 0;
 
   const downs = events.filter((e) => e.type === "down" || e.type === "up");
-  const shapes = events.filter((e): e is Extract<InputEvent, { type: "cursor-shape" }> => e.type === "cursor-shape");
+  const shapeRuns = cursorShapeRuns(events, meta.durationMs, cfg, overrides);
+  const swap = shapeSwapEnabled(cfg, overrides);
 
   let sx: SpringState | null = null;
   let sy: SpringState | null = null;
@@ -122,21 +127,22 @@ export function buildCursorTrack(
       if (d.t > t) break;
       held = d.type === "down";
     }
-    let shape: CursorShape = "arrow";
-    for (const s of shapes) {
-      if (s.t > t) break;
-      shape = s.shape;
-    }
+    const sh = shapeAt(shapeRuns, t, swap);
 
-    out.push({
+    const sample: CursorSample = {
       t,
       x: sx.x + (raw.x - sx.x) * rawW,
       y: sy.x + (raw.y - sy.x) * rawW,
       opacity,
       scale: held ? cfg.pressScale : 1,
-      shape,
+      shape: sh.shape,
       speed: Math.hypot(sx.v, sy.v),
-    });
+    };
+    if (sh.from !== undefined) {
+      sample.fromShape = sh.from;
+      sample.mix = sh.mix;
+    }
+    out.push(sample);
   }
 
   // Ease the press scale so it is not a hard snap (about 80 ms each way).
@@ -195,7 +201,7 @@ export function sampleTrack<T extends { t: number }>(track: T[], tMs: number, le
 }
 
 export function lerpCursor(a: CursorSample, b: CursorSample, u: number): CursorSample {
-  return {
+  const out: CursorSample = {
     t: a.t + (b.t - a.t) * u,
     x: a.x + (b.x - a.x) * u,
     y: a.y + (b.y - a.y) * u,
@@ -204,4 +210,34 @@ export function lerpCursor(a: CursorSample, b: CursorSample, u: number): CursorS
     shape: u < 0.5 ? a.shape : b.shape,
     speed: a.speed + (b.speed - a.speed) * u,
   };
+  // crossfade between two cursor types: interpolate the mix when both samples are in the same swap
+  if (a.fromShape !== undefined || b.fromShape !== undefined) {
+    if (a.fromShape !== undefined && b.fromShape !== undefined && a.fromShape === b.fromShape && a.shape === b.shape) {
+      out.shape = a.shape;
+      out.fromShape = a.fromShape;
+      out.mix = a.mix! + (b.mix! - a.mix!) * u;
+    } else if (a.fromShape !== undefined && b.fromShape === undefined && a.shape === b.shape) {
+      // the swap ends between the two samples
+      out.shape = a.shape;
+      out.fromShape = a.fromShape;
+      out.mix = a.mix! + (1 - a.mix!) * u;
+    } else if (a.fromShape === undefined && b.fromShape !== undefined && a.shape === b.fromShape) {
+      // the swap starts between the two samples
+      out.shape = b.shape;
+      out.fromShape = b.fromShape;
+      out.mix = b.mix! * u;
+    } else {
+      const n = u < 0.5 ? a : b;
+      out.shape = n.shape;
+      if (n.fromShape !== undefined) {
+        out.fromShape = n.fromShape;
+        out.mix = n.mix;
+      }
+    }
+    if (out.mix !== undefined && out.mix >= 0.9999) {
+      delete out.fromShape;
+      delete out.mix;
+    }
+  }
+  return out;
 }

@@ -503,39 +503,47 @@ export class PlanRenderer {
 
   private drawCursor(vg: Canvas2D, plan: RenderPlan, f: PlanFrame, prev: PlanFrame | null, map: ViewMap): void {
     const style = plan.style;
-    const [px, py, op, sc, shape] = f.cur!;
-    const shapeName = style.cursorShape === "system" ? shape : style.cursorShape;
+    const cur = f.cur!;
+    const [px, py, op, sc, shape] = cur;
+    const theme = style.cursorTheme === "light" ? "light" : "classic";
+    const forced = style.cursorShape !== "system";
+    // demand #12: while the cursor type changes, the old type fades out under the new one
+    const layers: Array<[string, number]> = !forced && cur.length === 7 ? [[cur[5], 1 - cur[6]], [shape, cur[6]]] : [[forced ? style.cursorShape : shape, 1]];
     const base = 26 * style.cursorSize * (plan.source.pixelRatio || 1);
     const size = Math.max(6, pyRound(base * map.k * sc));
-    const spr = cursorSprite(shapeName);
-    const hx = spr.hot[0] * size;
-    const hy = spr.hot[1] * size;
     const rx = (px - map.x0) * map.k;
     const ry = (py - map.y0) * map.ky;
     const mb = style.motionBlur;
-    const put = (x: number, y: number, a: number) => {
-      vg.globalAlpha = a;
-      vg.drawImage(spr.canvas as CanvasImageSource, x, y, size, size);
-    };
     let prevPt: [number, number] | null = null;
     if (mb.enabled && prev && prev.cur) {
       const pm = viewMapOf(plan, prev);
       prevPt = [(prev.cur[0] - pm.x0) * pm.k, (prev.cur[1] - pm.y0) * pm.ky];
     }
-    if (prevPt) {
-      const pdx = rx - prevPt[0];
-      const pdy = ry - prevPt[1];
-      const dist = Math.hypot(pdx, pdy);
-      if (dist > 3) {
-        const n = Math.min(Math.trunc(mb.samples), Math.max(2, Math.trunc(dist / 3)));
-        for (let j = 0; j < n; j++) {
-          const u = (j + 1) / n;
-          const tx = prevPt[0] + pdx * (1 - mb.strength) + pdx * mb.strength * u;
-          const ty = prevPt[1] + pdy * (1 - mb.strength) + pdy * mb.strength * u;
-          put(tx - hx, ty - hy, op / n);
-        }
-      } else put(rx - hx, ry - hy, op);
-    } else put(rx - hx, ry - hy, op);
+    for (const [name, w] of layers) {
+      if (w <= 0) continue;
+      const spr = cursorSprite(name, theme);
+      const hx = spr.hot[0] * size;
+      const hy = spr.hot[1] * size;
+      const put = (x: number, y: number, a: number) => {
+        vg.globalAlpha = a;
+        vg.drawImage(spr.canvas as CanvasImageSource, x, y, size, size);
+      };
+      const o = op * w;
+      if (prevPt) {
+        const pdx = rx - prevPt[0];
+        const pdy = ry - prevPt[1];
+        const dist = Math.hypot(pdx, pdy);
+        if (dist > 3) {
+          const n = Math.min(Math.trunc(mb.samples), Math.max(2, Math.trunc(dist / 3)));
+          for (let j = 0; j < n; j++) {
+            const u = (j + 1) / n;
+            const tx = prevPt[0] + pdx * (1 - mb.strength) + pdx * mb.strength * u;
+            const ty = prevPt[1] + pdy * (1 - mb.strength) + pdy * mb.strength * u;
+            put(tx - hx, ty - hy, o / n);
+          }
+        } else put(rx - hx, ry - hy, o);
+      } else put(rx - hx, ry - hy, o);
+    }
     vg.globalAlpha = 1;
   }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH } from "@lens/engine";
-import type { CaptionSegment, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
+import { defaultProject, maxZoomsPerMinute, projectPalette, springFromSettle, DEFAULT_MASK_STRENGTH, CURSOR_SHAPES, CURSOR_SHAPE_LABELS, cursorShapeRuns, recordedShapes } from "@lens/engine";
+import type { CaptionSegment, CursorShape, MaskKind, ProjectConfig, ZoomPresetName } from "@lens/engine";
+import { setShapeOverride } from "../state/cursorOps";
 import { selectedZoomDocIndex, store, useEditor, TRANSLATE_LANGUAGES } from "../state/store";
 import { timecode, unfreezeAutoZooms, updateBlock } from "../state/timelineOps";
 import { ColorInput, Section, Segmented, Select, Slider, Toggle } from "./Controls";
@@ -274,12 +275,102 @@ function CursorTab({ p }: { p: ProjectConfig }) {
         <Toggle label="Hide when idle" value={p.cursor.hideWhenIdle} onChange={(v) => store.edit("Idle hide", (q) => ({ ...q, cursor: { ...q.cursor, hideWhenIdle: v } }))} />
         <Select label="Click effect" value={p.cursor.clickEffect} options={[{ value: "ripple", label: "Ripple" }, { value: "circle", label: "Pulse" }, { value: "highlight", label: "Glow" }, { value: "none", label: "None" }]} onChange={(v) => store.edit("Click effect", (q) => ({ ...q, cursor: { ...q.cursor, clickEffect: v } }))} />
       </Section>
+      <CursorTypeSection p={p} />
       <Section title="Motion blur">
         <Toggle label="Motion blur" value={p.motionBlur.enabled} testId="motion-blur" onChange={(v) => store.edit("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, enabled: v } }))} />
         <Slider defaultValue={D.motionBlur.strength} label="Shutter" value={p.motionBlur.strength} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => store.tweak("Motion blur", (q) => ({ ...q, motionBlur: { ...q.motionBlur, strength: v } }))} />
       </Section>
     </>
   );
+}
+
+const SHAPE_OPTIONS: Array<{ value: CursorShape; label: string }> = CURSOR_SHAPES.map((v) => ({ value: v, label: CURSOR_SHAPE_LABELS[v] }));
+const SOURCE_LABEL = { recorded: "recorded", inferred: "guessed", default: "", override: "set by you" } as const;
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/**
+ * Demand #12: the cursor shows the type the UI showed under it (hand on links, I-beam on text,
+ * resize arrows on edges ...), from the recording where the OS reported it, guessed otherwise;
+ * every segment can be set by hand. The cursor theme (colours) applies to every type.
+ */
+function CursorTypeSection({ p }: { p: ProjectConfig }) {
+  const bundle = useEditor((s) => s.bundle);
+  const frame = useEditor((s) => s.frame);
+  const events = bundle?.events ?? [];
+  const dur = bundle?.meta.durationMs ?? 0;
+  const recorded = recordedShapes(events).length > 0;
+  const match = p.cursor.matchHover ?? recorded;
+  const forced = p.cursor.shape !== "system";
+  const runs = bundle ? cursorShapeRuns(events, dur, p.cursor, p.overrides) : [];
+  const playSrc = store.playheadSrc();
+  const atIdx = runs.findIndex((r) => playSrc >= r.startMs && playSrc < r.endMs);
+  void frame;
+  const MAX = 60;
+  return (
+    <Section title="Cursor type" aside={<span className="stat">{match ? (recorded ? "from recording" : "guessed") : "arrow only"}</span>}>
+      <Toggle
+        label="Match UI hover"
+        hint="Hand over links and buttons, I-beam over text, resize arrows on edges: the type the screen showed under the cursor"
+        value={match}
+        testId="cursor-match-hover"
+        onChange={(v) => store.edit(v ? "Cursor matches UI" : "Cursor arrow only", (q) => ({ ...q, cursor: { ...q.cursor, matchHover: v, ...(v && q.cursor.shape !== "system" ? { shape: "system" as const } : {}) } }))}
+      />
+      <Select
+        label="Theme"
+        value={p.cursor.theme ?? "classic"}
+        testId="cursor-theme"
+        options={[{ value: "classic", label: "Classic (dark)" }, { value: "light", label: "Light" }]}
+        onChange={(v) => store.edit("Cursor theme", (q) => ({ ...q, cursor: { ...q.cursor, theme: v } }))}
+      />
+      {forced && <p className="note">Every segment shows the {CURSOR_SHAPE_LABELS[p.cursor.shape as CursorShape] ?? p.cursor.shape} (fixed in the project). Turn on Match UI hover to use the recorded types.</p>}
+      {!forced && (
+        <>
+          <p className="note">
+            {!match ? "The arrow throughout, except segments you set below." : recorded ? "Types logged while recording." : "No types were logged (Linux, imports): the I-beam is guessed where you clicked and typed; set the rest below."}
+          </p>
+          <Select<CursorShape | "auto">
+            label="From playhead"
+            value={"auto"}
+            testId="cursor-type-at-playhead"
+            options={[{ value: "auto", label: "Set type…" }, ...SHAPE_OPTIONS]}
+            onChange={(v) => {
+              if (v === "auto" || atIdx < 0) return;
+              const r = runs[atIdx]!;
+              store.edit("Cursor type", (q) => setShapeOverride(q, playSrc, r.endMs, v));
+            }}
+          />
+          <ol className="cursor-runs" data-testid="cursor-runs">
+            {runs.slice(0, MAX).map((r, i) => (
+              <li key={`${r.startMs}-${i}`} className={i === atIdx ? "here" : ""} data-testid={`cursor-run-${i}`} data-shape={r.shape} data-source={r.source}>
+                <button className="link" title="Go to this segment" onClick={() => store.seekSource(r.startMs + 1)}>
+                  {secs(r.startMs)}–{secs(r.endMs)}
+                </button>
+                <select
+                  aria-label={`Cursor type ${secs(r.startMs)} to ${secs(r.endMs)}`}
+                  data-testid={`cursor-run-shape-${i}`}
+                  value={r.source === "override" ? r.shape : "auto"}
+                  onChange={(e) => store.edit("Cursor type", (q) => setShapeOverride(q, r.startMs, r.endMs, e.target.value as CursorShape | "auto"))}
+                >
+                  <option value="auto">Auto ({CURSOR_SHAPE_LABELS[r.source === "override" ? autoShapeUnder(events, dur, p, r.startMs) : r.shape]})</option>
+                  {SHAPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                {SOURCE_LABEL[r.source] && <span className={`src ${r.source}`}>{SOURCE_LABEL[r.source]}</span>}
+              </li>
+            ))}
+          </ol>
+          {runs.length > MAX && <p className="note">{runs.length - MAX} more segments; move the playhead and use From playhead.</p>}
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** The type a segment would have without the user's overrides. */
+function autoShapeUnder(events: Parameters<typeof cursorShapeRuns>[0], dur: number, p: ProjectConfig, t: number): CursorShape {
+  const base = cursorShapeRuns(events, dur, p.cursor, []);
+  return (base.find((r) => t >= r.startMs && t < r.endMs) ?? base[0])?.shape ?? "arrow";
 }
 
 /** Short labels on a full-width row so the three fit the inspector at 1280 px windows (Windows v0.1.2: "Rou..."); the tooltip says the rest. */

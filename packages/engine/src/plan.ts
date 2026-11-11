@@ -45,6 +45,8 @@ export interface RenderPlan {
     shadow: ProjectConfig["frame"]["shadow"];
     cursorSize: number;
     cursorShape: ProjectConfig["cursor"]["shape"];
+    /** Cursor art colours (demand #12); absent = "classic". */
+    cursorTheme?: "light";
     clickEffect: ProjectConfig["cursor"]["clickEffect"];
     clickEffectMs: number;
     motionBlur: ProjectConfig["motionBlur"];
@@ -101,8 +103,12 @@ export interface PlanFrame {
   cam: [number, number, number];
   /** Camera velocity: vx, vy (source px/s), vScale (1/s). */
   camVel: [number, number, number];
-  /** Cursor: x, y (source px), opacity, scale, shape; null when hidden. */
-  cur: [number, number, number, number, string] | null;
+  /**
+   * Cursor: x, y (source px), opacity, scale, shape; null when hidden. While the cursor type changes
+   * (demand #12) two more: the type fading out and the swap progress 0..1 (draw `from` at opacity
+   * (1 - mix), `shape` at mix).
+   */
+  cur: [number, number, number, number, string] | [number, number, number, number, string, string, number] | null;
   /** Active click effects: x, y (source px), progress 0..1. */
   clicks: Array<[number, number, number]>;
   layout: { screen: [number, number, number, number]; screenOpacity: number; camera: [number, number, number, number] | null; cameraOpacity: number; cutout: boolean };
@@ -260,7 +266,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       src: r2(src),
       cam: [r2(c.cx), r2(c.cy), r4(c.scale)],
       camVel: span ? [0, 0, 0] : [r2(c.vx), r2(c.vy), r4(c.vScale)],
-      cur: curVisible ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape] : null,
+      cur: curVisible
+        ? k.fromShape !== undefined ? [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape, k.fromShape, r4(k.mix ?? 1)] : [r2(k.x), r2(k.y), r4(k.opacity), r4(k.scale), k.shape]
+        : null,
       clicks: span ? [] : activeClicks,
       layout: {
         screen: screenR,
@@ -297,6 +305,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       shadow: { ...project.frame.shadow, ...(project.background.kind === "hidden" || framed ? { opacity: 0 } : {}), blur: project.frame.shadow.blur * resScale, offsetY: project.frame.shadow.offsetY * resScale },
       cursorSize: project.cursor.size,
       cursorShape: project.cursor.shape,
+      ...(project.cursor.theme && project.cursor.theme !== "classic" ? { cursorTheme: project.cursor.theme } : {}),
       clickEffect: project.cursor.clickEffect,
       clickEffectMs: project.cursor.clickEffectMs,
       motionBlur: project.motionBlur,
