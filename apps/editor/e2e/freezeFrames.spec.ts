@@ -181,8 +181,8 @@ test("freeze frame, pause, image slide and brand title card: preview and export"
   // the accent bar of the card (the last fill op), centre in output px
   const bar = plan.frames[fCard].slide.ops.filter((o: any) => o.op === "fill").pop();
   const bxs = bar.pts.filter((_: number, i: number) => i % 2 === 0), bys = bar.pts.filter((_: number, i: number) => i % 2 === 1);
-  const box = [Math.min(...bxs), Math.min(...bys), Math.max(...bxs), Math.max(...bys)];
-  const barX = (box[0] + box[2]) / 2, barY = (box[1] + box[3]) / 2;
+  const box: number[] = [Math.min(...bxs), Math.min(...bys), Math.max(...bxs), Math.max(...bys)];
+  const barX = (box[0]! + box[2]!) / 2, barY = (box[1]! + box[3]!) / 2;
   console.log("accent bar box (output px):", box.map((v) => v.toFixed(1)).join(", "));
 
   // ---- preview
