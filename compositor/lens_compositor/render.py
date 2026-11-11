@@ -9,6 +9,9 @@ compare the two. Order of passes per frame:
   -> cursor (with motion blur) -> rounded mask -> webcam (crop, mirror) -> frame-anchored annotations
   -> shortcut pill -> caption (styled, word highlight) -> brand watermark -> text slide
 
+A frame near a cut join (plan frame `tr`, demand #14) is drawn twice, itself and the other side of the
+join held still (from a second decoder), and the two are composited (crossfade / push / zoom / blur dip).
+
 Then audio (see audio.py) is muxed as AAC, or the video is converted to a palette GIF.
 
 All motion decisions come from the plan. This file only draws.

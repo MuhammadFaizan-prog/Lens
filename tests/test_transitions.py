@@ -41,8 +41,11 @@ from media import CLI, make_plan  # noqa: E402
 pytestmark = pytest.mark.skipif(shutil.which("node") is None or not CLI.exists(), reason="engine not built (npm run build)")
 
 W, H, FPS, SECS = 640, 360, 30, 8
-DARK, LIGHT = 32, 224
-SPAN = LIGHT - DARK
+DARK, LIGHT = 32, 224  # limited-range Y code values written by geq
+# decoded to full-range RGB (BT.601 limited -> full): about 19 and 242. Every bound below uses the sides
+# as measured (frames 10 and 40), so the span is about 223 RGB levels.
+DARK_RGB, LIGHT_RGB = (DARK - 16) * 255 / 219, (LIGHT - 16) * 255 / 219
+SPAN = LIGHT_RGB - DARK_RGB
 JOINS = [27, 51, 75, 99]
 KINDS = ["crossfade", "push", "zoom", "blur"]
 CUTS = [[900, 1100], [1900, 2100], [2900, 3100], [3900, 4100], [4900, 8000]]
@@ -125,7 +128,7 @@ def test_frames_outside_transitions_identical(renders) -> None:
 def test_crossfade(renders) -> None:
     fr, out, plain = renders["plan"]["frames"], renders["tr"], renders["plain"]
     a, b = luma(plain[10]), luma(plain[40])
-    assert abs(a - DARK) < 6 and abs(b - LIGHT) < 6
+    assert abs(a - DARK_RGB) < 6 and abs(b - LIGHT_RGB) < 6
     mid = luma(out[27])
     avg = (a + b) / 2
     assert abs(mid - avg) <= 0.10 * avg, (mid, avg)
@@ -163,7 +166,7 @@ def test_slide_enter(renders) -> None:
     fx = renders["plan"]["frames"][117]["slide"]["fx"]
     assert abs(fx[1] - 180) <= 1, fx
     f = renders["tr"][117].astype(np.float64)
-    assert abs(luma(f[: H // 4]) - DARK) <= 25
+    assert abs(luma(f[: H // 4]) - DARK_RGB) <= 25
     band = f[int(H * 0.52): int(H * 0.60), : W // 10]
     assert (band[..., 2] - band[..., 1]).mean() >= 100
 
