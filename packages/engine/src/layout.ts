@@ -115,6 +115,8 @@ export interface FrameLayout {
   /** Camera drawn without frame and with its background removed (D01 cutout). */
   cameraCutout: boolean;
   kind: CameraLayoutKind;
+  /** Camera scenes (demand #18): the corner the active scene puts its picture-in-picture in (absent = the project's). */
+  corner?: NonNullable<CameraLayoutSegment["corner"]>;
 }
 
 /**
@@ -214,7 +216,8 @@ export function layoutAt(
   for (const s of sorted) {
     for (const b of [s.startMs, s.endMs]) if (b <= tMs && b > boundary) boundary = b;
   }
-  const to = layoutFor(cur, out, sourceAspect, cfgFor(curSeg));
+  const to0 = layoutFor(cur, out, sourceAspect, cfgFor(curSeg));
+  const to = curSeg?.corner ? { ...to0, corner: curSeg.corner } : to0;
   if (!Number.isFinite(boundary)) return to;
   const prevSeg = segAt(boundary - 1);
   // the transition belongs to the scene being entered, else to the one being left
@@ -235,7 +238,16 @@ export function layoutAt(
     cameraOpacity: from.cameraOpacity + (to.cameraOpacity - from.cameraOpacity) * u,
     cameraCutout: u < 0.5 ? from.cameraCutout : to.cameraCutout,
     kind: cur,
+    ...(to.corner ? { corner: to.corner } : {}),
   };
+}
+
+/** The camera scene (layout segment) at source time t, the last one wins on overlap; null outside scenes or with the webcam off. */
+export function sceneAt(segments: readonly CameraLayoutSegment[], tMs: number, cameraEnabled = true): CameraLayoutSegment | null {
+  if (!cameraEnabled) return null;
+  let found: CameraLayoutSegment | null = null;
+  for (const s of [...segments].sort((a, b) => a.startMs - b.startMs)) if (tMs >= s.startMs && tMs < s.endMs) found = s;
+  return found;
 }
 
 /** Overlay region in normalized viewport coords for smart framing (B05). */

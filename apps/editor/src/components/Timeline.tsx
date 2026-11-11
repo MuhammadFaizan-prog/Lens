@@ -21,9 +21,11 @@ import {
 import { Icon } from "./Icon";
 import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 import { clampLabelW, ui, useUi } from "../state/uiLayout";
+import { sceneLabel, withCameraForScenes } from "../state/sceneOps";
+import { webcamPanelState } from "../state/webcamPanel";
 
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500, scene: 3000 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
 const SLIDE_ROW_H = 18;
 const COLLAPSED_H = 30;
@@ -37,12 +39,13 @@ function m3dLabel(id: string, templates: Array<{ id: string; name: string; user?
   const bare = id.startsWith("user:") ? id.slice(5) : id;
   return `3D · ${templates.find((t) => t.id === bare && !!t.user === id.startsWith("user:"))?.name ?? bare}`;
 }
-const ADDABLE = ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "audio"];
+const ADDABLE = ["zoom", "cut", "speed", "scene", "motion3d", "mask", "annotation", "caption", "audio"];
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
   { kind: "takes", label: "Alt takes" },
   { kind: "speed", label: "Speed" },
+  { kind: "scene", label: "Scenes" },
   { kind: "motion3d", label: "3D" },
   { kind: "mask", label: "Masks" },
   { kind: "annotation", label: "Annotations" },
@@ -51,7 +54,7 @@ const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: st
 ];
 
 /** Lane id in TRACKS -> the block track it holds (takes hold none). */
-const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", motion3d: "motion3d", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
+const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", scene: "scene", motion3d: "motion3d", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
 const MARQUEE_PX = 4;
 
 type MenuState = { x: number; y: number; kind: "block" } | { x: number; y: number; kind: "lane"; track: TrackKind; label: string };
@@ -132,6 +135,7 @@ export function Timeline() {
   const plan = useEditor((s) => s.plan);
   const project = useEditor((s) => s.project);
   const bundle = useEditor((s) => s.bundle);
+  const hasCamera = webcamPanelState(bundle).hasCamera;
   const frame = useEditor((s) => s.frame);
   const selection = useEditor((s) => s.selection);
   const templates = useEditor((s) => s.motion3dTemplates);
@@ -641,7 +645,7 @@ export function Timeline() {
               {ADDABLE.includes(t.kind) && (
                 <button
                   className="mini-add"
-                  title={t.kind === "motion3d" ? "Add a 3D motion at playhead" : t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
+                  title={t.kind === "motion3d" ? "Add a 3D motion at playhead" : t.kind === "audio" ? "Add a volume segment at playhead" : t.kind === "scene" ? "Add a camera scene at playhead" : t.kind === "zoom" ? "Add a zoom at playhead, then click the preview to aim it (Z)" : `Add ${t.label.toLowerCase()} at playhead`}
                   aria-label={`Add ${t.kind}`}
                   data-testid={`add-${t.kind}`}
                   onClick={() => (t.kind === "zoom" ? addZoomAtPlayhead() : t.kind === "motion3d" ? store.addMotion3d() : create((t.kind === "audio" ? "volume" : t.kind) as TrackKind, store.get().plan?.frames[store.get().frame]?.src ?? 0))}
@@ -720,6 +724,11 @@ export function Timeline() {
             </div>
             <div className="lane" data-testid="lane-speed" onPointerDown={laneDown} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
+            </div>
+            <div className={`lane lane-scene ${project.camera.enabled ? "" : "off"}`} data-testid="lane-scene" onPointerDown={laneDown} onDoubleClick={(e) => create("scene", msOf(laneX(e.clientX)))}>
+              {project.camera.layouts.map((s, i) => block("scene", i, s, sceneLabel(s), `scene-${s.kind}`))}
+              {!project.camera.layouts.length && <span className="lane-hint">{hasCamera ? "Double-click or + to add a camera scene" : "No camera in this recording"}</span>}
+              {project.camera.layouts.length > 0 && !project.camera.enabled && <span className="lane-hint" style={{ left: "auto", right: 10 }} data-testid="scene-lane-off">Webcam off · scenes show when it is on</span>}
             </div>
             <div className="lane lane-motion3d" data-testid="lane-motion3d" onPointerDown={laneDown} onDoubleClick={(e) => store.addMotion3d("tilt-in", msOf(laneX(e.clientX)))}>
               {project.motion3d.map((m, i) => block("motion3d", i, m, m3dLabel(m.template, templates), m.hold ? "hold" : "", `block-motion3d-${m.id}`, {}, keyDiamonds(i, m)))}
@@ -885,7 +894,7 @@ export function createBlock(track: TrackKind, t: number): number {
     const range = { startMs: Math.round(r.startMs), endMs: Math.round(r.endMs) };
     let index = -1;
     store.edit(`Add ${track}`, (q) => {
-      const out = addBlock(q, track, range, bundle?.meta.width, bundle?.meta.height);
+      const out = addBlock(track === "scene" ? withCameraForScenes(q, webcamPanelState(bundle).hasCamera) : q, track, range, bundle?.meta.width, bundle?.meta.height);
       index = out.index;
       return track === "cut" ? normalizeCuts(out.project) : out.project;
     });

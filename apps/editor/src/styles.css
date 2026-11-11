@@ -17,6 +17,7 @@
   --cut: #ff7a85;
   --speed: #ffb84d;
   --m3d: #c38bff;
+  --scene: #4fd1a5;
   --mask: #b794ff;
   --caption: #5eead4;
   --audio: #5fd4a4;
@@ -315,6 +316,10 @@ select {
 .block-cut { background: var(--cut); }
 .block-speed { background: var(--speed); }
 .block-motion3d { background: var(--m3d); }
+.block-scene { background: var(--scene); color: #06261b; }
+.block-scene.scene-screen-only { background: repeating-linear-gradient(135deg, rgba(79, 209, 165, 0.75) 0 6px, rgba(79, 209, 165, 0.5) 6px 12px); }
+.dot-scene { background: var(--scene); }
+.lane-scene.off { opacity: 0.5; }
 .block-motion3d.hold { background: linear-gradient(90deg, var(--m3d) 0 85%, rgba(195, 139, 255, 0.55)); }
 .block-mask { background: var(--mask); }
 .block-caption { background: rgba(94, 234, 212, 0.16); box-shadow: inset 0 0 0 1px rgba(94, 234, 212, 0.45); cursor: pointer; }
@@ -876,3 +881,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* Camera scenes (demand #18): Webcam tab list and the selected scene's card */
+.cam-scenes { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.cam-scenes > .chip-btn { align-self: flex-start; }
+.scene-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.link-btn { background: none; border: 0; padding: 2px 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.link-btn:hover { color: var(--scene); text-decoration: underline; }
+.scene-card .note.warn .chip-btn { margin-left: 4px; }

@@ -6,16 +6,16 @@
  * Timeline blocks live in SOURCE time (recording ms), like the engine's project data. The
  * transport works in OUTPUT frames; plan frames map one to the other.
  */
-import { defaultSlide, mergeRanges, MOTION3D_TEMPLATES, normalizeAnnotation, segmentFromTemplate, type Motion3DTemplate, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment } from "@lens/engine";
+import { defaultSlide, mergeRanges, MOTION3D_TEMPLATES, normalizeAnnotation, segmentFromTemplate, type Motion3DTemplate, type ProjectConfig, type RenderPlan, type TimeRange, type ZoomSegment, type CameraLayoutSegment } from "@lens/engine";
 
-export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume" | "motion3d";
+export type TrackKind = "zoom" | "cut" | "speed" | "mask" | "annotation" | "slide" | "caption" | "volume" | "motion3d" | "scene";
 
 export interface Range {
   startMs: number;
   endMs: number;
 }
 
-export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200, motion3d: 200 };
+export const MIN_BLOCK_MS: Record<TrackKind, number> = { zoom: 300, cut: 50, speed: 200, mask: 200, annotation: 200, slide: 200, caption: 200, volume: 200, motion3d: 200, scene: 300 };
 
 /** Index into p.overrides of the i-th volume segment (overrides also hold cursor-only ranges). */
 export function volumeIndex(p: ProjectConfig, i: number): number {
@@ -117,6 +117,8 @@ export function blocksOf(p: ProjectConfig, track: TrackKind): Range[] {
       return p.overrides.filter((o) => o.volume !== undefined);
     case "motion3d":
       return p.motion3d;
+    case "scene":
+      return p.camera.layouts;
   }
 }
 
@@ -156,6 +158,8 @@ export function updateBlock(p: ProjectConfig, track: TrackKind, i: number, patch
     case "motion3d":
       // keyframes are fractions of the segment, so a move or a resize carries them along
       return { ...p, motion3d: p.motion3d.map((m, j) => (j === i ? { ...m, ...patch } : m)) };
+    case "scene":
+      return { ...p, camera: { ...p.camera, layouts: p.camera.layouts.map((s, j) => (j === i ? { ...s, ...patch } : s)) } };
   }
 }
 
@@ -185,6 +189,8 @@ export function deleteBlock(p: ProjectConfig, track: TrackKind, i: number): Proj
     }
     case "motion3d":
       return { ...p, motion3d: p.motion3d.filter((_, j) => j !== i) };
+    case "scene":
+      return { ...p, camera: { ...p.camera, layouts: p.camera.layouts.filter((_, j) => j !== i) } };
   }
 }
 
@@ -244,6 +250,12 @@ export function addBlock(p: ProjectConfig, track: TrackKind, r: Range, srcW = 19
       const m = { ...segmentFromTemplate(t, r.startMs, newId("m3d")), endMs: Math.round(r.endMs) };
       const motion3d = [...p.motion3d, m].sort((a, b) => a.startMs - b.startMs);
       return { project: { ...p, motion3d }, index: motion3d.indexOf(m) };
+    }
+    case "scene": {
+      // camera scenes (demand #18): a new scene shows the camera full frame (the common "talk to camera" cut)
+      const s: CameraLayoutSegment = { id: newId("scene"), startMs: r.startMs, endMs: r.endMs, kind: "fullscreen-camera" };
+      const layouts = [...p.camera.layouts, s].sort((a, b) => a.startMs - b.startMs);
+      return { project: { ...p, camera: { ...p.camera, layouts } }, index: layouts.indexOf(s) };
     }
   }
 }
@@ -507,6 +519,12 @@ export function duplicateBlocks(p: ProjectConfig, items: BlockRef[], durationMs:
           const m = { ...p.motion3d[i]!, ...r, id: newId("m3d") };
           q = { ...q, motion3d: [...q.motion3d, m].sort((a, b2) => a.startMs - b2.startMs) };
           obj = m;
+          break;
+        }
+        case "scene": {
+          const sc = { ...p.camera.layouts[i]!, ...r, id: newId("scene") };
+          q = { ...q, camera: { ...q.camera, layouts: [...q.camera.layouts, sc].sort((a, b2) => a.startMs - b2.startMs) } };
+          obj = sc;
           break;
         }
       }

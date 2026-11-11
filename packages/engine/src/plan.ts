@@ -236,7 +236,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     let layout = layoutAt(src, project.camera.layouts, out, sourceAspect, project);
     if (blend.length) {
       const b = sampleTrack(blend, src, (p, q, u) => ({ t: p.t + (q.t - p.t) * u, v: p.v + (q.v - p.v) * u })).v;
-      layout = scaleCameraRect(layout, 1 + (project.camera.zoomedSize - 1) * b, project.camera.corner, !!project.camera.position);
+      layout = scaleCameraRect(layout, 1 + (project.camera.zoomedSize - 1) * b, layout.corner ?? project.camera.corner, layout.corner ? false : !!project.camera.position);
     }
     if (fill && pan.length && (layout.kind === "screen-only" || layout.kind === "camera-overlay" || layout.kind === "camera-cutout")) {
       const p = sampleTrack(pan, src, (a, b, u) => ({ t: a.t + (b.t - a.t) * u, x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }));

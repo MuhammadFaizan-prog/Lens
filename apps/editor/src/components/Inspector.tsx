@@ -13,6 +13,7 @@ import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
+import { isPip, SCENE_CORNERS, SCENE_KINDS, SCENE_TRANSITION_MAX_MS, sceneLabel, setSceneCorner, setSceneKind, setSceneTransition, type SceneCorner } from "../state/sceneOps";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
@@ -98,6 +99,10 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   if (sel.track === "slide") {
     const s = project.slides[sel.index];
     return s ? <SlideCard index={sel.index} s={s} /> : null;
+  }
+  if (sel.track === "scene") {
+    const s = project.camera.layouts[sel.index];
+    return s ? <SceneCard index={sel.index} s={s} p={project} fps={fps} /> : null;
   }
   const idx = sel.track === "zoom" ? zoomIdx : sel.index;
   const tweak = (label: string, patch: Record<string, unknown>) => store.tweak(label, (p) => updateBlock(p, sel.track, idx, patch));
@@ -195,6 +200,63 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         </button>
       </div>
       {body}
+    </div>
+  );
+}
+
+/** A selected camera scene (demand #18): its layout, PiP corner and transition. */
+function SceneCard({ index, s, p, fps }: { index: number; s: ProjectConfig["camera"]["layouts"][number]; p: ProjectConfig; fps: number }) {
+  const hasCamera = webcamPanelState(useEditor((st) => st.bundle)).hasCamera;
+  const own = s.transitionMs !== undefined;
+  const tr = s.transitionMs ?? p.camera.transitionMs;
+  return (
+    <div className="selection-card scene-card" data-testid="scene-card">
+      <div className="sel-head">
+        <span className="dot dot-scene" />
+        <b>Camera scene</b>
+        <span className="sel-time">{timecode(s.startMs, fps)} – {timecode(s.endMs, fps)}</span>
+        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete selection" data-testid="delete-selection" onClick={() => deleteSelection()}>
+          <Icon name="trash" />
+        </button>
+      </div>
+      {!hasCamera && <p className="note warn" data-testid="scene-no-camera">No camera in this recording: scenes have nothing to show.</p>}
+      {hasCamera && !p.camera.enabled && (
+        <p className="note warn" data-testid="scene-cam-off">
+          Webcam is off, so scenes do not show.{" "}
+          <button className="chip-btn" data-testid="scene-cam-on" onClick={() => store.edit("Webcam on", (q) => ({ ...q, camera: { ...q.camera, enabled: true } }))}>Turn webcam on</button>
+        </p>
+      )}
+      <Segmented
+        label="Layout"
+        stacked
+        value={s.kind === "camera-cutout" ? "camera-overlay" : s.kind}
+        testId="scene-kind"
+        options={SCENE_KINDS}
+        onChange={(k) => store.edit(`Scene: ${SCENE_KINDS.find((x) => x.value === k)?.label ?? k}`, (q) => setSceneKind(q, index, k))}
+      />
+      {isPip(s.kind) && (
+        <Select<"" | SceneCorner>
+          label="Corner"
+          value={s.corner ?? ""}
+          testId="scene-corner"
+          options={[{ value: "", label: `Webcam tab (${SCENE_CORNERS.find((c) => c.value === p.camera.corner)?.label.toLowerCase() ?? p.camera.corner})` }, ...SCENE_CORNERS.map((c) => ({ value: c.value, label: c.label }))]}
+          onChange={(v) => store.edit("Scene corner", (q) => setSceneCorner(q, index, v || null))}
+        />
+      )}
+      <Slider
+        label="Transition"
+        value={tr}
+        min={0}
+        max={SCENE_TRANSITION_MAX_MS}
+        step={50}
+        defaultValue={p.camera.transitionMs}
+        format={(v) => `${(v / 1000).toFixed(2)} s`}
+        testId="scene-transition"
+        onChange={(v) => store.tweak("Scene transition", (q) => setSceneTransition(q, index, v))}
+      />
+      <p className="note" data-testid="scene-note">
+        {sceneLabel(s)}: the layout eases in over {(tr / 1000).toFixed(2)} s{own ? "" : " (the webcam default)"} and back out at the end. Drag the block's edges on the Scenes lane to change when.
+      </p>
     </div>
   );
 }
@@ -308,6 +370,25 @@ function CameraTab({ p }: { p: ProjectConfig }) {
       <Segmented label="Shape" stacked value={p.camera.shape} disabled={off} testId="cam-shape" options={WEBCAM_SHAPES} onChange={(v) => store.edit("Webcam shape", (q) => ({ ...q, camera: { ...q.camera, shape: v } }))} />
       <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
       <Slider defaultValue={D.camera.zoomedSize} label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
+      <div className="cam-scenes" data-testid="cam-scenes">
+        <div className="ctl-label">Scenes</div>
+        <p className="note">Switch to camera only, side by side or a picture-in-picture corner for part of the video. Scenes live on the timeline's Scenes lane.</p>
+        {p.camera.layouts.length > 0 && (
+          <ul className="scene-list">
+            {p.camera.layouts.map((s, i) => (
+              <li key={s.id ?? `${s.startMs}-${i}`}>
+                <button className="link-btn" data-testid={`cam-scene-${i}`} onClick={() => { store.select({ track: "scene", index: i }); store.seekSource(s.startMs); }}>
+                  {sceneLabel(s)} · {timecode(s.startMs, 30)}–{timecode(s.endMs, 30)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button className="chip-btn" disabled={off} data-testid="cam-add-scene" onClick={() => createBlock("scene", store.get().plan?.frames[store.get().frame]?.src ?? 0)}>
+          <Icon name="plus" size={12} /> Add scene at playhead
+        </button>
+        <Slider defaultValue={D.camera.transitionMs} label="Transition" value={p.camera.transitionMs} min={0} max={SCENE_TRANSITION_MAX_MS} step={50} format={(v) => `${(v / 1000).toFixed(2)} s`} disabled={off} testId="cam-transition" onChange={(v) => t("Scene transition default", () => ({ transitionMs: v }))} />
+      </div>
     </Section>
   );
 }
