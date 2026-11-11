@@ -46,6 +46,20 @@ function bundle(name: string): string {
   for (const f of ["screen.mp4", "meta.json", "project.json", "events.jsonl"]) fs.copyFileSync(path.join(SAMPLE, f), path.join(dir, f));
   return dir;
 }
+/** Copy an export out of the bundle's .lens-export (later exports / closing the editor may clean it up). */
+function keep(file: string, dir: string, name: string): string {
+  const out = path.join(dir, `${name}.mp4`);
+  fs.copyFileSync(file, out);
+  return out;
+}
+/** Decoded video frame count (ffprobe counts packets; first integer of its output). */
+function frameCount(file: string): number {
+  const r = spawnSync("ffprobe", ["-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets", "-of", "default=nw=1:nk=1", file], { encoding: "utf8" });
+  const m = /\d+/.exec(r.stdout);
+  const n = m ? Number(m[0]) : NaN;
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`could not count frames of ${file}: stdout ${JSON.stringify(r.stdout)} stderr ${r.stderr}`);
+  return n;
+}
 const truth = () => JSON.parse(fs.readFileSync(path.join(SAMPLE, "truth.json"), "utf8")) as { textBox: number[]; bars: number[][] };
 
 type Img = { w: number; h: number; rgb: Buffer };
@@ -145,7 +159,7 @@ test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview =
   const page = lens.page;
   const zoomN = 60; // source 2.0 s (no cuts: output = source)
   const flatN = 3;
-  const s = await page.evaluate(([a, b]) => { const fr = (window as any).__lens.store.get().plan.frames; return { zoomed: fr[a].cam[2], flat: fr[b].cam[2], n: fr.length, style: (window as any).__lens.store.get().plan.style }; }, [zoomN, flatN]);
+  const s = await page.evaluate(([a, b]: number[]) => { const fr = (window as any).__lens.store.get().plan.frames; return { zoomed: fr[a!].cam[2], flat: fr[b!].cam[2], n: fr.length, style: (window as any).__lens.store.get().plan.style }; }, [zoomN, flatN]);
   console.log("cam scale zoomed", s.zoomed, "flat", s.flat, "frames", s.n);
   expect(s.zoomed).toBeGreaterThan(2.4);
   expect(s.flat).toBeLessThanOrEqual(1.5);
@@ -153,7 +167,7 @@ test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview =
   const planOff = await page.evaluate(() => JSON.stringify((window as any).__lens.store.get().plan));
 
   // ---- export with sharpening off (the project as loaded)
-  const offFile = await exportMp4(page, dir, 600_000);
+  const offFile = keep(await exportMp4(page, dir, 600_000), dir, "export-off");
   await page.evaluate(() => (window as any).__lens.store.closeExport());
 
   // ---- UI: turn it on
@@ -172,7 +186,7 @@ test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview =
   expect(unavailable).toBe(0);
 
   const prevOn = await previewAt(page, zoomN);
-  const onFile = await exportMp4(page, dir, 600_000);
+  const onFile = keep(await exportMp4(page, dir, 600_000), dir, "export-on");
   const map = await mapper(page, zoomN);
 
   const on = exportFrame(onFile, zoomN), off = exportFrame(offFile, zoomN);
@@ -212,11 +226,17 @@ test("zoom sharpening: UI toggle, sharper zoomed text without ringing, preview =
   else process.env.LENS_E2E_BASE = prev;
   const mainPlan = await m.page.evaluate(() => JSON.stringify((window as any).__lens.store.get().plan));
   expect(mainPlan === planOff, "plan identical to main's").toBe(true);
-  const mainFile = await exportMp4(m.page, dir2, 600_000);
-  let worst = 0;
-  const frames = Number(spawnSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", offFile], { encoding: "utf8" }).stdout.trim());
-  for (let n = 0; n < frames; n += 5) worst = Math.max(worst, meanDiff(exportFrame(offFile, n), exportFrame(mainFile, n)));
-  console.log(`off export vs main export: ${frames} frames, worst mean |RGB| over every 5th ${worst.toFixed(3)}`);
+  const mainFile = keep(await exportMp4(m.page, dir2, 600_000), dir2, "export-main");
+  const frames = frameCount(offFile);
+  expect(frameCount(mainFile), "main export has the same frame count").toBe(frames);
+  expect(frames).toBe(s.n);
+  let worst = 0, compared = 0;
+  for (let n = 0; n < frames; n += 5) {
+    worst = Math.max(worst, meanDiff(exportFrame(offFile, n), exportFrame(mainFile, n)));
+    compared++;
+  }
+  console.log(`off export vs main export: ${frames} frames, ${compared} compared (every 5th), worst mean |RGB| ${worst.toFixed(3)}`);
+  expect(compared).toBe(Math.ceil(frames / 5));
   expect(worst).toBeLessThanOrEqual(MAIN_IDENTITY_MAX);
   await m.close();
 });

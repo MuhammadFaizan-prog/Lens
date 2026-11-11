@@ -106,7 +106,7 @@ describe("renderer zoom-sharpen hook", () => {
     await draw(pl, [60]);
     expect(ctor).toHaveBeenCalledTimes(1);
     expect(resample).toHaveBeenCalledTimes(1);
-    const [, ax, ay, w, h, sw, sh, amt] = resample.mock.calls[0]! as number[];
+    const [, ax, ay, w, h, sw, sh, amt] = resample.mock.calls[0]! as [unknown, number, number, number, number, number, number, number];
     const [cropX, cropY, srcW, srcH] = pl.source.crop;
     const [cx, cy, s] = f.cam;
     const { cardRect } = await import("../src/render/renderer");
