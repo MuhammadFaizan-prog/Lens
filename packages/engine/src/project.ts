@@ -23,6 +23,7 @@ import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 import type { CardTransform } from "./layout.js";
 import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
+import { validateExportTargets, validateFramingKeys, type ExportTargets, type FramingKey } from "./exportTargets.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -59,6 +60,11 @@ export interface ProjectConfig {
     framing?: "fit" | "fill" | "follow" | "custom";
     /** Custom framing window in source px (same space as crop); its aspect is locked to the canvas. */
     framingRect?: Rect | null;
+    /**
+     * Custom framing keyframes (demand #15, exportTargets.ts): the window animates between keys
+     * (source ms, recording clock). Absent / empty = the static framingRect, as before.
+     */
+    framingKeys?: FramingKey[];
   };
   background: {
     /** "hidden": no backdrop at all, the recording fills the frame (no padding, corners or shadow). */
@@ -260,6 +266,11 @@ export interface ProjectConfig {
   customFonts?: ProjectFont[];
   /** Interactive demo + step guide export (demand #7, docs/InteractiveDemo.md). */
   demo: DemoSettings;
+  /**
+   * Several export sizes from one project (demand #15, docs/MultiAspect.md): one target per shape,
+   * each with its own framing / crop keys; absent in older projects (one size, project.output).
+   */
+  exportTargets?: ExportTargets;
 }
 
 export type ZoomPresetName = "calm" | "default" | "punchy";
@@ -582,6 +593,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   if (p.output.framing !== undefined && !["fit", "fill", "follow", "custom"].includes(p.output.framing)) errs.push("output.framing must be fit, fill, follow or custom");
   const fr = p.output.framingRect;
   if (fr !== undefined && fr !== null && !(isPlainObject(fr) && [fr.x, fr.y, fr.w, fr.h].every(Number.isFinite) && fr.w > 0 && fr.h > 0)) errs.push("output.framingRect must be {x, y, w, h} source px with positive w and h");
+  errs.push(...validateFramingKeys(p.output.framingKeys));
+  errs.push(...validateExportTargets(p.exportTargets));
   const cp = p.camera.position;
   if (cp && !(Number.isFinite(cp.x) && Number.isFinite(cp.y))) errs.push("camera.position must be {x, y} fractions");
   for (const c of p.captions.cues ?? []) {
