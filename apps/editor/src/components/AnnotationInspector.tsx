@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { defaultAnimations, defaultAnnotationStyle, defaultSlide } from "@lens/engine";
 
 /** Slide defaults (the reset button of each slide slider). */
@@ -95,31 +96,68 @@ export function AnnotationCard({ a }: { a: Annotation }) {
 
 export function SlideCard({ index, s }: { index: number; s: TextSlide }) {
   const fps = useEditor((st) => st.plan?.output.fps ?? 30);
+  const brandOn = useEditor((st) => st.project.brand.enabled);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const kind = s.kind ?? "text";
+  const name = kind === "image" ? "Image" : kind === "freeze" ? "Freeze pause" : "Title card";
+  const branded = !!s.brand;
   return (
-    <div className="selection-card ann-card" data-testid="slide-card">
+    <div className="selection-card ann-card" data-testid="slide-card" data-kind={kind}>
       <div className="sel-head">
-        <span className="dot dot-slide" />
-        <b>Text slide</b>
+        <span className={`dot ${kind === "freeze" ? "dot-freeze" : "dot-slide"}`} />
+        <b>{name}</b>
         <span className="sel-time">at {timecode(s.atMs, fps)} · {(s.durationMs / 1000).toFixed(1)} s</span>
-        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete slide" data-testid="slide-delete" onClick={() => { store.edit("Delete text slide", (p) => ({ ...p, slides: p.slides.filter((_, i) => i !== index) })); store.select(null); }}>
+        <button className="icon-btn danger" title="Delete (Del)" aria-label="Delete slide" data-testid="slide-delete" onClick={() => { store.edit(`Delete ${name.toLowerCase()}`, (p) => ({ ...p, slides: p.slides.filter((_, i) => i !== index) })); store.select(null); }}>
           <Icon name="trash" />
         </button>
       </div>
-      <label className="row ann-text-row">
-        <span className="row-label">Title</span>
-        <input className="ann-text-input" value={s.title} data-testid="slide-title" onChange={(e) => store.updateSlide(index, { title: e.target.value }, true)} />
-      </label>
-      <label className="row ann-text-row">
-        <span className="row-label">Subtitle</span>
-        <input className="ann-text-input" value={s.subtitle} data-testid="slide-subtitle" onChange={(e) => store.updateSlide(index, { subtitle: e.target.value }, true)} />
-      </label>
-      <Slider defaultValue={DS.durationMs} label="Duration" value={s.durationMs} min={500} max={8000} step={100} format={(v) => `${(v / 1000).toFixed(1)} s`} testId="slide-duration" onChange={(v) => store.updateSlide(index, { durationMs: v }, true)} />
-      <Slider defaultValue={DS.fadeMs} label="Cross-fade" value={s.fadeMs} min={0} max={1000} step={50} format={ms} onChange={(v) => store.updateSlide(index, { fadeMs: v }, true)} />
-      <ColorInput label="Background" value={s.background} onChange={(v) => store.updateSlide(index, { background: v }, true)} />
-      <ColorInput label="Text" value={s.textColor} onChange={(v) => store.updateSlide(index, { textColor: v }, true)} />
-      <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "@primary" : null })} />
-      <Segmented label="Size" value={s.titleSize >= 96 ? "l" : s.titleSize <= 64 ? "s" : "m"} options={[{ value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }]}
-        onChange={(v) => store.updateSlide(index, { titleSize: v === "s" ? 60 : v === "m" ? 84 : 110 })} />
+      {kind === "freeze" && <p className="note">The whole video stops on this frame for the length below, silent; everything after it plays later. To keep the sound going over a still screen, use a Freeze block instead.</p>}
+      {kind === "image" && (
+        <>
+          <div className="row slide-image-row">
+            <span className="row-label">Picture</span>
+            <span className="slide-image-name" title={s.image?.path ?? ""}>{s.image?.path?.split("/").pop() ?? "none"}</span>
+            <button className="chip-btn" data-testid="slide-image-replace" onClick={() => imageInput.current?.click()}>Replace…</button>
+            <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp" hidden data-testid="slide-image-input"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void store.replaceSlideImage(index, f); e.target.value = ""; }} />
+          </div>
+          <Segmented label="Fit" value={s.image?.fit ?? "contain"} testId="slide-image-fit"
+            options={[{ value: "contain", label: "Fit", hint: "The whole picture on the slide background" }, { value: "cover", label: "Fill", hint: "Fill the frame; edges may be cropped" }]}
+            onChange={(v) => s.image && store.updateSlide(index, { image: { ...s.image, fit: v } })} />
+        </>
+      )}
+      {kind !== "freeze" && (
+        <>
+          <label className="row ann-text-row">
+            <span className="row-label">{kind === "image" ? "Caption" : "Title"}</span>
+            <input className="ann-text-input" value={s.title} placeholder={kind === "image" ? "optional" : ""} data-testid="slide-title" onChange={(e) => store.updateSlide(index, { title: e.target.value }, true)} />
+          </label>
+          <label className="row ann-text-row">
+            <span className="row-label">Subtitle</span>
+            <input className="ann-text-input" value={s.subtitle} placeholder={kind === "image" ? "optional" : ""} data-testid="slide-subtitle" onChange={(e) => store.updateSlide(index, { subtitle: e.target.value }, true)} />
+          </label>
+        </>
+      )}
+      <Slider defaultValue={kind === "image" ? 3000 : DS.durationMs} label="Duration" value={s.durationMs} min={kind === "freeze" ? 200 : 500} max={kind === "freeze" ? 10000 : 8000} step={100} format={(v) => `${(v / 1000).toFixed(1)} s`} testId="slide-duration" onChange={(v) => store.updateSlide(index, { durationMs: v }, true)} />
+      {kind !== "freeze" && (
+        <>
+          <Slider defaultValue={DS.fadeMs} label="Cross-fade" value={s.fadeMs} min={0} max={1000} step={50} format={ms} onChange={(v) => store.updateSlide(index, { fadeMs: v }, true)} />
+          <Toggle label="Brand kit look" value={branded} testId="slide-brand" disabled={!brandOn && !branded}
+            hint={brandOn ? "Theme backdrop, brand font, primary accent and logo; follows brand changes" : "Turn on the brand kit (Brand panel) to use its look"}
+            onChange={(v) => store.updateSlide(index, { brand: v || undefined })} />
+          {!branded && (
+            <>
+              <ColorInput label="Background" value={s.background} onChange={(v) => store.updateSlide(index, { background: v }, true)} />
+              <ColorInput label="Text" value={s.textColor} onChange={(v) => store.updateSlide(index, { textColor: v }, true)} />
+            </>
+          )}
+          {kind === "text" && !branded && <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "@primary" : null })} />}
+          {kind === "text" && (
+            <Segmented label="Size" value={s.titleSize >= 96 ? "l" : s.titleSize <= 64 ? "s" : "m"} options={[{ value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }]}
+              onChange={(v) => store.updateSlide(index, { titleSize: v === "s" ? 60 : v === "m" ? 84 : 110 })} />
+          )}
+        </>
+      )}
     </div>
   );
 }

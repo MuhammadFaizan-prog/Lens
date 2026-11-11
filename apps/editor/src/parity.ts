@@ -3,7 +3,7 @@
  * same engine and draws chosen frames with the live renderer, so the test can compare them with
  * compositor/render.py output for the very same plan.
  */
-import type { RenderPlan } from "@lens/engine";
+import { videoTime, type RenderPlan } from "@lens/engine";
 import { FrameStore } from "./media/frames";
 import { PlanRenderer } from "./render/renderer";
 import { buildPlan, fetchBundle, fetchSilences, loadCaptionFont } from "./state/bundle";
@@ -43,7 +43,7 @@ window.lensParity = {
   async render(i: number) {
     await ready;
     const f = plan.frames[i]!;
-    const [s, c] = await Promise.all([screen.load(screen.indexAt(f.src)), cam ? cam.load(cam.indexAt(f.src)) : Promise.resolve(null)]);
+    const [s, c] = await Promise.all([screen.load(screen.indexAt(videoTime(f))), cam ? cam.load(cam.indexAt(f.src)) : Promise.resolve(null)]);
     const g = canvas.getContext("2d")!;
     renderer.draw(g, plan, i, { screen: s, cam: c });
     return canvas.toDataURL("image/png");

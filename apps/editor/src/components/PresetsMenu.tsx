@@ -5,7 +5,7 @@
  * default-for-new-projects.
  */
 import { useEffect, useRef, useState } from "react";
-import { applyPreset, buildRenderPlan, PRESET_SECTIONS, resolveProject, SECTION_LABELS, type Preset, type PresetSection } from "@lens/engine";
+import { applyPreset, buildRenderPlan, videoTime, PRESET_SECTIONS, resolveProject, SECTION_LABELS, type Preset, type PresetSection } from "@lens/engine";
 import { ensurePlanAssets } from "../render/assets";
 import { PlanRenderer } from "../render/renderer";
 import { makeCanvas } from "../render/canvas";
@@ -28,7 +28,7 @@ async function renderThumb(canvas: HTMLCanvasElement, preset: Preset): Promise<b
   const plan = buildRenderPlan({ meta: b.meta, events: b.events, project, words: b.transcript?.words ?? [], pauses: planPauses(b), onlyFrames: [i] });
   await ensurePlanAssets(plan);
   const f = plan.frames[0]!;
-  const scr = await store.screen.load(store.screen.indexAt(f.src));
+  const scr = await store.screen.load(store.screen.indexAt(videoTime(f)));
   const wantCam = !!(store.cam && f.layout.camera && f.layout.cameraOpacity > 0);
   const cam = wantCam ? await store.cam!.load(store.cam!.indexAt(f.src)) : null;
   const { width: W, height: H } = plan.output;

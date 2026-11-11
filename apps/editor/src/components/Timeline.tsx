@@ -23,10 +23,21 @@ import { labelWidth, packLane, ROW_GAP, ROW_H } from "../state/laneLayout";
 import { clampLabelW, ui, useUi } from "../state/uiLayout";
 
 const SNAP_PX = 8;
-const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500 };
+const DEFAULT_LEN: Record<TrackKind, number> = { zoom: 2000, cut: 800, speed: 1500, freeze: 2000, mask: 2000, annotation: 3000, slide: 0, caption: 2000, volume: 2000, motion3d: 1500 };
 const ANN_EXPANDED_KEY = "lens.timeline.annotationsExpanded";
 const SLIDE_ROW_H = 18;
 const COLLAPSED_H = 30;
+
+/** What an inserted clip is called (demand #20: title card, image, freeze pause). */
+export function slideKindName(kind: string | undefined): string {
+  return kind === "image" ? "Image" : kind === "freeze" ? "Freeze pause" : "Title card";
+}
+/** Label on a slide marker: the title, else the clip kind. */
+function slideMarkerLabel(sl: { kind?: string; title: string }): string {
+  if (sl.kind === "freeze") return "❚❚ Pause";
+  if (sl.kind === "image") return sl.title.trim() ? `▣ ${sl.title}` : "▣ Image";
+  return sl.title;
+}
 
 /** Label of an annotation block on the lane. */
 function annLabel(a: { stepId?: string; text?: string; kind: string }): string {
@@ -37,12 +48,13 @@ function m3dLabel(id: string, templates: Array<{ id: string; name: string; user?
   const bare = id.startsWith("user:") ? id.slice(5) : id;
   return `3D · ${templates.find((t) => t.id === bare && !!t.user === id.startsWith("user:"))?.name ?? bare}`;
 }
-const ADDABLE = ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "audio"];
+const ADDABLE = ["zoom", "cut", "speed", "freeze", "motion3d", "mask", "annotation", "caption", "audio"];
 const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: string }> = [
   { kind: "zoom", label: "Zoom" },
   { kind: "cut", label: "Cuts" },
   { kind: "takes", label: "Alt takes" },
   { kind: "speed", label: "Speed" },
+  { kind: "freeze", label: "Freeze" },
   { kind: "motion3d", label: "3D" },
   { kind: "mask", label: "Masks" },
   { kind: "annotation", label: "Annotations" },
@@ -51,7 +63,7 @@ const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: st
 ];
 
 /** Lane id in TRACKS -> the block track it holds (takes hold none). */
-const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", motion3d: "motion3d", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
+const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", freeze: "freeze", motion3d: "motion3d", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
 const MARQUEE_PX = 4;
 
 type MenuState = { x: number; y: number; kind: "block" } | { x: number; y: number; kind: "lane"; track: TrackKind; label: string };
@@ -210,7 +222,7 @@ export function Timeline() {
 
   const snapTargets = (exclude: { track: TrackKind; index: number } | null, group?: Set<string>): number[] => {
     const t: number[] = [0, duration, playSrc];
-    for (const k of ["zoom", "cut", "speed", "motion3d", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
+    for (const k of ["zoom", "cut", "speed", "freeze", "motion3d", "mask", "annotation", "caption", "volume"] as TrackKind[]) {
       blocksOf(store.get().project, k).forEach((b, i) => {
         if (exclude && exclude.track === k && exclude.index === i) return;
         if (group?.has(`${k}:${i}`)) return;
@@ -468,7 +480,7 @@ export function Timeline() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      store.endGesture("Move text slide");
+      store.endGesture("Move inserted clip");
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -721,6 +733,10 @@ export function Timeline() {
             <div className="lane" data-testid="lane-speed" onPointerDown={laneDown} onDoubleClick={(e) => create("speed", msOf(laneX(e.clientX)))}>
               {project.edits.speed.map((s, i) => block("speed", i, s, `${s.rate}×`))}
             </div>
+            <div className="lane lane-freeze" data-testid="lane-freeze" onPointerDown={laneDown} onDoubleClick={(e) => create("freeze", msOf(laneX(e.clientX)))}>
+              {(project.freezes ?? []).map((f, i) => block("freeze", i, f, f.cursor === "hide" ? "Freeze · no cursor" : "Freeze", "", `block-freeze-${i}`))}
+              {!(project.freezes ?? []).length && <span className="lane-hint">Hold the screen still while you talk · double-click or +</span>}
+            </div>
             <div className="lane lane-motion3d" data-testid="lane-motion3d" onPointerDown={laneDown} onDoubleClick={(e) => store.addMotion3d("tilt-in", msOf(laneX(e.clientX)))}>
               {project.motion3d.map((m, i) => block("motion3d", i, m, m3dLabel(m.template, templates), m.hold ? "hold" : "", `block-motion3d-${m.id}`, {}, keyDiamonds(i, m)))}
             </div>
@@ -746,16 +762,16 @@ export function Timeline() {
               {project.slides.map((sl, i) => (
                 <div
                   key={`slide-${sl.id}`}
-                  className={`slide-marker ${isSel("slide", i) || (selection?.track === "slide" && selection.index === i) ? "selected" : ""}`}
+                  className={`slide-marker kind-${sl.kind ?? "text"} ${isSel("slide", i) || (selection?.track === "slide" && selection.index === i) ? "selected" : ""}`}
                   style={{ left: xOf(sl.atMs) }}
                   data-sel-track="slide"
                   data-sel-index={i}
                   onContextMenu={(e) => openBlockMenu(e, "slide", i)}
                   data-testid={`slide-marker-${sl.id}`}
-                  title={`Text slide “${sl.title}” · ${(sl.durationMs / 1000).toFixed(1)} s · inserted at ${timecode(sl.atMs, fps)}`}
+                  title={`${slideKindName(sl.kind)}${sl.title ? ` “${sl.title}”` : ""} · ${(sl.durationMs / 1000).toFixed(1)} s · inserted at ${timecode(sl.atMs, fps)}`}
                   onPointerDown={(e) => startSlideDrag(e, i, sl.atMs)}
                 >
-                  <span>{sl.title}</span>
+                  <span>{slideMarkerLabel(sl)}</span>
                 </div>
               ))}
             </div>

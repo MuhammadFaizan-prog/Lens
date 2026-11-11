@@ -812,7 +812,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     frames = plan["frames"][: opts.max_frames] if opts.max_frames else plan["frames"]
     prev_cur = None
     for fi, f in enumerate(frames):
-        src_frame = screen.at(f["src"])
+        src_frame = screen.at(f.get("vid", f["src"]))  # a freeze frame (demand #20) holds the screen picture
         if cropped:
             src_frame = np.ascontiguousarray(src_frame[crop_y:crop_y + src_h, crop_x:crop_x + src_w])
         sx, sy, sw, sh = (int(round(v)) for v in f["layout"]["screen"])

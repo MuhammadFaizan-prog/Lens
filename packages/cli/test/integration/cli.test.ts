@@ -64,6 +64,10 @@ describe("project", () => {
     const info = ok(["project", "info", P]);
     expect(info.output).toMatchObject({ width: 640, height: 360, fps: 30, frames: 300 });
     expect(shape(info)).toMatchSnapshot();
+    expect(info.freezes).toEqual({ holds: 0, holdMs: 0, pauses: 0, images: 0 });
+    ok(["set", "/freezes", JSON.stringify([{ id: "f1", startMs: 1000, endMs: 2500, cursor: "live" }]), "--create", "-C", P]);
+    expect(ok(["project", "info", P]).freezes).toEqual({ holds: 1, holdMs: 1500, pauses: 0, images: 0 });
+    ok(["set", "/freezes", "[]", "-C", P]);
     fails(["project", "open", dir], 3, "not_found");
     fails(["project", "info", path.join(dir, "nope")], 3, "not_found");
   });
