@@ -119,8 +119,11 @@ test("voiceover: import + per-line record through the UI; onset ±50 ms and leve
 
   // ---- gain -6 dB in the Audio tab
   const g = page.getByTestId("vo-gain-value");
-  await g.fill("-6");
-  await g.press("Enter");
+  await g.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.type("-6");
+  await expect(g).toHaveValue("-6");
+  await page.keyboard.press("Enter");
   await page.waitForTimeout(600);
   expect(await page.evaluate(() => (window as any).__lens.store.get().project.voiceover.clips[0].gainDb)).toBe(-6);
   const p1 = await previewAudio(page, 3000);

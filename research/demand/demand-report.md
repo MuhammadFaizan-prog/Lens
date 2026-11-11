@@ -431,6 +431,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Size:** S–M. **Test:** Measure task time for replacing a fumbled sentence against re-recording the take.
 
+**Status (2026-11-11): built, first version (branch feat/voiceover-015, not merged).** Voiceover lane and Audio-tab Voiceover section: import WAV / MP3 / M4A / OGG / Opus / WebM / FLAC, record a take per transcript line ("re-record this sentence") or at the playhead with the original sound muted while you speak, move / trim / gain / mute per clip, mute the original under a clip; clips follow cuts, play at normal speed and are mixed after denoise / loudness in the preview, the browser export (desktop, no Python) and the Python compositor (see `docs/Voiceover.md`). Measured (Playwright, browser export, fake microphone): onset preview 400.0 / export 400.0 ms vs 400 expected (bound ±50), recorded take onset export vs preview 0.0 ms apart, export vs preview level Δ 0.01 dB and 0.00 dB (bound 2 dB), -6 dB gain measured 6.00 dB. Not done: auto speed-fit of the video to the narration, waveforms inside clips, a real-microphone test, the task-time test, Windows / macOS.
+
 ---
 
 ## 18. Camera scenes: camera-only cuts, hide-when-silent, move/resize in post — 108 · S–M
