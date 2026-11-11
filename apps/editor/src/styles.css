@@ -312,7 +312,7 @@ select {
 .block:hover .handle, .block.selected .handle { background: rgba(255, 255, 255, 0.28); }
 .block-zoom { background: var(--zoom); }
 .block-zoom.auto { background: repeating-linear-gradient(135deg, rgba(110, 168, 255, 0.85) 0 6px, rgba(110, 168, 255, 0.68) 6px 12px); }
-.block-cut { background: var(--cut); }
+.block-cut { background: var(--cut); overflow: visible; }
 .block-speed { background: var(--speed); }
 .block-motion3d { background: var(--m3d); }
 .block-motion3d.hold { background: linear-gradient(90deg, var(--m3d) 0 85%, rgba(195, 139, 255, 0.55)); }
@@ -876,3 +876,12 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* cut transitions (demand #14): the chip on each cut block opens the transition picker */
+.block-cut .tr-chip { position: absolute; right: -9px; top: 50%; transform: translateY(-50%); z-index: 3; width: 18px; height: 18px; padding: 0; border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel-2, #1a1f27); color: var(--text); font-size: 11px; line-height: 16px; text-align: center; cursor: pointer; }
+.block-cut .tr-chip.off { opacity: 0.55; }
+.block-cut .tr-chip.own { border-color: var(--accent, #4f6bff); }
+.block-cut .tr-chip:hover { opacity: 1; background: var(--panel-3); }
+.tl-menu .tl-menu-title { padding: 4px 10px 6px; font-size: 11px; color: var(--muted); }
+.tl-menu button.on { background: var(--panel-3); }
+.tl-menu .tr-glyph { display: inline-block; width: 16px; text-align: center; }

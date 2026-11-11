@@ -37,7 +37,19 @@ export async function drawPlanFrame(renderer: PlanRenderer, g: CanvasRenderingCo
   if (!scr || (wantCam && !cam)) {
     [scr, cam] = await Promise.all([scr ?? store.screen.load(si), wantCam ? cam ?? store.cam!.load(ci) : Promise.resolve(null)]);
   }
-  renderer.draw(g, framingPlan ? withFramingEdit(plan, i) : editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null });
+  // a cut transition (demand #14) also needs the images of the other side of the join
+  const of = f.tr ? plan.frames[f.tr.other] : undefined;
+  let other: { screen: CanvasImageSource | null; cam: CanvasImageSource | null } | null = null;
+  if (of) {
+    const osi = store.screen.indexAt(of.src);
+    const oWantCam = !!(store.cam && of.layout.camera && of.layout.cameraOpacity > 0);
+    const oci = oWantCam ? store.cam!.indexAt(of.src) : -1;
+    let os = store.screen.peek(osi);
+    let oc = oWantCam ? store.cam!.peek(oci) : null;
+    if (!os || (oWantCam && !oc)) [os, oc] = await Promise.all([os ?? store.screen.load(osi), oWantCam ? oc ?? store.cam!.load(oci) : Promise.resolve(null)]);
+    other = { screen: os ?? null, cam: oc ?? null };
+  }
+  renderer.draw(g, framingPlan ? withFramingEdit(plan, i) : editPlan ? withZoomEdit(plan, i) : plan, i, { screen: scr ?? null, cam: cam ?? null }, other);
   // time from page start to the first real source frame on screen (window.__lens.state().firstPaintMs)
   if (scr && store.firstPaintMs == null) store.firstPaintMs = Math.round(performance.now());
   return true;

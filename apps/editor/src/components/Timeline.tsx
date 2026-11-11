@@ -1,3 +1,5 @@
+import { CUT_TRANSITION_KINDS, type CutTransitionKind } from "@lens/engine";
+import { effectiveCutTransition, projectTransitions, setCutTransition, TRANSITION_GLYPH, TRANSITION_LABELS } from "../state/transitionOps";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { applyWordEdits, captionBlocks, captionWords, mergeCaptionCues, type Motion3DSegment } from "@lens/engine";
 import { keyAt, keyCount, mapSegment, setKeyAt } from "../state/motion3dOps";
@@ -54,7 +56,7 @@ const TRACKS: Array<{ kind: TrackKind | "caption" | "audio" | "takes"; label: st
 const LANE_TRACK: Record<string, TrackKind | undefined> = { zoom: "zoom", cut: "cut", speed: "speed", motion3d: "motion3d", mask: "mask", annotation: "annotation", caption: "caption", audio: "volume" };
 const MARQUEE_PX = 4;
 
-type MenuState = { x: number; y: number; kind: "block" } | { x: number; y: number; kind: "lane"; track: TrackKind; label: string };
+type MenuState = { x: number; y: number; kind: "block" } | { x: number; y: number; kind: "lane"; track: TrackKind; label: string } | { x: number; y: number; kind: "transition"; index: number };
 
 /** True when keyboard focus is inside the timeline (arrow keys nudge, Ctrl+A selects all). */
 export function timelineHasFocus(): boolean {
@@ -671,7 +673,29 @@ export function Timeline() {
               {(plan?.cleanupCuts ?? []).map((c, i) => (
                 <div key={`cl-${i}`} className="block block-cleanup" style={{ left: xOf(c.startMs), width: Math.max(3, xOf(c.endMs) - xOf(c.startMs)) }} title="Cleanup cut (fillers / pauses)" />
               ))}
-              {project.edits.cuts.map((c, i) => block("cut", i, c, "cut"))}
+              {project.edits.cuts.map((c, i) => {
+                // transition at this cut (demand #14): the chip opens the picker
+                const tr = effectiveCutTransition(project, i);
+                return block("cut", i, c, "cut", "", undefined, {}, (
+                  <button
+                    className={`tr-chip ${tr.kind === "none" ? "off" : ""} ${tr.own ? "own" : ""}`}
+                    data-testid={`cut-tr-${i}`}
+                    data-kind={tr.kind}
+                    title={`Transition at this cut: ${TRANSITION_LABELS[tr.kind]}${tr.kind !== "none" ? ` · ${(tr.durationMs / 1000).toFixed(2)} s` : ""}${tr.own ? "" : " (project default)"} · click to change`}
+                    aria-label="Cut transition"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      store.setSelection([{ track: "cut", index: i }]);
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setMenu({ x: r.left, y: r.bottom + 4, kind: "transition", index: i });
+                    }}
+                  >
+                    {TRANSITION_GLYPH[tr.kind]}
+                  </button>
+                ));
+              })}
             </div>
             <div className={`lane lane-takes ${project.edits.takes.enabled ? "" : "off"}`} data-testid="lane-takes" onPointerDown={laneDown}>
               {(plan?.takes ?? []).map((g, gi) => (
@@ -801,7 +825,31 @@ export function Timeline() {
       </div>
       {menu && (
         <div className="tl-menu" role="menu" data-testid={menu.kind === "block" ? "block-menu" : "lane-menu"} style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
-          {menu.kind === "block" ? (
+          {menu.kind === "transition" ? (
+            <>
+              <div className="tl-menu-title">Transition at this cut</div>
+              {(() => {
+                const cur = project.edits.cuts[menu.index]?.transition?.kind;
+                const def = projectTransitions(project).kind;
+                const pick = (v: CutTransitionKind | null) => {
+                  setMenu(null);
+                  store.edit(v === null ? "Cut transition: project default" : `Cut transition: ${TRANSITION_LABELS[v]}`, (q) => setCutTransition(q, menu.index, v === null ? null : { kind: v }));
+                };
+                return (
+                  <>
+                    <button role="menuitemradio" aria-checked={cur === undefined} className={cur === undefined ? "on" : ""} data-testid="cut-tr-opt-default" onClick={() => pick(null)}>
+                      Project default ({TRANSITION_LABELS[def]})
+                    </button>
+                    {CUT_TRANSITION_KINDS.map((k) => (
+                      <button key={k} role="menuitemradio" aria-checked={cur === k} className={cur === k ? "on" : ""} data-testid={`cut-tr-opt-${k}`} onClick={() => pick(k)}>
+                        <span className="tr-glyph">{TRANSITION_GLYPH[k]}</span> {TRANSITION_LABELS[k]}
+                      </button>
+                    ))}
+                  </>
+                );
+              })()}
+            </>
+          ) : menu.kind === "block" ? (
             <>
               <button role="menuitem" data-testid="block-menu-duplicate" onClick={() => { setMenu(null); store.duplicateSelected(); }}>
                 Duplicate{multi.length > 1 ? ` ${multi.length}` : ""}

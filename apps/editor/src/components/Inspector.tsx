@@ -13,6 +13,7 @@ import { FramingTiles, ScreenSection } from "./ScreenSection";
 import { Motion3dTab } from "./Motion3dInspector";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { webcamPanelState } from "../state/webcamPanel";
+import { CameraAnimSection, CutTransitionControls, TransitionsSection } from "./TransitionControls";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
@@ -179,6 +180,7 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
     const c = project.edits.cuts[sel.index];
     if (!c) return null;
     range = c;
+    body = <CutTransitionControls p={project} index={sel.index} />;
   }
   return (
     <div className="selection-card" data-testid="selection-card">
@@ -221,6 +223,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
         <AspectRow />
         <FramingTiles idPrefix="out-framing" tilesOnly />
       </Section>
+      <TransitionsSection p={p} />
     </>
   );
 }
@@ -294,6 +297,7 @@ function CameraTab({ p }: { p: ProjectConfig }) {
   const off = ui.controlsDisabled;
   const t = (label: string, fn: (c: ProjectConfig["camera"]) => Partial<ProjectConfig["camera"]>) => store.tweak(label, (q) => ({ ...q, camera: { ...q.camera, ...fn(q.camera) } }));
   return (
+    <>
     <Section title="Webcam" aside={off ? <span className="stat" data-testid="cam-none-stat">no camera</span> : undefined}>
       {ui.empty && (
         <div className="cam-empty" data-testid="cam-empty" role="note">
@@ -309,6 +313,8 @@ function CameraTab({ p }: { p: ProjectConfig }) {
       <Toggle label="Mirror" value={p.camera.mirror} disabled={off} testId="cam-mirror" onChange={(v) => store.edit("Webcam mirror", (q) => ({ ...q, camera: { ...q.camera, mirror: v } }))} />
       <Slider defaultValue={D.camera.zoomedSize} label="Zoomed size" value={p.camera.zoomedSize} min={0.3} max={1} step={0.05} format={pct} disabled={off} testId="cam-shrink" onChange={(v) => t("Webcam shrink", () => ({ zoomedSize: v }))} />
     </Section>
+    {!off && <CameraAnimSection p={p} />}
+    </>
   );
 }
 

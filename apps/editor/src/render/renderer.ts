@@ -17,6 +17,7 @@
  * Every motion decision comes from the plan; this file only draws. Known, intentional differences
  * from the reference are listed in docs/Editor.md ("Preview vs export").
  */
+import { transitionLayers } from "@lens/engine";
 import { boxHighlightText, captionEffects, captionLook, captionMotion, captionStrokePx, cardOutline, hasArabicScript, type Motion3DFrame, type PlanFrame, type RenderPlan } from "@lens/engine";
 import { CARD_PAD, Gl3dPass } from "./gl3d";
 import { makeCanvas, type AnyCanvas } from "./canvas";
@@ -116,8 +117,59 @@ export class PlanRenderer {
   private view: AnyCanvas | null = null;
   private tmp: AnyCanvas | null = null;
 
-  /** Draw output frame `index` of `plan` into g (sized plan.output.width x height). */
-  draw(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages): void {
+  private trA: AnyCanvas | null = null;
+  private trB: AnyCanvas | null = null;
+
+  /**
+   * Draw output frame `index` of `plan` into g (sized plan.output.width x height). A frame near a cut
+   * join (plan frame `tr`, demand #14) is two frames composited: this one and the other side of the
+   * join (frame tr.other, held still), whose source images are `other`.
+   */
+  draw(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages, other?: FrameImages | null): void {
+    const f = plan.frames[Math.max(0, Math.min(plan.frames.length - 1, index))];
+    const tr = f?.tr;
+    if (!f || !tr || !plan.frames[tr.other]) return this.drawOne(g, plan, index, imgs);
+    const { width: W, height: H } = plan.output;
+    if (!this.trA || this.trA.width !== W || this.trA.height !== H) this.trA = makeCanvas(W, H);
+    if (!this.trB || this.trB.width !== W || this.trB.height !== H) this.trB = makeCanvas(W, H);
+    const self = this.trA;
+    const oth = this.trB;
+    this.drawOne(ctx2d(oth), plan, tr.other, other ?? { screen: null, cam: null });
+    this.drawOne(ctx2d(self), plan, index, imgs);
+    // A = outgoing (before the join), B = incoming; B is drawn over A
+    const [A, B] = tr.incoming ? [oth, self] : [self, oth];
+    const L = transitionLayers(tr.kind, tr.u);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalCompositeOperation = "source-over";
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
+    g.globalAlpha = 1;
+    g.fillStyle = "#000000";
+    g.fillRect(0, 0, W, H);
+    const short = Math.min(W, H);
+    const layer = (c: AnyCanvas, l: { alpha: number; scale: number; dx: number; blur: number }) => {
+      if (l.alpha <= 0) return;
+      g.save();
+      g.globalAlpha = Math.min(1, l.alpha);
+      g.translate(W / 2 + l.dx * W, H / 2);
+      g.scale(l.scale, l.scale);
+      g.translate(-W / 2, -H / 2);
+      const sigma = l.blur * short;
+      if (sigma > 0.05) {
+        // the blur fades the layer's edges to transparent: the sharp layer underneath fills them
+        g.drawImage(c as CanvasImageSource, 0, 0);
+        g.filter = `blur(${sigma.toFixed(2)}px)`;
+      }
+      g.drawImage(c as CanvasImageSource, 0, 0);
+      g.restore();
+    };
+    layer(A, L.a);
+    layer(B, L.b);
+    g.restore();
+  }
+
+  private drawOne(g: Canvas2D, plan: RenderPlan, index: number, imgs: FrameImages): void {
     const f = plan.frames[Math.max(0, Math.min(plan.frames.length - 1, index))];
     if (!f) return;
     const prev = index > 0 ? plan.frames[index - 1] ?? null : null;
@@ -231,7 +283,19 @@ export class PlanRenderer {
     }
 
     // 10. text slide over everything
-    if (f.slide) drawItems(g, W, H, [{ ops: f.slide.ops, opacity: f.slide.opacity, shadow: null }], (x, y) => [x, y], 1, 1, { background: this.background(plan) as CanvasImageSource });
+    if (f.slide) {
+      const fx = f.slide.fx;
+      if (fx) {
+        // enter / exit transform (demand #14): offset, scale about the centre, blur
+        g.save();
+        g.translate(W / 2 + fx[0], H / 2 + fx[1]);
+        g.scale(fx[2], fx[2]);
+        g.translate(-W / 2, -H / 2);
+        if (fx[3] > 0.05) g.filter = `blur(${fx[3].toFixed(2)}px)`;
+      }
+      drawItems(g, W, H, [{ ops: f.slide.ops, opacity: f.slide.opacity, shadow: null }], (x, y) => [x, y], 1, 1, { background: this.background(plan) as CanvasImageSource });
+      if (fx) g.restore();
+    }
     g.restore();
   }
 

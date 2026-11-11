@@ -7,6 +7,17 @@ import { store, useEditor } from "../state/store";
 import { timecode } from "../state/timelineOps";
 import { ColorInput, Segmented, Select, Slider, Toggle } from "./Controls";
 import { Icon } from "./Icon";
+import { EASINGS, type Easing } from "@lens/engine";
+import { EASING_LABELS } from "../state/transitionOps";
+import { SlideAnimPickers } from "./TransitionControls";
+
+type EaseOpt = Easing | "default";
+const EASE_OPTS: Array<{ value: EaseOpt; label: string }> = [{ value: "default", label: "Default (per style)" }, ...EASINGS.map((e) => ({ value: e as EaseOpt, label: EASING_LABELS[e] }))];
+/** An animation spec with its easing set, or removed (back to the style's own curve). */
+function withEasing<T extends { easing?: Easing }>(a: T, v: EaseOpt): T {
+  const { easing: _e, ...rest } = a;
+  return (v === "default" ? rest : { ...rest, easing: v }) as T;
+}
 
 const KIND_LABEL: Record<Annotation["kind"], string> = { text: "Text", arrow: "Arrow", rect: "Box", ellipse: "Ellipse", badge: "Step badge", callout: "Callout" };
 const IN_OPTS: Array<{ value: InAnimation; label: string }> = [
@@ -81,8 +92,10 @@ export function AnnotationCard({ a }: { a: Annotation }) {
       <div className="ann-anim">
         <Select<InAnimation> label="In" value={a.in.kind} testId="ann-in" options={IN_OPTS} onChange={(v) => set("In animation", { in: { ...a.in, kind: v } })} />
         <Slider defaultValue={dan.in.ms} label="In time" value={a.in.ms} min={0} max={2000} step={50} format={ms} testId="ann-in-ms" onChange={(v) => set("In time", { in: { ...a.in, ms: v } }, true)} />
+        {a.in.kind !== "none" && <Select<EaseOpt> label="In easing" value={a.in.easing ?? "default"} testId="ann-in-easing" options={EASE_OPTS} onChange={(v) => set("In easing", { in: withEasing(a.in, v) })} />}
         <Select<OutAnimation> label="Out" value={a.out.kind} testId="ann-out" options={OUT_OPTS} onChange={(v) => set("Out animation", { out: { ...a.out, kind: v } })} />
         <Slider defaultValue={dan.out.ms} label="Out time" value={a.out.ms} min={0} max={2000} step={50} format={ms} onChange={(v) => set("Out time", { out: { ...a.out, ms: v } }, true)} />
+        {a.out.kind !== "none" && <Select<EaseOpt> label="Out easing" value={a.out.easing ?? "default"} testId="ann-out-easing" options={EASE_OPTS} onChange={(v) => set("Out easing", { out: withEasing(a.out, v) })} />}
         <div className="ann-jump">
           <button className="chip-btn" data-testid="ann-jump-in" title="Put the playhead at the start of the in-animation" onClick={() => { store.pause(); store.seekSource(a.startMs); }}>⇤ In</button>
           <button className="chip-btn" data-testid="ann-play-in" title="Play the in-animation" onClick={() => { store.seekSource(a.startMs); store.play(1); }}>▶ Play in</button>
@@ -115,6 +128,7 @@ export function SlideCard({ index, s }: { index: number; s: TextSlide }) {
       </label>
       <Slider defaultValue={DS.durationMs} label="Duration" value={s.durationMs} min={500} max={8000} step={100} format={(v) => `${(v / 1000).toFixed(1)} s`} testId="slide-duration" onChange={(v) => store.updateSlide(index, { durationMs: v }, true)} />
       <Slider defaultValue={DS.fadeMs} label="Cross-fade" value={s.fadeMs} min={0} max={1000} step={50} format={ms} onChange={(v) => store.updateSlide(index, { fadeMs: v }, true)} />
+      <SlideAnimPickers enter={s.enter} exit={s.exit} testPrefix="slide" onChange={(side, v, _l, drag) => store.updateSlide(index, { [side]: v }, !!drag)} />
       <ColorInput label="Background" value={s.background} onChange={(v) => store.updateSlide(index, { background: v }, true)} />
       <ColorInput label="Text" value={s.textColor} onChange={(v) => store.updateSlide(index, { textColor: v }, true)} />
       <Toggle label="Accent bar" value={s.accent !== null} onChange={(v) => store.updateSlide(index, { accent: v ? "@primary" : null })} />
