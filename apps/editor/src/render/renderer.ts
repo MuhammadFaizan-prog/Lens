@@ -119,6 +119,7 @@ export class PlanRenderer {
 
   private trA: AnyCanvas | null = null;
   private trB: AnyCanvas | null = null;
+  private trBlur: AnyCanvas | null = null;
 
   /**
    * Draw output frame `index` of `plan` into g (sized plan.output.width x height). A frame near a cut
@@ -150,18 +151,30 @@ export class PlanRenderer {
     const short = Math.min(W, H);
     const layer = (c: AnyCanvas, l: { alpha: number; scale: number; dx: number; blur: number }) => {
       if (l.alpha <= 0) return;
+      let src = c;
+      const sigma = l.blur * short;
+      if (sigma > 0.05) {
+        // blurred copy over the sharp one (the blur fades the edges to transparent; the sharp layer
+        // fills them), made opaque first so the layer's alpha applies once
+        if (!this.trBlur || this.trBlur.width !== W || this.trBlur.height !== H) this.trBlur = makeCanvas(W, H);
+        const bg2 = ctx2d(this.trBlur);
+        bg2.save();
+        bg2.setTransform(1, 0, 0, 1, 0, 0);
+        bg2.globalAlpha = 1;
+        bg2.globalCompositeOperation = "source-over";
+        bg2.filter = "none";
+        bg2.drawImage(c as CanvasImageSource, 0, 0);
+        bg2.filter = `blur(${sigma.toFixed(2)}px)`;
+        bg2.drawImage(c as CanvasImageSource, 0, 0);
+        bg2.restore();
+        src = this.trBlur;
+      }
       g.save();
       g.globalAlpha = Math.min(1, l.alpha);
       g.translate(W / 2 + l.dx * W, H / 2);
       g.scale(l.scale, l.scale);
       g.translate(-W / 2, -H / 2);
-      const sigma = l.blur * short;
-      if (sigma > 0.05) {
-        // the blur fades the layer's edges to transparent: the sharp layer underneath fills them
-        g.drawImage(c as CanvasImageSource, 0, 0);
-        g.filter = `blur(${sigma.toFixed(2)}px)`;
-      }
-      g.drawImage(c as CanvasImageSource, 0, 0);
+      g.drawImage(src as CanvasImageSource, 0, 0);
       g.restore();
     };
     layer(A, L.a);
