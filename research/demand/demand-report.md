@@ -352,6 +352,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **How to test:** Measure the maximum offset between the smoothed and raw cursor at clicks (target 0 px) and at hover-change frames (≤4 px) on 20 sessions. Blind A/B "which looks more natural".
 
+**Status (2026-11-11): cursor types built, first version (branch feat/cursor-hover-015, not merged); UI-locked smoothing not started.** Lens's cursor now shows the type the UI showed under it (hand on links, I-beam on text, resize arrows, busy, grab, …): logged by the desktop recorder on Windows, guessed conservatively elsewhere (I-beam where you clicked and typed), and settable per segment in the editor's Cursor tab, with a 100 ms crossfade and a light / classic cursor theme; the same in the preview, the browser export the desktop app uses and the Python compositor; old projects render exactly as before (see `docs/CursorTypes.md`). Measured on the exported MP4: expected type matched at 7 / 7 segments (NCC 0.998–0.999, margin ≥ 0.44), swap frame matches the blend (0.968) better than either type; preview vs export 2.89 mean |RGB| (bound 12); a project without types: plan identical to main and export 0.000 mean |RGB| from main's. Not done: type logging on macOS / Linux and on real Windows hardware, the hover-timing offset metric (≤ 4 px at hover changes) and the blind A/B.
+
 ---
 
 ## 13. Instant share link from a local-first app — 144 · M–L

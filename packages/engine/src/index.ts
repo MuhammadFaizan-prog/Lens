@@ -4,6 +4,7 @@ export * from "./oneEuro.js";
 export * from "./events.js";
 export * from "./project.js";
 export * from "./cursor.js";
+export * from "./cursorShapes.js";
 export * from "./autozoom.js";
 export * from "./camera.js";
 export * from "./timeline.js";

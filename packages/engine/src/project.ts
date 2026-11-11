@@ -1,4 +1,5 @@
 import { normalizeMusic, validateMusic, type MusicSettings } from "./music.js";
+import { CURSOR_SHAPES } from "./cursorShapes.js";
 import type {
   AudioTrack,
   CameraLayoutSegment,
@@ -130,6 +131,15 @@ export interface ProjectConfig {
     visible: boolean;
     size: number;
     shape: CursorShape | "system";
+    /**
+     * Demand #12, match the UI's cursor type. true: the logged cursor types (desktop recorder, where the
+     * OS reports them) or, when none were logged, types inferred from the input (I-beam on a field the
+     * user clicked and typed into), swapped with a short crossfade. false: always the arrow. Absent
+     * (projects made before this): logged types only, hard swap, exactly as before.
+     */
+    matchHover?: boolean;
+    /** Cursor art colours: "classic" (white outline, dark fill; the default) or "light" (dark outline, white fill). */
+    theme?: "classic" | "light";
     smoothing: { enabled: boolean; spring: SpringParams; prefilter: boolean };
     hideWhenIdle: boolean;
     idleMs: number;
@@ -624,8 +634,11 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
     if (o.endMs <= o.startMs) errs.push("override ends before it starts");
     if (o.volume !== undefined && o.volume < 0) errs.push("override volume must be >= 0");
     if (o.cursor?.size !== undefined && o.cursor.size <= 0) errs.push("override cursor size must be > 0");
+    if (o.cursor?.shape !== undefined && !CURSOR_SHAPES.includes(o.cursor.shape)) errs.push(`override cursor shape ${String(o.cursor.shape)} unknown`);
   }
   errs.push(...validateMusic(p.audio.music));
+  if (p.cursor.shape !== "system" && !CURSOR_SHAPES.includes(p.cursor.shape)) errs.push(`cursor.shape ${String(p.cursor.shape)} unknown`);
+  if (p.cursor.theme !== undefined && p.cursor.theme !== "classic" && p.cursor.theme !== "light") errs.push(`cursor.theme ${String(p.cursor.theme)} unknown`);
   for (const tr of p.audio.tracks) {
     if (!tr.path) errs.push(`audio track ${tr.id} has no path`);
     if (tr.volume < 0) errs.push(`audio track ${tr.id} volume must be >= 0`);

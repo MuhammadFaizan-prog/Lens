@@ -29,7 +29,14 @@ export type InputEvent =
 
 export type Modifier = "cmd" | "ctrl" | "alt" | "shift" | "meta";
 
-export type CursorShape = "arrow" | "pointer" | "text" | "grab" | "grabbing" | "crosshair" | "resize-ew" | "resize-ns";
+/**
+ * Cursor types Lens draws with its own art (demand #12: the cursor matches what the UI showed under it).
+ * Logged by the desktop recorder as `cursor-shape` events where the OS exposes the system cursor
+ * (Windows), inferred otherwise (cursor.ts inferCursorShapes), or set per segment in the editor.
+ */
+export type CursorShape =
+  | "arrow" | "pointer" | "text" | "grab" | "grabbing" | "crosshair"
+  | "resize-ew" | "resize-ns" | "resize-nwse" | "resize-nesw" | "move" | "wait" | "not-allowed";
 
 export interface RecordingMeta {
   /** Source capture size in pixels (already in physical pixels, HiDPI included). */
@@ -160,7 +167,8 @@ export interface MaskKey {
 export interface SegmentOverride {
   startMs: number;
   endMs: number;
-  cursor?: { hidden?: boolean; smoothing?: boolean; size?: number };
+  /** shape: the cursor type drawn in this range whatever was logged or inferred (demand #12). */
+  cursor?: { hidden?: boolean; smoothing?: boolean; size?: number; shape?: CursorShape };
   /** Gain multiplier applied to all audio tracks in this range (not click sounds). */
   volume?: number;
 }

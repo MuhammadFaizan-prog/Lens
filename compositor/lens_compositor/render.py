@@ -170,32 +170,85 @@ def shadow_layer(out_w: int, out_h: int, rect: tuple[int, int, int, int], radius
 
 # ---------------------------------------------------------------- cursor art (original Lens design)
 
-@lru_cache(maxsize=8)
-def cursor_sprite(shape: str, px: int = 256) -> tuple[np.ndarray, tuple[float, float]]:
+# Demand #12 cursor types as outline + fill primitives (unit square); kept in step with the editor's
+# apps/editor/src/render/cursorSprite.ts SHAPE_PRIMS.
+_OUTLINE = 0.045
+_DOUBLE_ARROW = [(0.1, 0.5), (0.3, 0.32), (0.3, 0.44), (0.7, 0.44), (0.7, 0.32), (0.9, 0.5), (0.7, 0.68), (0.7, 0.56), (0.3, 0.56), (0.3, 0.68)]
+
+
+def _rot(pts, deg):
+    a = math.radians(deg)
+    c, s_ = math.cos(a), math.sin(a)
+    return [(0.5 + (x - 0.5) * c - (y - 0.5) * s_, 0.5 + (x - 0.5) * s_ + (y - 0.5) * c) for x, y in pts]
+
+
+def _scale_about(pts, k):
+    return [(0.5 + (x - 0.5) * k, 0.5 + (y - 0.5) * k) for x, y in pts]
+
+
+_PALM = [(0.27, 0.48), (0.73, 0.48), (0.75, 0.72), (0.63, 0.9), (0.37, 0.9), (0.25, 0.72)]
+_FX = [0.33, 0.45, 0.57, 0.68]
+SHAPE_PRIMS = {
+    "resize-ew": ([("poly", _DOUBLE_ARROW)], (0.5, 0.5)),
+    "resize-ns": ([("poly", _rot(_DOUBLE_ARROW, 90))], (0.5, 0.5)),
+    "resize-nwse": ([("poly", _rot(_DOUBLE_ARROW, 45))], (0.5, 0.5)),
+    "resize-nesw": ([("poly", _rot(_DOUBLE_ARROW, -45))], (0.5, 0.5)),
+    "move": ([("poly", _scale_about(_DOUBLE_ARROW, 0.95)), ("poly", _rot(_scale_about(_DOUBLE_ARROW, 0.95), 90)), ("poly", [(0.37, 0.37), (0.63, 0.37), (0.63, 0.63), (0.37, 0.63)])], (0.5, 0.5)),
+    "crosshair": ([("capsule", (0.5, 0.1, 0.5, 0.38, 0.07)), ("capsule", (0.5, 0.62, 0.5, 0.9, 0.07)), ("capsule", (0.1, 0.5, 0.38, 0.5, 0.07)), ("capsule", (0.62, 0.5, 0.9, 0.5, 0.07))], (0.5, 0.5)),
+    "wait": ([("poly", [(0.28, 0.1), (0.72, 0.1), (0.72, 0.2), (0.55, 0.5), (0.72, 0.8), (0.72, 0.9), (0.28, 0.9), (0.28, 0.8), (0.45, 0.5), (0.28, 0.2)])], (0.5, 0.5)),
+    "not-allowed": ([("ring", (0.5, 0.5, 0.3, 0.09)), ("capsule", (0.29, 0.71, 0.71, 0.29, 0.09))], (0.5, 0.5)),
+    "grab": ([("poly", _PALM)] + [("capsule", (x, 0.52, x, top, 0.1)) for x, top in zip(_FX, [0.24, 0.16, 0.18, 0.28])] + [("capsule", (0.28, 0.66, 0.15, 0.48, 0.1))], (0.5, 0.45)),
+    "grabbing": ([("poly", _PALM)] + [("capsule", (x, 0.52, x, top, 0.1)) for x, top in zip(_FX, [0.42, 0.39, 0.4, 0.44])] + [("capsule", (0.28, 0.66, 0.22, 0.54, 0.1))], (0.5, 0.5)),
+}
+
+
+def _draw_prims(img: np.ndarray, prims, color, grow: float, S: int) -> None:
+    for kind, d in prims:
+        if kind == "poly":
+            pts = (np.array(d) * S).astype(np.int32)
+            cv2.fillPoly(img, [pts], color, lineType=cv2.LINE_AA)
+            if grow > 0:
+                cv2.polylines(img, [pts], True, color, thickness=max(1, int(round(2 * grow * S))), lineType=cv2.LINE_AA)
+        elif kind == "ring":
+            cx, cy, r, w = d
+            cv2.circle(img, (int(cx * S), int(cy * S)), int(r * S), color, thickness=max(1, int(round((w + 2 * grow) * S))), lineType=cv2.LINE_AA)
+        else:
+            x1, y1, x2, y2, w = d
+            cv2.line(img, (int(x1 * S), int(y1 * S)), (int(x2 * S), int(y2 * S)), color, thickness=max(1, int(round((w + 2 * grow) * S))), lineType=cv2.LINE_AA)
+
+
+@lru_cache(maxsize=32)
+def cursor_sprite(shape: str, px: int = 256, theme: str = "classic") -> tuple[np.ndarray, tuple[float, float]]:
     """RGBA cursor sprite and its hotspot (fraction of sprite size). Original vector art."""
     ss = 4
     S = px * ss
     img = np.zeros((S, S, 4), np.uint8)
+    light = theme == "light"
+    WHITE = (255, 255, 255, 255)
     if shape in ("text",):
         w = int(S * 0.06)
         cx = S // 2
-        cv2.rectangle(img, (cx - w, int(S * 0.1)), (cx + w, int(S * 0.9)), (255, 255, 255, 255), -1)
-        cv2.rectangle(img, (cx - w // 2, int(S * 0.12)), (cx + w // 2, int(S * 0.88)), (20, 20, 20, 255), -1)
+        cv2.rectangle(img, (cx - w, int(S * 0.1)), (cx + w, int(S * 0.9)), (20, 20, 20, 255) if light else WHITE, -1)
+        cv2.rectangle(img, (cx - w // 2, int(S * 0.12)), (cx + w // 2, int(S * 0.88)), WHITE if light else (20, 20, 20, 255), -1)
         hot = (0.5, 0.5)
     elif shape in ("pointer",):
         # Rounded hand-like pointer: a tilted capsule with a dot, distinct from OS art.
         pts = np.array([[0.40, 0.08], [0.52, 0.08], [0.52, 0.45], [0.78, 0.50], [0.80, 0.80], [0.60, 0.95], [0.40, 0.95], [0.25, 0.70], [0.30, 0.55], [0.40, 0.58]]) * S
-        cv2.fillPoly(img, [pts.astype(np.int32)], (255, 255, 255, 255), lineType=cv2.LINE_AA)
+        cv2.fillPoly(img, [pts.astype(np.int32)], (24, 24, 24, 255) if light else WHITE, lineType=cv2.LINE_AA)
         inner = (pts - pts.mean(0)) * 0.82 + pts.mean(0)
-        cv2.fillPoly(img, [inner.astype(np.int32)], (24, 24, 24, 255), lineType=cv2.LINE_AA)
+        cv2.fillPoly(img, [inner.astype(np.int32)], WHITE if light else (24, 24, 24, 255), lineType=cv2.LINE_AA)
         hot = (0.46, 0.08)
+    elif shape in SHAPE_PRIMS:
+        prims, hot = SHAPE_PRIMS[shape]
+        _draw_prims(img, prims, (18, 18, 18, 255) if light else WHITE, _OUTLINE, S)
+        _draw_prims(img, prims, WHITE if light else (18, 18, 18, 255), 0.0, S)
     else:
         # Arrow: white outline, near-black fill, slightly softened tail.
         pts = np.array([[0.12, 0.06], [0.12, 0.80], [0.30, 0.64], [0.42, 0.92], [0.54, 0.87], [0.42, 0.60], [0.66, 0.60]]) * S
-        cv2.fillPoly(img, [pts.astype(np.int32)], (255, 255, 255, 255), lineType=cv2.LINE_AA)
+        cv2.fillPoly(img, [pts.astype(np.int32)], (18, 18, 18, 255) if light else WHITE, lineType=cv2.LINE_AA)
         c = pts.mean(0)
         inner = (pts - c) * 0.80 + c + np.array([-0.012, 0.0]) * S
-        cv2.fillPoly(img, [inner.astype(np.int32)], (18, 18, 18, 255), lineType=cv2.LINE_AA)
+        cv2.fillPoly(img, [inner.astype(np.int32)], WHITE if light else (18, 18, 18, 255), lineType=cv2.LINE_AA)
         hot = (0.12, 0.06)
     img = cv2.resize(img, (px, px), interpolation=cv2.INTER_AREA)
     # Soft drop shadow under the cursor.
@@ -1028,28 +1081,38 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
 
         # Cursor (re-rendered from the log, A13/C02).
         if f["cur"] is not None:
-            px, py, op, sc, shape = f["cur"]
-            shape_name = shape if style["cursorShape"] == "system" else style["cursorShape"]
+            px, py, op, sc, shape = f["cur"][:5]
+            forced = style["cursorShape"] != "system"
+            theme = style.get("cursorTheme", "classic")
+            # demand #12: while the cursor type changes, the old type fades out under the new one
+            if not forced and len(f["cur"]) == 7:
+                layers = [(f["cur"][5], 1 - f["cur"][6]), (shape, f["cur"][6])]
+            else:
+                layers = [(style["cursorShape"] if forced else shape, 1.0)]
             base = 26 * style["cursorSize"] * plan["source"].get("pixelRatio", 1)
             size = max(6, int(round(base * k * sc)))
-            sprite, (hx, hy) = cursor_sprite(shape_name)
-            spr = cv2.resize(sprite, (size, size), interpolation=cv2.INTER_AREA if size < 256 else cv2.INTER_CUBIC)
             rx, ry = to_rect(px, py)
             prev_cur = cursor_pos(prev_f)
-            if mb["enabled"] and prev_cur is not None:
-                pdx, pdy = rx - prev_cur[0], ry - prev_cur[1]
-                dist = math.hypot(pdx, pdy)
-                if dist > 3:
-                    n = min(int(mb["samples"]), max(2, int(dist / 3)))
-                    for j in range(n):
-                        u = (j + 1) / n
-                        tx = prev_cur[0] + pdx * (1 - mb["strength"]) + pdx * mb["strength"] * u
-                        ty = prev_cur[1] + pdy * (1 - mb["strength"]) + pdy * mb["strength"] * u
-                        blend_rgba(view, spr, tx - hx * size, ty - hy * size, op / n * 1.0)
+            for shape_name, lw in layers:
+                if lw <= 0:
+                    continue
+                sprite, (hx, hy) = cursor_sprite(shape_name, theme=theme)
+                spr = cv2.resize(sprite, (size, size), interpolation=cv2.INTER_AREA if size < 256 else cv2.INTER_CUBIC)
+                o = op * lw
+                if mb["enabled"] and prev_cur is not None:
+                    pdx, pdy = rx - prev_cur[0], ry - prev_cur[1]
+                    dist = math.hypot(pdx, pdy)
+                    if dist > 3:
+                        n = min(int(mb["samples"]), max(2, int(dist / 3)))
+                        for j in range(n):
+                            u = (j + 1) / n
+                            tx = prev_cur[0] + pdx * (1 - mb["strength"]) + pdx * mb["strength"] * u
+                            ty = prev_cur[1] + pdy * (1 - mb["strength"]) + pdy * mb["strength"] * u
+                            blend_rgba(view, spr, tx - hx * size, ty - hy * size, o / n * 1.0)
+                    else:
+                        blend_rgba(view, spr, rx - hx * size, ry - hy * size, o)
                 else:
-                    blend_rgba(view, spr, rx - hx * size, ry - hy * size, op)
-            else:
-                blend_rgba(view, spr, rx - hx * size, ry - hy * size, op)
+                    blend_rgba(view, spr, rx - hx * size, ry - hy * size, o)
 
         # Composite the screen with rounded corners.
         m = rounded_mask(sw, sh, style["radius"])[..., None] * f["layout"]["screenOpacity"]

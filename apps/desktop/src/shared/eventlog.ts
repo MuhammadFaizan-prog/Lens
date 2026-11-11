@@ -8,7 +8,7 @@
  * digits, Shift+letter, Enter, Backspace, ...) is stored as timing only: `{"t":..,"type":"key","key":"","modifiers":[]}`.
  * Bare modifier presses are not stored at all.
  */
-import type { InputEvent, Modifier, MouseButton } from "../../../../packages/engine/src/types";
+import type { CursorShape, InputEvent, Modifier, MouseButton } from "../../../../packages/engine/src/types";
 
 export const EVENT_LOG_VERSION = 1;
 
@@ -82,7 +82,7 @@ export class EventLogWriter {
   private lastMove: { t: number; x: number; y: number } | null = null;
   private lastWrittenT = -Infinity;
   private pendingStill: { t: number; x: number; y: number } | null = null;
-  counts = { move: 0, down: 0, up: 0, scroll: 0, key: 0, shortcut: 0 };
+  counts = { move: 0, down: 0, up: 0, scroll: 0, key: 0, shortcut: 0, shape: 0 };
 
   constructor(private readonly write: (line: string) => void) {}
 
@@ -127,6 +127,12 @@ export class EventLogWriter {
     this.put(e);
     this.counts.key++;
     if (e.key) this.counts.shortcut++;
+  }
+
+  /** The system cursor's type changed (demand #12; Windows only, see main/cursorType.ts). */
+  shape(t: number, shape: CursorShape): void {
+    this.put({ t, type: "cursor-shape", shape });
+    this.counts.shape++;
   }
 
   /** Flush a trailing still period (the cursor never moved again before Stop). */

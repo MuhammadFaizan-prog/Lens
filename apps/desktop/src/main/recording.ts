@@ -14,6 +14,7 @@ import { screen } from "electron";
 import { logLine } from "./log";
 import { dipToCapture, physicalToCapture, resolveClickPoint, type CaptureSize, type DisplayGeom, type Point } from "../shared/coords";
 import { EventLogWriter, headerLine, keyEvent, mouseButton } from "../shared/eventlog";
+import { watchCursorType, type CursorTypeWatcher } from "./cursorType";
 import type { InputEvent } from "../../../../packages/engine/src/types";
 import { h264Args, markBroken, pickH264, type Quality } from "../../../editor/server/h264";
 
@@ -91,6 +92,7 @@ export class Recording {
   private lastCursor: Point | null = null;
   private listeners: Array<[string, (e: any) => void]> = [];
   private stopEpoch = 0;
+  private shapeWatch: CursorTypeWatcher | null = null;
   clickSources = { hook: 0, "hook-dip": 0, poll: 0 };
   warnings: string[] = [];
   finalizeInfo: { encoder: string; quality: string; ms: number; cameraError: string | null } | null = null;
@@ -133,6 +135,8 @@ export class Recording {
     };
     sample();
     this.timer = setInterval(sample, 1000 / 60);
+    // demand #12: the system cursor's type (Windows), stamped on the video clock as it arrives
+    this.shapeWatch = watchCursorType((shape) => this.log?.shape(Math.max(0, nowEpoch() - t0), shape), { onError: (m) => this.warnings.push(m) });
     if (!this.hook) {
       this.warnings.push("uiohook-napi did not load: no clicks or shortcuts logged");
       return;
@@ -194,6 +198,8 @@ export class Recording {
     this.stopEpoch = stopAt && Number.isFinite(stopAt) ? stopAt : nowEpoch();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.shapeWatch?.stop();
+    this.shapeWatch = null;
     for (const [ev, fn] of this.listeners) this.hook?.removeListener(ev, fn);
     this.listeners = [];
     if (this.info) this.log?.end(this.stopEpoch - this.info.videoStart);
@@ -296,7 +302,7 @@ export class Recording {
     // OS cursor is usually baked into the frames. Then Lens's own cursor starts off, so the editor
     // and export never show two cursors; it turns on by itself once the capture really excludes it.
     const baked = cursorBaked(info.cursor);
-    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, ...(baked ? { cursor: { visible: false } } : {}), ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ version: 1, audio: { tracks }, cursor: { ...(baked ? { visible: false } : {}), matchHover: true }, ...(webcam ? { camera: { enabled: true } } : {}), ...(crop ? { crop } : {}), ...(info.output ? { output: info.output } : {}) }, null, 2));
     fs.writeFileSync(path.join(dir, "recording.json"), JSON.stringify({
       app: "lens-desktop", platform: process.platform, source: { id: info.sourceId, name: info.sourceName, kind: info.kind, displayId: info.displayId ?? null },
       capture: info.capture, cursor: info.cursor ? { ...info.cursor, baked } : null, fps: info.fps, videoMime: info.videoMime, videoStartEpoch: info.videoStart, clock: info.clock ?? null, stopEpoch: this.stopEpoch, wallMs: this.stopEpoch - info.videoStart,
