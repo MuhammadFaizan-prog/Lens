@@ -353,8 +353,12 @@ export function textRankWords(sents: Sentence[], window = 3): Map<string, number
   return out;
 }
 
-/** TextRank over sentences (overlap / (log|a| + log|b|)): indices of the top `n`, in spoken order. */
-export function textRankSentences(sents: Sentence[], n = 3, minWords = 6): number[] {
+/**
+ * TextRank over sentences (overlap / (log|a| + log|b|)): indices of the top `n`, in spoken order.
+ * With `groupOf` (sentence -> chapter), at most one sentence per chapter until every chapter has one,
+ * so the description covers the video instead of its busiest part.
+ */
+export function textRankSentences(sents: Sentence[], n = 3, minWords = 6, groupOf?: (i: number) => number): number[] {
   const m = sents.length;
   const edges: Array<Map<number, number>> = Array.from({ length: m }, () => new Map());
   for (let i = 0; i < m; i++)
@@ -370,7 +374,12 @@ export function textRankSentences(sents: Sentence[], n = 3, minWords = 6): numbe
     }
   const r = pageRank(m, edges);
   const order = sents.map((s, i) => ({ i, r: r[i]!, ok: s.words.length >= minWords })).sort((a, b) => Number(b.ok) - Number(a.ok) || b.r - a.r || a.i - b.i);
-  return order.slice(0, n).map((o) => o.i).sort((a, b) => a - b);
+  if (!groupOf) return order.slice(0, n).map((o) => o.i).sort((a, b) => a - b);
+  const picked: number[] = [];
+  const used = new Set<number>();
+  for (const o of order) if (picked.length < n && !used.has(groupOf(o.i))) (picked.push(o.i), used.add(groupOf(o.i)));
+  for (const o of order) if (picked.length < n && !picked.includes(o.i)) picked.push(o.i);
+  return picked.sort((a, b) => a - b);
 }
 
 export interface ChapterDraft {
@@ -409,7 +418,8 @@ export function draftContent(words: Word[], opts: ChapterOptions = {}): ContentD
   const kw = bestPhrases(phrasesOf(sents), (t) => (tr.get(t) ?? 0) * 100, 5);
   const keywords = kw.map((k) => k.text);
   const title = joinTitle(kw, 70);
-  const description = textRankSentences(sents, 3).map((i) => sents[i]!.text.replace(/^\w/, (c) => c.toUpperCase())).map((t) => (/[.!?]$/.test(t) ? t : `${t}.`)).join(" ");
+  const groupOf = (i: number) => segs.findIndex((sg) => i >= sg.from && i < sg.to);
+  const description = textRankSentences(sents, 3, 6, groupOf).map((i) => sents[i]!.text.replace(/^\w/, (c) => c.toUpperCase())).map((t) => (/[.!?]$/.test(t) ? t : `${t}.`)).join(" ");
   return { title, description, chapters, keywords };
 }
 
