@@ -37,6 +37,18 @@ export async function startEditorServer(): Promise<EditorServer> {
       // not in Electron (tests): api.ts falls back to ~/.lens/fonts
     }
   }
+  // share links (demand #13): storage keys encrypted with the OS keychain (safeStorage: Keychain on
+  // macOS, DPAPI on Windows, libsecret / kwallet on Linux) in userData, never in a project
+  try {
+    const { app, safeStorage } = await import("electron");
+    const { setShareSecretCodec } = await import("../../../editor/server/share/share");
+    const file = path.join(app.getPath("userData"), "share-storage.json");
+    if (safeStorage.isEncryptionAvailable())
+      setShareSecretCodec({ kind: "electron-safeStorage", encrypt: (s) => safeStorage.encryptString(s), decrypt: (b) => safeStorage.decryptString(b) }, file);
+    else setShareSecretCodec(null, file);
+  } catch {
+    // not in Electron (tests): ~/.lens/share.json, 0600
+  }
   // privacy scan / step labels off the main thread (Windows #1). The worker and tesseract.js are
   // unpacked from app.asar (worker_threads cannot start a script inside an asar archive).
   const worker = path.join(__dirname, "jobWorker.cjs").replace(/app\.asar([\\/])/, "app.asar.unpacked$1");

@@ -24,11 +24,12 @@ import { hasWebGL2 } from "../render/gl3d";
 const SHARPEN_DEFAULT = 0.6;
 let webgl2Ok: boolean | null = null;
 const sharpenUnavailable = () => !(webgl2Ok ??= hasWebGL2());
+import { ShareTab } from "./SharePanel";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
 
-type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio";
+type Tab = "look" | "zoom" | "motion3d" | "cursor" | "camera" | "captions" | "audio" | "share";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "look", label: "Look" },
   { id: "zoom", label: "Zoom" },
@@ -37,6 +38,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "camera", label: "Webcam" },
   { id: "captions", label: "Captions" },
   { id: "audio", label: "Audio" },
+  { id: "share", label: "Share" },
 ];
 
 /** Original Lens backdrops. */
@@ -817,6 +819,7 @@ export function Inspector() {
           </>
         )}
         {tab === "audio" && <AudioTab p={p} />}
+        {tab === "share" && <ShareTab />}
       </div>
       <footer className="insp-foot">plan rebuilt in {planMs.toFixed(1)} ms</footer>
     </aside>

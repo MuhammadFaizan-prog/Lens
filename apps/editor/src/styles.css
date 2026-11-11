@@ -660,9 +660,10 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .canvas-overlay .co-guide { stroke: #ff3d7f; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .app.preview-fs .canvas-overlay .co-outline { display: none; }
 /* one row that never wraps (7 tabs in a 320 px inspector): compact labels, scrolls sideways if it must */
-.inspector .tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-left: 4px; padding-right: 4px; }
+.inspector .tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-left: 2px; padding-right: 2px; }
 .inspector .tabs::-webkit-scrollbar { display: none; }
-.inspector .tabs button { flex: 1 0 auto; padding-left: 4px; padding-right: 4px; font-size: 11px; }
+/* eight tabs since Share (demand #13): all visible in the default 331 px inspector */
+.inspector .tabs button { flex: 1 0 auto; padding-left: 2px; padding-right: 2px; font-size: 10.5px; }
 /* shrinking the window must shrink the timeline: flex / grid items default to min-width: auto, which
    kept the lanes at their old content width (the page stayed 1440 px wide after a resize to 1280) */
 .app > *, .timeline, .timeline-body, .tl-scroll, .topbar, .top-actions { min-width: 0; }

@@ -27,6 +27,7 @@ import { setFraming } from "./layoutOps";
 import { buildPlan, fetchBundle, fetchSilences, planPauses, type Bundle } from "./bundle";
 import { addBlock, blocksOf, createRange, deleteBlocks, duplicateBlocks, frameForSource, freezeAutoZooms, MIN_BLOCK_MS, moveBlocks, normalizeCuts, subtractRange, TRACK_KINDS, zoomDocIndex, zoomPlanIndex, type BlockRef, type TrackKind } from "./timelineOps";
 import * as m3dLib from "./motion3dLib";
+import { EMPTY_SHARE, viewerChapters, type ShareConfigView, type ShareJobView, type ShareSettings, type ShareState } from "./share";
 import { addKeyAt, applyTemplate, deleteKey, keyAt, keyCount, keyPose, mapSegment, resetKeyPose, setKeyAt, setKeyPose, type Axis3D } from "./motion3dOps";
 import { templateFromSegment, type Motion3DSegment, type Motion3DTemplate, type Pose3D } from "@lens/engine";
 
@@ -129,6 +130,8 @@ export interface EditorState {
   fontLibrary: Array<{ family: string; regular: string; bold: string; source?: { kind: string; url?: string; name?: string } }>;
   /** A font import in flight (its label) or its last error. */
   fontImport: { busy: string | null; error: string | null };
+  /** Share link with bring-your-own storage (demand #13). */
+  share: ShareState;
   /** Which panel the left column shows. */
   leftPanel: "transcript" | "privacy" | "steps" | "brand";
   /** Built-in and saved style presets (demand #9), and the default for new projects. */
@@ -224,6 +227,7 @@ export class EditorStore {
     missingFonts: [],
     fontLibrary: [],
     fontImport: { busy: null, error: null },
+    share: EMPTY_SHARE,
     leftPanel: "transcript",
     presets: [],
     defaultPresetId: null,
@@ -1954,6 +1958,7 @@ export class EditorStore {
     }
     this.set({ exportWarning: null });
     this.batch = null;
+    this.exportProject = this.s.project;
     return this.startExport(this.s.project);
   }
 
@@ -2057,6 +2062,8 @@ export class EditorStore {
     });
     this.batch = { index: 0, items };
     this.batchCancel = false;
+    // a batch's last file is one size of several: Share (demand #13) must not reuse it as "the" export
+    this.exportProject = null;
     for (let i = 0; i < targets.length; i++) {
       if (this.batchCancel) break;
       this.batch = { index: i, items };
@@ -2446,6 +2453,129 @@ export class EditorStore {
     if (this.s.exporting?.state !== "running") this.set({ exporting: null });
   }
 
+  // ------------------------------------------------------------------ share link (demand #13)
+
+  /** The project the last export was started from: Share reuses that export only while it is unchanged. */
+  private exportProject: ProjectConfig | null = null;
+
+  private setShare(patch: Partial<ShareState>): void {
+    this.set({ share: { ...this.s.share, ...patch } });
+  }
+
+  private async shareFetch<T>(path: string, init?: RequestInit): Promise<T> {
+    const r = await fetch(path, init);
+    const j = (await r.json().catch(() => ({}))) as T & { error?: string };
+    if (!r.ok) throw new Error(j.error ?? `${path}: ${r.status}`);
+    return j;
+  }
+
+  async loadShareConfig(): Promise<void> {
+    try {
+      this.setShare({ config: await this.shareFetch<ShareConfigView>("/api/share/config"), error: null });
+    } catch (e) {
+      this.setShare({ error: (e as Error).message });
+    }
+  }
+
+  /** Keys are sent once to the local server; blank keys keep the saved ones. */
+  async saveShareConfig(settings: ShareSettings, keys: { accessKeyId?: string; secretAccessKey?: string }): Promise<boolean> {
+    this.setShare({ busy: "save", error: null, tested: false });
+    try {
+      const config = await this.shareFetch<ShareConfigView>("/api/share/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings, ...keys }) });
+      this.setShare({ config, busy: null });
+      this.notify("Share storage saved");
+      return true;
+    } catch (e) {
+      this.setShare({ busy: null, error: (e as Error).message });
+      return false;
+    }
+  }
+
+  async testShareConfig(): Promise<void> {
+    this.setShare({ busy: "test", error: null, tested: false });
+    try {
+      await this.shareFetch("/api/share/test", { method: "POST" });
+      this.setShare({ busy: null, tested: true });
+    } catch (e) {
+      this.setShare({ busy: null, error: (e as Error).message });
+    }
+  }
+
+  async forgetShareConfig(): Promise<void> {
+    this.setShare({ busy: "forget", error: null });
+    try {
+      this.setShare({ config: await this.shareFetch<ShareConfigView>("/api/share/config", { method: "DELETE" }), busy: null, tested: false, job: null });
+    } catch (e) {
+      this.setShare({ busy: null, error: (e as Error).message });
+    }
+  }
+
+  /** The finished export of the project as it is now, exporting first when there is none. */
+  private async currentExportId(): Promise<string | null> {
+    const ex = this.s.exporting;
+    if (ex?.state === "done" && ex.id && this.exportProject === this.s.project) return ex.id;
+    if (this.shareExport && this.shareExport.project === this.s.project) return this.shareExport.id;
+    // the Share tab shows this export's progress; the Export sheet stays closed (it would cover the link)
+    this.setShare({ busy: "export" });
+    await this.exportVideo();
+    if (this.s.exportWarning) return null; // unreviewed privacy items: the sheet asks first
+    for (;;) {
+      const e = this.s.exporting;
+      if (e && (e.state === "done" || e.state === "error")) {
+        if (e.state !== "done" || !e.id) return null;
+        this.shareExport = { id: e.id, project: this.exportProject! };
+        this.closeExport();
+        return e.id;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  /** The last export Share made itself (its sheet was never shown), reused while the project is unchanged. */
+  private shareExport: { id: string; project: ProjectConfig } | null = null;
+
+  /** Upload export + poster + viewer page; the link lands in share.job.url and on the clipboard. */
+  async shareLink(title: string): Promise<string | null> {
+    if (this.s.share.busy) return null;
+    this.setShare({ error: null, job: null, copied: false });
+    try {
+      const exportId = await this.currentExportId();
+      if (!exportId) {
+        this.setShare({ busy: null, error: this.s.exportWarning ? "Review the privacy items before sharing" : `Export failed${this.s.exporting?.error ? `: ${this.s.exporting.error}` : ""}` });
+        return null;
+      }
+      this.setShare({ busy: "upload" });
+      const chapters = viewerChapters(this.s.project, this.s.plan);
+      const { id } = await this.shareFetch<{ id: string }>(`/api/share/upload${this.dirQuery()}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ exportId, title, chapters }),
+      });
+      for (;;) {
+        const job = await this.shareFetch<ShareJobView>(`/api/share/upload/${id}${this.dirQuery()}`);
+        this.setShare({ job });
+        if (job.state !== "running") break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const job = this.s.share.job!;
+      if (job.state === "error") {
+        this.setShare({ busy: null, error: job.error ?? "Upload failed" });
+        return null;
+      }
+      this.setShare({ busy: null, copied: await copyText(job.url!) });
+      this.notify(this.s.share.copied ? "Share link copied" : "Share link ready");
+      return job.url!;
+    } catch (e) {
+      this.setShare({ busy: null, error: (e as Error).message });
+      return null;
+    }
+  }
+
+  async copyShareLink(): Promise<void> {
+    const url = this.s.share.job?.url;
+    if (url) this.setShare({ copied: await copyText(url) });
+  }
+
   notify(text: string): void {
     this.set({ toast: { text, id: (this.s.toast?.id ?? 0) + 1 } });
   }
@@ -2481,4 +2611,26 @@ export function playheadSrc(): number {
 
 export function useEditor<T>(sel: (s: EditorState) => T): T {
   return useSyncExternalStore(store.subscribe, () => sel(store.get()));
+}
+
+/** Clipboard API, with the textarea fallback for browsers that refuse it (no permission / not focused). */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const t = document.createElement("textarea");
+      t.value = text;
+      t.style.position = "fixed";
+      t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      const ok = document.execCommand("copy");
+      t.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 }

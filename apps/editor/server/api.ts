@@ -58,6 +58,7 @@ import { embedChapters, wantsChapters } from "./chapterMeta";
 import { startNleExport } from "./nleExport";
 import { buildRenderPlan, encodeSettings, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
+import { forgetShare, publicConfig, saveShare, shareJob, ShareError, startShare, testShare, type ShareSettings } from "./share/share";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EDITOR = path.resolve(HERE, "..");
@@ -908,6 +909,40 @@ export function apiMiddleware() {
         resolveProject(body); // validate before writing
         fs.writeFileSync(path.join(bundle, "project.json"), JSON.stringify(body, null, 2));
         return sendJson(res, { ok: true, path: path.join(bundle, "project.json") });
+      }
+      // share link with bring-your-own storage (demand #13); keys never leave this server
+      if (url.pathname.startsWith("/api/share/")) {
+        try {
+          if (url.pathname === "/api/share/config" && req.method === "GET") return sendJson(res, publicConfig());
+          if (url.pathname === "/api/share/config" && req.method === "PUT") {
+            const b = JSON.parse(await readBody(req)) as { settings: ShareSettings; accessKeyId?: string; secretAccessKey?: string };
+            saveShare(b.settings, { accessKeyId: b.accessKeyId, secretAccessKey: b.secretAccessKey });
+            return sendJson(res, publicConfig());
+          }
+          if (url.pathname === "/api/share/config" && req.method === "DELETE") {
+            forgetShare();
+            return sendJson(res, publicConfig());
+          }
+          if (url.pathname === "/api/share/test" && req.method === "POST") return sendJson(res, await testShare());
+          if (url.pathname === "/api/share/upload" && req.method === "POST") {
+            const b = JSON.parse(await readBody(req)) as { exportId?: string; title?: string; chapters?: Array<{ t: number; title: string }> };
+            if (!b.exportId || !/^[a-z0-9]+$/.test(b.exportId)) return sendJson(res, { error: "Export the video first: no finished export to share" }, 400);
+            const chapters = Array.isArray(b.chapters) ? b.chapters.filter((c) => Number.isFinite(c?.t) && typeof c?.title === "string").slice(0, 200) : [];
+            const job = startShare({ exportFile: path.join(bundle, ".lens-export", b.exportId, "export.mp4"), title: String(b.title ?? "").slice(0, 200), chapters, ffmpeg: FFMPEG });
+            return sendJson(res, { id: job.id });
+          }
+          if ((m = /^\/api\/share\/upload\/([a-f0-9]+)$/.exec(url.pathname))) {
+            const job = shareJob(m[1]!);
+            return job ? sendJson(res, job) : sendJson(res, { error: "no such share" }, 404);
+          }
+          return sendJson(res, { error: "unknown endpoint" }, 404);
+        } catch (e) {
+          // ShareError messages are already redacted; anything else is reported without its text
+          const se = e instanceof ShareError ? e : null;
+          const msg = se ? se.message : e instanceof SyntaxError ? "bad request" : "share failed";
+          console.error(`[lens] ${req.method} ${url.pathname}: ${msg}`);
+          return sendJson(res, { error: msg }, se?.status ?? 500);
+        }
       }
       if (url.pathname === "/api/capabilities" && req.method === "GET") return sendJson(res, { export: EXPORT_PATH });
       if (url.pathname === "/api/export-overlay" && req.method === "POST") {

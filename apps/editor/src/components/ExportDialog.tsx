@@ -85,7 +85,7 @@ function VideoTab() {
       <p className="note" data-testid="export-preset-note">{pr.note}</p>
       <p className="note" data-testid="export-output">
         {gif ? "Animated GIF" : "MP4 (H.264)"} with every edit, zoom, caption and mask
-        {out ? `: ${gif ? `${enc.gif.width} px wide, ${enc.gif.fps} fps` : `${out.width}×${out.height}, ${out.fps} fps`}, ${(out.durationMs / 1000).toFixed(1)} s, ${frames} frames` : ""}.
+        {out ? `: ${gif ? `${enc.gif.width} px wide, ${enc.gif.fps} fps` : `${out.width}×${out.height}, ${out.fps} fps`}, ${(out.durationMs / 1000).toFixed(1)} s, ${frames} frames` : ""}. To send a link instead, use the <b>Share</b> tab in the inspector (your own S3 / R2 / Supabase bucket).
       </p>
       {gif ? (
         <div className="ex-grid">
