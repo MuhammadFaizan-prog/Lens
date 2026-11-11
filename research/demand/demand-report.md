@@ -387,6 +387,8 @@ Pricing and business-model findings are in their own section after #29.
 
 **Build size:** M. **How to test:** A/B a demo with and without transitions; check that render time grows by under 5%.
 
+**Status (2026-11-11): built, first version (branch `feat/transitions-015`, not merged).** Cut transitions (crossfade, push, zoom-through, blur dip) at cut joins with the other side held still, set as a project default (Look tab) or per cut (chip on the cut block, right-click **Transition…**, cut inspector); Enter / Exit animations for text slides, brand title cards and the webcam (fade, slide, zoom / pop, scale, blur); annotation in / out easing; one easing vocabulary with spring. Same pixels in the preview, the browser export the desktop app ships, and the Python compositor (see `docs/Transitions.md`). Measured (web build, synthetic 640x360 fixture, bounds set before the first run): crossfade midpoint error 0.38% preview / 1.17% export (bound ≤ 10%); preview vs export mean |RGB| 1 / 2 / 1 / 1.97 / 2.1 for crossfade / push / zoom / blur / slide enter (bound ≤ 12); 48 transition frames; a hard-cuts plan stays byte-identical; engine tests 279/279. Not done: the render-time (<5%) check, the A/B viewer test, Windows verification.
+
 ---
 
 ## 15. One recording → 16:9 + 9:16 + 1:1 cuts with re-aimed zooms — 135 · S–M

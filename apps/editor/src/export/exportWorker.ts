@@ -63,9 +63,22 @@ async function run(m: StartMsg): Promise<void> {
       // the next frames' bytes download while this one draws
       scr.prefetch([si + 1, si + 2, si + 3], 1);
       const [s, c] = await Promise.all([scr.load(si), cam ? cam.load(ci) : Promise.resolve(null)]);
-      renderer.draw(g, plan, i, { screen: s, cam: c });
-      scr.releaseBelow(si);
-      cam?.releaseBelow(ci);
+      // cut transition (demand #14): the other side of the join, held still, composited with this frame
+      const of = f.tr ? plan.frames[f.tr.other] : undefined;
+      let other: { screen: CanvasImageSource | null; cam: CanvasImageSource | null } | null = null;
+      let low = si;
+      let lowCam = ci;
+      if (of) {
+        const osi = scr.indexAt(of.src);
+        const oci = cam ? cam.indexAt(of.src) : 0;
+        const [os, oc] = await Promise.all([scr.load(osi), cam ? cam.load(oci) : Promise.resolve(null)]);
+        other = { screen: os, cam: oc };
+        low = Math.min(si, osi);
+        lowCam = Math.min(ci, oci);
+      }
+      renderer.draw(g, plan, i, { screen: s, cam: c }, other);
+      scr.releaseBelow(low);
+      cam?.releaseBelow(lowCam);
       const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
       if (cancelled) return post({ type: "cancelled", done: i });
       const r = await fetch(`/api/export-browser/${id}/frame${query}${sep}i=${i}`, { method: "POST", body: blob });

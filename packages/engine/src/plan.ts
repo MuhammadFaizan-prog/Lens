@@ -22,6 +22,7 @@ import { ARABIC_FONT, hasArabicScript, trackWords } from "./translation.js";
 import { subtitleCues, captionBlocks, captionFrame, captionWords, cleanupCuts, type CaptionFrame } from "./transcript.js";
 import type { InputEvent, RecordingMeta, Rect, TimeRange, Word, ZoomSegment } from "./types.js";
 import { applyTheme } from "./theme.js";
+import { cutJoins, transitionAt, type PlanTransition } from "./transitions.js";
 import { DEFAULT_FONT } from "./palette.js";
 import { captionNeedsProgress } from "./captionStyles.js";
 import type { WatermarkPlan } from "./brand.js";
@@ -137,6 +138,12 @@ export interface PlanFrame {
    * projects without 3D motion are unchanged.
    */
   m3d?: Motion3DFrame;
+  /**
+   * Cut transition (demand #14) on frames within ±d/2 of a cut join: kind, eased progress, the output
+   * frame index of the other side (held still) and which side this frame is on. Absent elsewhere and in
+   * projects without transitions, so their plans are unchanged.
+   */
+  tr?: PlanTransition;
 }
 
 export interface PlanInputs {
@@ -240,6 +247,9 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
   const annSpace = { cropX: crop.x, cropY: crop.y, width: out.width, height: out.height, resScale, palette: theme.palette };
   const numbers = badgeNumbers(project.annotations);
 
+  // cut transitions: none in partial plans (onlyFrames), whose frame list does not hold the other side
+  const joins = onlyFrames ? [] : cutJoins(timeline, project.edits.cuts, project.transitions ?? undefined);
+
   const planFrames: PlanFrame[] = [];
   const frameList = onlyFrames ? onlyFrames.map((i) => Math.max(0, Math.min(frames - 1, Math.round(i)))) : null;
   for (let n = 0; n < (frameList ? frameList.length : frames); n++) {
@@ -289,6 +299,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
     const cap = span ? undefined : captions.find((b) => src >= b.startMs && src < b.endMs);
     const m3 = project.motion3d.length ? motion3dAt(project.motion3d, src) : null;
     const screenR: [number, number, number, number] = [r2(layout.screen.x), r2(layout.screen.y), r2(layout.screen.w), r2(layout.screen.h)];
+    const tr = joins.length && !span ? transitionAt(joins, i, t, fps) : null;
     planFrames.push({
       t: r2(t),
       src: r2(src),
@@ -310,6 +321,7 @@ export function buildRenderPlan({ meta: fullMeta, events: rawEvents, project: ra
       annotations: annotationsAt(project.annotations, src, annSpace, numbers),
       slide: slide && span && slide.kind !== "freeze" ? slideFrame(slide, t - span.outStart, out.width, out.height, resScale, theme.palette) : null,
       ...(m3 ? { m3d: motion3dFrame(m3, screenR, out, resScale) } : {}),
+      ...(tr ? { tr } : {}),
     });
   }
 

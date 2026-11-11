@@ -29,6 +29,7 @@ import { validateExportVideo, type ExportVideoSettings } from "./exportPresets.j
 import { validateChapters, type ChapterSettings } from "./chapters.js";
 import { validateExportTargets, validateFramingKeys, type ExportTargets, type FramingKey } from "./exportTargets.js";
 import { validateVoiceover, type VoiceoverSettings } from "./voiceover.js";
+import { CAMERA_ANIM_KINDS, validateElementAnim, validateTransitions, type CameraAnimKind, type CutTransition, type ElementAnim, type TransitionsConfig } from "./transitions.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -166,9 +167,21 @@ export interface ProjectConfig {
      * width / height. Absent = the corner. Normalized so it survives aspect changes.
      */
     position?: { x: number; y: number } | null;
+    /**
+     * How the webcam overlay appears / leaves where a layout segment shows or hides it (demand #14).
+     * Absent = the legacy grow-from-centre over transitionMs.
+     */
+    enter?: ElementAnim<CameraAnimKind> | null;
+    exit?: ElementAnim<CameraAnimKind> | null;
   };
+  /**
+   * Cut transitions (demand #14): the default for every cut join (edits.cuts[i].transition overrides it
+   * per cut). Absent = hard cuts, as before.
+   */
+  transitions?: TransitionsConfig | null;
   edits: {
-    cuts: TimeRange[];
+    /** Removed source ranges; a cut may carry its own transition (kind / duration / easing). */
+    cuts: Array<TimeRange & { transition?: CutTransition | null }>;
     speed: SpeedRange[];
     /** Auto speed-up for detected typing stretches (E04). */
     speedUpTyping: { enabled: boolean; rate: number };
@@ -602,6 +615,8 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   }
   errs.push(...validateMotion3d(p.motion3d));
   errs.push(...validateVoiceover(p.voiceover));
+  errs.push(...validateTransitions(p.transitions, p.edits.cuts));
+  errs.push(...validateElementAnim(p.camera.enter, CAMERA_ANIM_KINDS, "camera.enter"), ...validateElementAnim(p.camera.exit, CAMERA_ANIM_KINDS, "camera.exit"));
   errs.push(...validatePrivacy(p.privacy));
   errs.push(...validateAnnotations(p.annotations, p.slides, p.stepLabels));
   errs.push(...validateFreezes(p.freezes));

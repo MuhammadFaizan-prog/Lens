@@ -16,6 +16,7 @@ import { MusicSection } from "./MusicPanel";
 import { webcamPanelState } from "../state/webcamPanel";
 import { VoiceoverSection } from "./VoiceoverPanel";
 import { isPip, SCENE_CORNERS, SCENE_KINDS, SCENE_TRANSITION_MAX_MS, sceneLabel, setSceneCorner, setSceneKind, setSceneTransition, type SceneCorner } from "../state/sceneOps";
+import { CameraAnimSection, CutTransitionControls, TransitionsSection } from "./TransitionControls";
 
 /** Project defaults: what each slider's reset button (↺) and double-click go back to. */
 const D = defaultProject();
@@ -207,6 +208,7 @@ function SelectionCard({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
     const c = project.edits.cuts[sel.index];
     if (!c) return null;
     range = c;
+    body = <CutTransitionControls p={project} index={sel.index} />;
   }
   return (
     <div className="selection-card" data-testid="selection-card">
@@ -306,6 +308,7 @@ function LookTab({ p }: { p: ProjectConfig }) {
         <AspectRow />
         <FramingTiles idPrefix="out-framing" tilesOnly />
       </Section>
+      <TransitionsSection p={p} />
     </>
   );
 }
@@ -379,6 +382,7 @@ function CameraTab({ p }: { p: ProjectConfig }) {
   const off = ui.controlsDisabled;
   const t = (label: string, fn: (c: ProjectConfig["camera"]) => Partial<ProjectConfig["camera"]>) => store.tweak(label, (q) => ({ ...q, camera: { ...q.camera, ...fn(q.camera) } }));
   return (
+    <>
     <Section title="Webcam" aside={off ? <span className="stat" data-testid="cam-none-stat">no camera</span> : undefined}>
       {ui.empty && (
         <div className="cam-empty" data-testid="cam-empty" role="note">
@@ -413,6 +417,8 @@ function CameraTab({ p }: { p: ProjectConfig }) {
         <Slider defaultValue={D.camera.transitionMs} label="Transition" value={p.camera.transitionMs} min={0} max={SCENE_TRANSITION_MAX_MS} step={50} format={(v) => `${(v / 1000).toFixed(2)} s`} disabled={off} testId="cam-transition" onChange={(v) => t("Scene transition default", () => ({ transitionMs: v }))} />
       </div>
     </Section>
+    {!off && <CameraAnimSection p={p} />}
+    </>
   );
 }
 

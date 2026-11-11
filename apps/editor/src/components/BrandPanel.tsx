@@ -4,6 +4,7 @@
  * step badges, caption highlight, the theme backdrop, slide accents); items with their own colour
  * keep it.
  */
+import { SlideAnimPickers } from "./TransitionControls";
 import { useRef } from "react";
 import { BUILTIN_FONTS, type BrandKit, type Corner } from "@lens/engine";
 import { assetUrl } from "../render/assets";
@@ -33,6 +34,7 @@ function Card({ which, b }: { which: "intro" | "outro"; b: BrandKit }) {
           </label>
           <Slider defaultValue={2000} label="Length" value={c.durationMs} min={500} max={6000} step={100} format={sec} onChange={(v) => set(`${name} length`, { durationMs: v }, true)} />
           <Toggle label="Show logo" value={c.logo} onChange={(v) => set(`${name} logo`, { logo: v })} />
+          <SlideAnimPickers enter={c.enter} exit={c.exit} testPrefix={`brand-${which}`} onChange={(side, v, l, drag) => set(`${name} ${l.toLowerCase()}`, { [side]: v }, !!drag)} />
         </>
       )}
     </Section>

@@ -9,6 +9,9 @@ compare the two. Order of passes per frame:
   -> cursor (with motion blur) -> rounded mask -> webcam (crop, mirror) -> frame-anchored annotations
   -> shortcut pill -> caption (styled, word highlight) -> brand watermark -> text slide
 
+A frame near a cut join (plan frame `tr`, demand #14) is drawn twice, itself and the other side of the
+join held still (from a second decoder), and the two are composited (crossfade / push / zoom / blur dip).
+
 Then audio (see audio.py) is muxed as AAC, or the video is converted to a palette GIF.
 
 All motion decisions come from the plan. This file only draws.
@@ -772,6 +775,133 @@ def _viewport_warp(frame: np.ndarray, cam: list[float], rect_w: int, rect_h: int
     return cv2.warpAffine(frame, M, (rect_w, rect_h), flags=interp, borderMode=cv2.BORDER_REPLICATE)
 
 
+class HeldFrames:
+    """Second sequential decoder for the frames held still across cut joins (demand #14). Each wanted
+    source frame is kept from the moment the decoder passes it until its last use, so a request that
+    goes back in source time (the incoming side asks for the last outgoing frame) needs no re-decode."""
+
+    def __init__(self, path: str, wanted_src: list[float]):
+        info = probe(path)
+        self.fps = info["fps"]
+        self._w, self._h = info["width"], info["height"]
+        self.path = path
+        idx = [max(0, int(round(t * self.fps / 1000))) for t in wanted_src]
+        self.uses: dict[int, int] = {}
+        for i in idx:
+            self.uses[i] = self.uses.get(i, 0) + 1
+        self.cache: dict[int, np.ndarray] = {}
+        self._restart()
+
+    def _restart(self) -> None:
+        self._it = read_frames(self.path, self._w, self._h)
+        self._idx = -1
+        self._last: Optional[np.ndarray] = None
+
+    def at(self, t_ms: float) -> np.ndarray:
+        want = max(0, int(round(t_ms * self.fps / 1000)))
+        if want not in self.cache:
+            if want <= self._idx:
+                self._restart()
+            while self._idx < want:
+                try:
+                    self._last = next(self._it)
+                except StopIteration:
+                    break
+                self._idx += 1
+                if self._idx in self.uses:
+                    self.cache[self._idx] = self._last
+            if want not in self.cache:
+                assert self._last is not None, "empty video"
+                return self._last
+        fr = self.cache[want]
+        self.uses[want] = self.uses.get(want, 1) - 1
+        if self.uses[want] <= 0:
+            self.cache.pop(want, None)
+        return fr
+
+
+def _ease_clamp(v: float) -> float:
+    return 0.0 if v < 0 else 1.0 if v > 1 else v
+
+
+def transition_layers(kind: str, u: float) -> tuple[dict, dict]:
+    """Outgoing (a) and incoming (b) layer of a cut transition at eased progress u: alpha, scale about
+    the centre, x offset as a fraction of the width, blur sigma as a fraction of the short side.
+    Mirrors transitionLayers in packages/engine/src/transitions.ts."""
+    v = _ease_clamp(u)
+    L = lambda alpha=1.0, scale=1.0, dx=0.0, blur=0.0: {"alpha": alpha, "scale": scale, "dx": dx, "blur": blur}  # noqa: E731
+    if kind == "push":
+        return L(dx=-v), L(dx=1 - v)
+    if kind == "zoom":
+        return L(scale=1 + 0.35 * v), L(alpha=v, scale=1 + 0.15 * (1 - v))
+    if kind == "blur":
+        s = 0.025 * math.sin(math.pi * v)
+        w = _ease_clamp((v - 0.3) / 0.4)
+        return L(blur=s), L(alpha=w * w * (3 - 2 * w), blur=s)
+    return L(), L(alpha=v)
+
+
+def _blur_premul(img: np.ndarray, sigma: float) -> tuple[np.ndarray, np.ndarray]:
+    """Gaussian blur of an opaque image with transparent surroundings (canvas filter: blur()):
+    premultiplied colour and coverage."""
+    H, W = img.shape[:2]
+    col = cv2.GaussianBlur(img, (0, 0), sigma, borderType=cv2.BORDER_CONSTANT)
+    cov = cv2.GaussianBlur(np.ones((H, W), np.float32), (0, 0), sigma, borderType=cv2.BORDER_CONSTANT)
+    return col, cov
+
+
+def _place(dst: np.ndarray, col: np.ndarray, cov: np.ndarray, alpha: float, scale: float, dx_px: float, dy_px: float) -> None:
+    """dst = dst over (premultiplied col / coverage cov), scaled about the frame centre and offset, times alpha."""
+    H, W = dst.shape[:2]
+    if scale != 1 or dx_px or dy_px:
+        M = np.float32([[scale, 0, (1 - scale) * W / 2 + dx_px], [0, scale, (1 - scale) * H / 2 + dy_px]])
+        col = cv2.warpAffine(col, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        cov = cv2.warpAffine(cov, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    a = (cov * alpha)[..., None]
+    dst *= 1 - a
+    dst += col * alpha
+
+
+def composite_transition(a_img: np.ndarray, b_img: np.ndarray, kind: str, u: float) -> np.ndarray:
+    """Outgoing frame a and incoming frame b of a cut join composited at progress u on black, b over a
+    (same steps as the editor renderer's PlanRenderer.draw)."""
+    H, W = a_img.shape[:2]
+    short = min(W, H)
+    la, lb = transition_layers(kind, u)
+    out = np.zeros((H, W, 3), np.float32)
+    for img, l in ((a_img, la), (b_img, lb)):
+        if l["alpha"] <= 0:
+            continue
+        col = img.astype(np.float32)
+        cov = np.ones((H, W), np.float32)
+        sigma = l["blur"] * short
+        if sigma > 0.05:
+            # blurred copy over the sharp one: the blur fades the edges, the sharp layer fills them
+            bc, bv = _blur_premul(col, sigma)
+            col = col * (1 - bv[..., None]) + bc
+        _place(out, col, cov, min(1.0, l["alpha"]), l["scale"], l["dx"] * W, 0.0)
+    return out
+
+
+def draw_slide_fx(out: np.ndarray, items: list[dict], fx: list[float], bg: np.ndarray) -> None:
+    """A text slide with its enter / exit transform (plan slide.fx = [dx, dy, scale, blur], demand #14):
+    the slide is drawn alone (premultiplied, from a black and a white pass), offset, scaled about the
+    frame centre and blurred, then laid over out."""
+    H, W = out.shape[:2]
+    dark = np.zeros_like(out)
+    light = np.full_like(out, 255.0)
+    ident = lambda px, py: (px, py)  # noqa: E731
+    draw_items(dark, items, ident, 1.0, background=bg)
+    draw_items(light, items, ident, 1.0, background=bg)
+    cov = np.clip(1 - (light - dark).mean(axis=2) / 255.0, 0, 1).astype(np.float32)
+    col = dark.astype(np.float32)
+    dx, dy, scale, blur = (float(v) for v in fx[:4])
+    if blur > 0.05:
+        col = cv2.GaussianBlur(col, (0, 0), blur, borderType=cv2.BORDER_CONSTANT)
+        cov = cv2.GaussianBlur(cov, (0, 0), blur, borderType=cv2.BORDER_CONSTANT)
+    _place(out, col, cov, 1.0, scale, dx, dy)
+
+
 def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optional[str] = None, opts: RenderOptions = RenderOptions()) -> dict:
     plan = json.loads(Path(plan_path).read_text())
     W, H, fps = plan["output"]["width"], plan["output"]["height"], plan["output"]["fps"]
@@ -818,9 +948,24 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
     )
     assert sink or (enc and enc.stdin)
     frames = plan["frames"][: opts.max_frames] if opts.max_frames else plan["frames"]
-    prev_cur = None
-    for fi, f in enumerate(frames):
-        src_frame = screen.at(f.get("vid", f["src"]))  # a freeze frame (demand #20) holds the screen picture
+    def frame_geom(f: dict):
+        """Screen rect (output px), output px per source px and the source -> screen-rect mapping of a frame."""
+        sx, sy, sw, sh = (int(round(v)) for v in f["layout"]["screen"])
+        sw, sh = max(2, sw), max(2, sh)
+        cam = f["cam"]
+        k = sw / (src_w / cam[2])
+        vw, vh = src_w / cam[2], src_h / cam[2]
+        x0, y0 = cam[0] - vw / 2, cam[1] - vh / 2
+        return (sx, sy, sw, sh), k, (lambda px, py: ((px - x0) * k, (py - y0) * (sh / vh)))
+
+    def cursor_pos(f: Optional[dict]):
+        """Where a frame's cursor sits in its screen rect (the previous frame's, for cursor motion blur)."""
+        if f is None or f["cur"] is None:
+            return None
+        return frame_geom(f)[2](f["cur"][0], f["cur"][1])
+
+    def draw_frame(f: dict, src_frame: np.ndarray, cam_at: Callable[[], np.ndarray], prev_f: Optional[dict]) -> np.ndarray:
+        """Draw one plan frame (float32 BGR, H x W x 3). prev_f is the plan frame before it (cursor motion blur)."""
         if cropped:
             src_frame = np.ascontiguousarray(src_frame[crop_y:crop_y + src_h, crop_x:crop_x + src_w])
         sx, sy, sw, sh = (int(round(v)) for v in f["layout"]["screen"])
@@ -890,6 +1035,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
             sprite, (hx, hy) = cursor_sprite(shape_name)
             spr = cv2.resize(sprite, (size, size), interpolation=cv2.INTER_AREA if size < 256 else cv2.INTER_CUBIC)
             rx, ry = to_rect(px, py)
+            prev_cur = cursor_pos(prev_f)
             if mb["enabled"] and prev_cur is not None:
                 pdx, pdy = rx - prev_cur[0], ry - prev_cur[1]
                 dist = math.hypot(pdx, pdy)
@@ -904,9 +1050,6 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
                     blend_rgba(view, spr, rx - hx * size, ry - hy * size, op)
             else:
                 blend_rgba(view, spr, rx - hx * size, ry - hy * size, op)
-            prev_cur = (rx, ry)
-        else:
-            prev_cur = None
 
         # Composite the screen with rounded corners.
         m = rounded_mask(sw, sh, style["radius"])[..., None] * f["layout"]["screenOpacity"]
@@ -921,7 +1064,7 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
         if cam_src is not None and f["layout"]["camera"] is not None and f["layout"]["cameraOpacity"] > 0:
             cxr, cyr, cwr, chr_ = (int(round(v)) for v in f["layout"]["camera"])
             if cwr > 2 and chr_ > 2:
-                cframe = cam_src.at(f["src"])
+                cframe = cam_at()
                 if cam_crop:
                     qx, qy, qw, qh = (int(round(v)) for v in cam_crop)
                     fh_, fw_ = cframe.shape[:2]
@@ -971,8 +1114,34 @@ def render(plan_path: str, screen_path: str, out_path: str, camera_path: Optiona
         # Text slide: full frame, over everything, cross-faded by its opacity.
         if f.get("slide"):
             sl = f["slide"]
-            draw_items(out, [{"ops": sl["ops"], "opacity": sl["opacity"], "shadow": None}], lambda px, py: (px, py), 1.0, background=bg)
+            items = [{"ops": sl["ops"], "opacity": sl["opacity"], "shadow": None}]
+            fx = sl.get("fx")
+            if fx:
+                draw_slide_fx(out, items, fx, bg)
+            else:
+                draw_items(out, items, lambda px, py: (px, py), 1.0, background=bg)
+        return out
 
+    all_frames = plan["frames"]
+    # Cut transitions (demand #14): a frame near a cut join is composited with the other side of the
+    # join (frame tr.other, held still). Those source frames come from a second decoder.
+    held_idx = sorted({f["tr"]["other"] for f in frames if f.get("tr") and 0 <= f["tr"]["other"] < len(all_frames)})
+    # the screen picture of a frame is at "vid" (a freeze frame, demand #20, holds it), the camera at "src"
+    held_vid = [all_frames[i].get("vid", all_frames[i]["src"]) for i in held_idx]
+    held_src = [all_frames[i]["src"] for i in held_idx]
+    held = HeldFrames(screen_path, held_vid) if held_idx else None
+    held_cam = HeldFrames(camera_path, held_src) if held_idx and camera_path else None
+    for fi, f in enumerate(frames):
+        src_frame = screen.at(f.get("vid", f["src"]))  # a freeze frame (demand #20) holds the screen picture
+        prev_f = all_frames[fi - 1] if fi > 0 else None
+        out = draw_frame(f, src_frame, lambda: cam_src.at(f["src"]), prev_f)
+        tr = f.get("tr")
+        if tr and 0 <= tr["other"] < len(all_frames):
+            oi = tr["other"]
+            of = all_frames[oi]
+            other = draw_frame(of, held.at(of.get("vid", of["src"])), lambda: held_cam.at(of["src"]), all_frames[oi - 1] if oi > 0 else None)
+            a_img, b_img = (other, out) if tr["incoming"] else (out, other)
+            out = composite_transition(a_img, b_img, tr["kind"], tr["u"])
         final = np.clip(out, 0, 255).astype(np.uint8)
         if sink:
             sink(fi, final)

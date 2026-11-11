@@ -1,5 +1,6 @@
 import type { CameraLayoutKind, CameraLayoutSegment, Rect } from "./types.js";
 import type { ProjectConfig } from "./project.js";
+import { ease, type CameraAnimKind, type ElementAnim } from "./transitions.js";
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
@@ -220,13 +221,22 @@ export function layoutAt(
   const to = curSeg?.corner ? { ...to0, corner: curSeg.corner } : to0;
   if (!Number.isFinite(boundary)) return to;
   const prevSeg = segAt(boundary - 1);
+  const prevKind = prevSeg ? prevSeg.kind : defaultKind;
+  if ((cfg.camera.enter || cfg.camera.exit) && prevKind !== cur) {
+    // webcam enter / exit animations (demand #14): only where the camera appears or leaves
+    const fr = layoutFor(prevKind, out, sourceAspect, cfgFor(prevSeg));
+    const anim = !fr.camera && to.camera ? cfg.camera.enter : fr.camera && !to.camera ? cfg.camera.exit : null;
+    if (anim) {
+      const l = cameraEnterExit(fr, to, anim, tMs - boundary, out);
+      return to.corner ? { ...l, corner: to.corner } : l;
+    }
+  }
   // the transition belongs to the scene being entered, else to the one being left
   const enter = sorted.filter((s) => s.startMs === boundary).pop();
   const leave = sorted.filter((s) => s.endMs === boundary).pop();
   const tr = enter?.transitionMs ?? leave?.transitionMs ?? cfg.camera.transitionMs;
   if (!(tr > 0) || tMs - boundary >= tr) return to;
   if (sceneKey(prevSeg) === sceneKey(curSeg) && (prevSeg?.kind ?? defaultKind) === cur) return to;
-  const prevKind = prevSeg ? prevSeg.kind : defaultKind;
   const from = layoutFor(prevKind, out, sourceAspect, cfgFor(prevSeg));
   const u = easeInOutCubic((tMs - boundary) / tr);
   const camFrom = from.camera ?? (to.camera ? { x: to.camera.x + to.camera.w / 2, y: to.camera.y + to.camera.h / 2, w: 0, h: 0 } : null);
@@ -248,6 +258,54 @@ export function sceneAt(segments: readonly CameraLayoutSegment[], tMs: number, c
   let found: CameraLayoutSegment | null = null;
   for (const s of [...segments].sort((a, b) => a.startMs - b.startMs)) if (tMs >= s.startMs && tMs < s.endMs) found = s;
   return found;
+}
+
+/**
+ * The layout `local` ms after the webcam appears (from has no camera) or leaves (to has none), animated
+ * by the project's camera.enter / camera.exit: fade (opacity), pop (spring scale from 40% about the
+ * centre), slide (in from / out to the nearest side edge), scale (grow from the centre with a fade, the
+ * legacy look), none (instant). Exits run the same curve on the reversed clock.
+ */
+export function cameraEnterExit(from: FrameLayout, to: FrameLayout, anim: ElementAnim<CameraAnimKind>, local: number, out: { width: number; height: number }): FrameLayout {
+  const ms = anim.kind === "none" ? 0 : Math.max(0, anim.ms);
+  if (local >= ms) return to;
+  const entering = !from.camera;
+  const raw = Math.min(1, Math.max(0, local / ms));
+  const u = ease("ease-in-out", raw);
+  const cam = (entering ? to.camera : from.camera)!;
+  const vis = ease(anim.easing ?? (anim.kind === "pop" ? "spring" : "ease-out"), entering ? raw : 1 - raw);
+  const lin = entering ? raw : 1 - raw;
+  let rect: Rect = { ...cam };
+  let opacity = (entering ? to.cameraOpacity : from.cameraOpacity) || 1;
+  switch (anim.kind) {
+    case "fade":
+      opacity *= vis;
+      break;
+    case "pop": {
+      const k = 0.4 + 0.6 * vis;
+      rect = { x: cam.x + (cam.w * (1 - k)) / 2, y: cam.y + (cam.h * (1 - k)) / 2, w: cam.w * k, h: cam.h * k };
+      opacity *= Math.min(1, lin / 0.3);
+      break;
+    }
+    case "slide": {
+      const right = cam.x + cam.w / 2 >= out.width / 2;
+      const off = right ? out.width - cam.x : -(cam.x + cam.w);
+      rect = { ...cam, x: cam.x + off * (1 - vis) };
+      break;
+    }
+    case "scale":
+      rect = { x: cam.x + (cam.w * (1 - vis)) / 2, y: cam.y + (cam.h * (1 - vis)) / 2, w: cam.w * vis, h: cam.h * vis };
+      opacity *= Math.min(1, Math.max(0, vis));
+      break;
+  }
+  return {
+    screen: lerpRect(from.screen, to.screen, u),
+    screenOpacity: from.screenOpacity + (to.screenOpacity - from.screenOpacity) * u,
+    camera: rect.w > 0.5 && rect.h > 0.5 ? rect : null,
+    cameraOpacity: Math.max(0, Math.min(1, opacity)),
+    cameraCutout: entering ? to.cameraCutout : from.cameraCutout,
+    kind: to.kind,
+  };
 }
 
 /** Overlay region in normalized viewport coords for smart framing (B05). */

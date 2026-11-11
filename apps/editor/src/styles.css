@@ -960,3 +960,11 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 /* scene Layout: two per row so "Screen only" / "Camera full" / "Side by side" never truncate */
 .scene-card .segmented { display: grid; grid-template-columns: 1fr 1fr; }
 .scene-card .segmented button { overflow: visible; text-overflow: clip; white-space: nowrap; }
+/* cut transitions (demand #14): the chip on each cut block opens the transition picker */
+.block-cut .tr-chip { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); z-index: 3; width: 18px; height: 18px; padding: 0; border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel-2, #1a1f27); color: var(--text); font-size: 11px; line-height: 16px; text-align: center; cursor: pointer; }
+.block-cut .tr-chip.off { opacity: 0.55; }
+.block-cut .tr-chip.own { border-color: var(--accent, #4f6bff); }
+.block-cut .tr-chip:hover { opacity: 1; background: var(--panel-3); }
+.tl-menu .tl-menu-title { padding: 4px 10px 6px; font-size: 11px; color: var(--muted); }
+.tl-menu button.on { background: var(--panel-3); }
+.tl-menu .tr-glyph { display: inline-block; width: 16px; text-align: center; }
