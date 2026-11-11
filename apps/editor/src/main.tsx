@@ -3,11 +3,21 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { store } from "./state/store";
 import { pendingBackdrops } from "./render/backdrops";
+import { cursorTemplate } from "./render/cursorProbe";
 import "./styles.css";
 
 // Test / automation hook (Playwright reads state through it; Tauri will call the same store).
 (window as unknown as { __lens: unknown }).__lens = {
   store,
+  /** demand #12 e2e: one cursor type's art where frame n's cursor is, over a flat colour (base64 RGB). */
+  cursorTemplate: (n: number, shape: string, bg: [number, number, number]) => {
+    const plan = store.get().plan;
+    const t = plan ? cursorTemplate(plan, n, shape, bg) : null;
+    if (!t) return null;
+    let s = "";
+    for (let i = 0; i < t.rgb.length; i += 0x8000) s += String.fromCharCode(...t.rgb.subarray(i, i + 0x8000));
+    return { x0: t.x0, y0: t.y0, w: t.w, h: t.h, size: t.size, b64: btoa(s) };
+  },
   state: () => {
     const s = store.get();
     const f = s.plan?.frames[s.frame];
