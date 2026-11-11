@@ -876,3 +876,15 @@ body.resizing, body.resizing * { cursor: grabbing !important; user-select: none;
 .bg-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bg-shuffle { margin-left: auto; }
 .bg-image-grid { max-height: 196px; overflow-y: auto; padding: 2px; }
+
+/* title, description and chapters (demand #27) */
+.ex-chapters .field textarea, .ex-chapters .field input:not([type="checkbox"]), .ch-list input { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 7px; color: var(--text); padding: 6px 8px; font: inherit; width: 100%; box-sizing: border-box; }
+.ex-chapters .field textarea { resize: vertical; }
+.ex-chapters .field.check { display: flex; align-items: center; gap: 6px; }
+.field-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); margin: 4px 0; }
+.field-head .btn:first-of-type { margin-left: auto; }
+.ch-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.ch-list li { display: grid; grid-template-columns: 64px 1fr auto auto; gap: 6px; align-items: center; }
+.ch-time { font-variant-numeric: tabular-nums; background: none; border: 1px solid var(--line-2); border-radius: 6px; color: var(--text); padding: 5px 4px; cursor: pointer; font: inherit; font-size: 12px; }
+.tl-chapter { position: absolute; top: 0; height: 100%; border: 0; padding: 0 0 0 4px; margin: 0; background: none; border-left: 2px solid #f5b14c; color: #f5b14c; font-size: 10px; cursor: pointer; max-width: 140px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; z-index: 2; }
+.tl-chapter span { pointer-events: none; }

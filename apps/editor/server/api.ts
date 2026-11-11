@@ -47,6 +47,7 @@ import { transcribe } from "./stt";
 import { detectSilences, type Range } from "./silence";
 import { FileCache, probeVideoFile, type VideoProbe } from "./probe";
 import { finishBrowserExport, startBrowserExport, writeFrame, type BrowserExportJob } from "./browserExport";
+import { embedChapters, wantsChapters } from "./chapterMeta";
 import { buildRenderPlan, DemoExportError, parseEventLog, parseTranscript, resolveProject, stepsExportInput, withFontFallback, type RenderPlan } from "../../../packages/engine/src/index";
 import { defaultLibraryDir, FontImportError, importFont, listLibrary, missingFamilies, removeFromLibrary, type ImportRequest } from "./fonts";
 
@@ -617,6 +618,14 @@ async function startExport(bundle: string, rawProject: unknown): Promise<ExportJ
     }
   });
   py.on("close", (code) => {
+    if (code === 0 && fs.existsSync(out) && wantsChapters(plan)) {
+      // chapters, title and description into the file (demand #27)
+      embedChapters(FFMPEG, out, plan)
+        .then(() => (job.state = "done"))
+        .catch((e) => Object.assign(job, { state: "error", error: `chapters: ${e instanceof Error ? e.message : String(e)}` }))
+        .finally(() => (job.finishedAt = Date.now()));
+      return;
+    }
     job.finishedAt = Date.now();
     if (code === 0 && fs.existsSync(out)) job.state = "done";
     else {
@@ -786,11 +795,12 @@ export function apiMiddleware() {
           if (job.state === "running") {
             job.state = "error";
             job.error = "cancelled";
-            try {
-              job.ff.kill("SIGKILL");
-            } catch {
-              // already gone
-            }
+            for (const p of [job.ff, job.child])
+              try {
+                p?.kill("SIGKILL");
+              } catch {
+                // already gone
+              }
           }
           return sendJson(res, { ok: true });
         }

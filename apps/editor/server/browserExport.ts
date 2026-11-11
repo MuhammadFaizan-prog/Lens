@@ -14,7 +14,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AudioPlan, RenderPlan } from "../../../packages/engine/src/index";
+import type { ChildProcess } from "node:child_process";
 import { mux, renderExportAudio, type RenderedAudio } from "./exportAudio";
+import { embedChapters, wantsChapters } from "./chapterMeta";
 
 /** ffmpeg filter chain for a playback rate (atempo takes 0.5..100 per stage). */
 export function atempoChain(rate: number): string {
@@ -124,7 +126,9 @@ export interface BrowserExportJob {
   chain: Promise<void>;
   /** The audio, rendered while the frames stream in (null: silent export). */
   audio?: Promise<RenderedAudio | null>;
-  stage?: "frames" | "audio" | "mux";
+  stage?: "frames" | "audio" | "mux" | "chapters";
+  /** The ffmpeg child of a step after the frames (chapters), killed by Cancel. */
+  child?: ChildProcess | null;
 }
 
 export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string, id: string, root = process.cwd()): BrowserExportJob {
@@ -159,6 +163,12 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
         job.stage = "mux";
         if (a) await mux(ffmpeg, video, a, out, outputMs(plan));
         else fs.renameSync(video, out);
+        // chapters, title and description into the file (demand #27)
+        if (job.state === "running" && wantsChapters(plan)) {
+          job.stage = "chapters";
+          await embedChapters(ffmpeg, out, plan, (c) => (job.child = c));
+        }
+        if (job.state !== "running") return; // cancelled meanwhile
         job.state = "done";
         // desktop Settings > Export location (Windows #19): a copy of the finished export lands there
         const exportDir = process.env.LENS_EXPORT_DIR;
@@ -175,8 +185,9 @@ export function startBrowserExport(ffmpeg: string, plan: RenderPlan, dir: string
           }
         }
       } catch (e) {
+        if (job.state !== "running") return; // cancelled: keep "cancelled"
         job.state = "error";
-        job.error = `audio: ${e instanceof Error ? e.message : String(e)}`;
+        job.error = `${job.stage === "chapters" ? "chapters" : "audio"}: ${e instanceof Error ? e.message : String(e)}`;
       } finally {
         job.finishedAt = Date.now();
         fs.rmSync(path.join(dir, "audio"), { recursive: true, force: true });
