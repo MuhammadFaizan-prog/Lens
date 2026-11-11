@@ -63,7 +63,7 @@ function mask(f: Img): { m: Uint8Array; n: number; box: R | null } {
       if (!sat(f, (y * f.w + x) * 3)) continue;
       m[y * f.w + x] = 1;
       n++;
-      rows[y]++; cols[x]++;
+      rows[y] = rows[y]! + 1; cols[x] = cols[x]! + 1;
     }
   const span = (a: Uint32Array) => {
     let lo = -1, hi = -1;
