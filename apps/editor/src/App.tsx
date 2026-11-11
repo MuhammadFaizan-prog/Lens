@@ -67,7 +67,7 @@ function TopBar() {
         <button className="btn ghost" data-testid="save" onClick={() => store.save()}>
           <Icon name="save" /> <span className="btn-label">Save</span>
         </button>
-        <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo or step guide" onClick={() => store.openExportDialog("demo")}>
+        <button className="btn" data-testid="export-dialog-open" title="Video, interactive demo, step guide or editor hand-off (overlay + FCPXML / EDL)" onClick={() => store.openExportDialog("demo")}>
           Export…
         </button>
         <button className="btn primary" data-testid="export" onClick={() => store.exportVideo()}>

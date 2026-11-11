@@ -12,7 +12,7 @@ function plan(edit: (p: ProjectConfig) => void = () => undefined, editPieces = t
   project.output.fps = 30;
   project.edits.cuts = [{ startMs: 2000, endMs: 3000 }, { startMs: 6000, endMs: 6500 }];
   project.zoom.auto = false;
-  project.zoom.segments = [{ id: "z1", startMs: 1000, endMs: 2500, scale: 2, focus: { x: 400, y: 300 }, style: "smooth", auto: false }];
+  project.zoom.segments = [{ id: "z1", startMs: 1000, endMs: 2500, scale: 2, focus: { x: 400, y: 300 }, style: "classic", auto: false }];
   edit(project);
   return buildRenderPlan({ meta: META, events: demoSession(), project, editPieces });
 }
