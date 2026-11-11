@@ -23,6 +23,7 @@ import { defaultTheme, validateTheme, type ThemeSettings } from "./themeSettings
 import { defaultDemo, validateDemo, type DemoSettings } from "./demo.js";
 import type { CardTransform } from "./layout.js";
 import { validateMotion3d, type Motion3DSegment } from "./motion3d.js";
+import { validateExportVideo, type ExportVideoSettings } from "./exportPresets.js";
 
 /**
  * The editable project document (project.json inside a .lens bundle). Every visual default lives
@@ -251,7 +252,14 @@ export interface ProjectConfig {
     loudness: { enabled: boolean; targetLufs: number; truePeakDb: number; lra: number };
     sampleRate: 44100 | 48000;
   };
-  export: { gif: { fps: number; width: number; loop: boolean } };
+  export: {
+    gif: { fps: number; width: number; loop: boolean };
+    /**
+     * Platform export preset and its overrides (demand #24, exportPresets.ts). Absent in projects
+     * written before it: the export is then exactly the old one (crf 18 / Settings bitrate, no cap).
+     */
+    video?: ExportVideoSettings;
+  };
   /** The applied style preset and its palette / annotation-style layer (demand #9, docs/Presets.md). */
   theme: ThemeSettings;
   /** Brand kit: colours, logo watermark, fonts, intro / outro cards (demand #9). */
@@ -629,6 +637,7 @@ export function resolveProject(partial: DeepPartial<ProjectConfig> | unknown = {
   errs.push(...validateDemo(p.demo));
   if (p.export.gif.fps < 1 || p.export.gif.fps > 50) errs.push("export.gif.fps must be within 1..50");
   if (p.export.gif.width < 16) errs.push("export.gif.width must be >= 16");
+  errs.push(...validateExportVideo(p.export.video));
   if (errs.length) throw new ProjectValidationError(errs.join("; "));
   return p;
 }
