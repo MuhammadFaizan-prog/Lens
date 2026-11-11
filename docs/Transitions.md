@@ -73,8 +73,12 @@ Bounds were set before each first run.
   sides with mean error 0 (bound 2 levels); zoom / blur dip 0.50 × span away from both sides (bound 0.2);
   slide enter dy 180 px, video above, red slide band below; a plan without transitions renders
   byte-identically with main's compositor (7d1a5db) and this one.
-- `editor.spec.ts` (snapping pulls a dragged edge onto the playhead) passes with the chip in place: the
-  chip sits inside the cut block, clear of the 7 px trim handles.
+- `editor.spec.ts` after the chip fix (2026-11-11, web build): both snapping tests pass with the chip in
+  place (the chip sits inside the cut block, clear of the 7 px trim handles). Whole file with
+  `LENS_EXPORT=browser`: 12/14. The two failures are not from this branch: "inspector changes update the
+  render immediately" clicks a "Backdrop Ember" button that no longer exists in the editor (the
+  background picker replaced it, on main too), and "export renders an MP4 through the compositor"
+  expects the compositor path; run on that path (`LENS_EXPORT=compositor`) it passes.
 
 ## Not done
 
